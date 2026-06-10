@@ -13,7 +13,7 @@ from ...config import DCMA_DB_NAME, KB_QUERY_TIMEOUT_SECONDS, MYSQL_USER
 from ...quality.evidence import build_quality_gate_notice, summarize_evidence_quality
 from ...quality.governance import build_governance_snapshot
 from ...knowledge.base import get_knowledge_retriever, has_knowledge_base_index
-from ...paths import PROJECT_ENV_FILE
+from ...common.paths import PROJECT_ENV_FILE
 from ...tools.report_tools import save_html_report
 from ...workflows.artifact_store import get_thread_artifact
 from ...workflows.contracts import WorkflowType

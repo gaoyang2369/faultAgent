@@ -7,7 +7,7 @@ import os
 import re
 from typing import Any
 
-from ...paths import REPORTS_DIR
+from ...common.paths import REPORTS_DIR
 from ...workflows.artifact_store import get_thread_artifact
 from ..errors import McpErrorCode, McpProtocolError
 from .store import get_resource_content

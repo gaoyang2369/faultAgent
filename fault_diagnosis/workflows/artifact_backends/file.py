@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from threading import RLock
 
-from ...paths import RUN_STATE_DIR
+from ...common.paths import RUN_STATE_DIR
 from ..contracts import WorkflowArtifactEnvelope
 from .base import ArtifactStoreBackend
 
