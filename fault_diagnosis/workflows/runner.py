@@ -7,7 +7,6 @@ from typing import AsyncGenerator
 from .contracts import WorkflowType
 from .router import route_workflow_request
 from .scenarios.clarification import ClarificationRunner
-from .scenarios.evidence_review import EvidenceReviewRunner
 from .scenarios.fault_diagnosis import FaultDiagnosisRunner, WorkflowExecutionError
 from .scenarios.manual_qa import ManualQaRunner
 from .scenarios.report_generation import ReportGenerationRunner
@@ -34,7 +33,6 @@ def _get_runner_class(workflow_type: WorkflowType | str):
         WorkflowType.MANUAL_QA.value: ManualQaRunner,
         WorkflowType.REPORT_GENERATION.value: ReportGenerationRunner,
         WorkflowType.CLARIFICATION.value: ClarificationRunner,
-        WorkflowType.EVIDENCE_REVIEW.value: EvidenceReviewRunner,
     }
     return runner_class_by_workflow.get(workflow_key, FaultDiagnosisRunner)
 

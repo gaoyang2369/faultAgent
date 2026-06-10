@@ -69,7 +69,6 @@ class ToolEndEvent(ChatEventModel):
     evidence: list[dict[str, Any]] = Field(default_factory=list, description="证据摘要")
     evidence_count: int = Field(default=0, description="证据数量")
     evidence_ids: list[str] = Field(default_factory=list, description="证据标识")
-    action_guard: dict[str, Any] | None = Field(default=None, description="动作门禁")
 
 
 class ToolProgressEvent(ChatEventModel):
@@ -119,4 +118,3 @@ class ServerErrorEvent(ChatEventModel):
     error_id: str = Field(description="错误标识")
     trace_id: str = Field(description="请求级追踪标识")
     error: dict[str, Any] = Field(default_factory=dict, description="结构化错误")
-

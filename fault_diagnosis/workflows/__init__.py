@@ -3,7 +3,6 @@
 __all__ = [
     "ClarificationRunner",
     "DiagnosisWorkflowRunner",
-    "EvidenceReviewRunner",
     "FaultDiagnosisRunner",
     "ManualQaRunner",
     "ReportGenerationRunner",
@@ -19,7 +18,6 @@ def __getattr__(name):
     if name in __all__:
         from .runner import DiagnosisWorkflowRunner, WorkflowExecutionError, stream_workflow_events
         from .scenarios.clarification import ClarificationRunner
-        from .scenarios.evidence_review import EvidenceReviewRunner
         from .scenarios.fault_diagnosis import FaultDiagnosisRunner
         from .scenarios.manual_qa import ManualQaRunner
         from .scenarios.report_generation import ReportGenerationRunner
@@ -28,7 +26,6 @@ def __getattr__(name):
         exports = {
             "ClarificationRunner": ClarificationRunner,
             "DiagnosisWorkflowRunner": DiagnosisWorkflowRunner,
-            "EvidenceReviewRunner": EvidenceReviewRunner,
             "FaultDiagnosisRunner": FaultDiagnosisRunner,
             "ManualQaRunner": ManualQaRunner,
             "ReportGenerationRunner": ReportGenerationRunner,

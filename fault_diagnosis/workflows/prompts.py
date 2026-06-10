@@ -4,7 +4,6 @@ from .contracts import (
     AnalysisStepArtifact,
     ClarificationArtifact,
     DiagnosisRequest,
-    EvidenceReviewArtifact,
     InspectionStepArtifact,
     KnowledgeStepArtifact,
     ManualQaArtifact,
@@ -411,26 +410,4 @@ def build_clarification_final_answer_prompt(clarification_artifact: Clarificatio
 原因：{clarification_artifact.reason}
 建议下一步场景：{clarification_artifact.suggested_next_workflow}
 置信度：{clarification_artifact.confidence}
-""".strip()
-
-
-def build_evidence_review_final_answer_prompt(evidence_review_artifact: EvidenceReviewArtifact) -> str:
-    """构建证据链复核流最终答复 Prompt。"""
-
-    return f"""
-你是 DCMA 证据链复核结果整理器。请用中文生成最终用户答复，要求结构清晰、措辞保守、明确说明当前结论是否可以直接发布，必须包含：
-1. 本次复核的目标场景流
-2. 证据条数、结论条数与覆盖评分
-3. 当前质量门禁状态及其含义
-4. 仍缺少支撑的结论或证据缺口
-5. 建议下一步动作
-复核目标场景：{evidence_review_artifact.review_target_workflow}
-结论条数：{evidence_review_artifact.total_findings}
-证据条数：{evidence_review_artifact.total_evidences}
-覆盖评分：{evidence_review_artifact.coverage_score}
-质量门禁状态：{evidence_review_artifact.quality_gate_status}
-未充分支撑的结论：{evidence_review_artifact.unsupported_findings}
-缺失证据 ID：{evidence_review_artifact.missing_evidence_ids}
-建议动作：{evidence_review_artifact.recommended_action}
-复核摘要：{evidence_review_artifact.review_summary}
 """.strip()

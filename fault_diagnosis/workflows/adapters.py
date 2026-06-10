@@ -8,7 +8,6 @@ import re
 from datetime import datetime
 from typing import Any
 
-from ..quality.governance import build_governance_snapshot
 from .artifact_store import save_thread_artifact
 from .contracts import EvidenceItem, WorkflowArtifactEnvelope, WorkflowType
 
@@ -92,10 +91,6 @@ def save_markdown_report_from_analysis(
     preventive_maintenance: str,
     diagnosis_basis: str,
     report_filename: str,
-    report_gate_summary: dict[str, Any] | None = None,
-    findings_snapshot: list[dict[str, Any]] | None = None,
-    finding_links_snapshot: list[dict[str, Any]] | None = None,
-    evidence_records_snapshot: list[dict[str, Any]] | None = None,
 ) -> str:
     """Save a markdown report through the existing report tool."""
 
@@ -115,10 +110,6 @@ def save_markdown_report_from_analysis(
             "preventive_maintenance": preventive_maintenance,
             "diagnosis_basis": diagnosis_basis,
             "report_filename": report_filename,
-            "report_gate_summary": report_gate_summary or {},
-            "findings_snapshot": findings_snapshot or [],
-            "finding_links_snapshot": finding_links_snapshot or [],
-            "evidence_records_snapshot": evidence_records_snapshot or [],
         }
     )
     return _stringify_tool_output(result)
@@ -213,7 +204,6 @@ def _collect_knowledge_artifact(evidences: list[dict[str, Any]]) -> dict[str, An
 def _collect_analysis_artifact(
     final_content: str,
     findings: list[dict[str, Any]],
-    evidence_quality: dict[str, Any],
 ) -> dict[str, Any]:
     basis = []
     for finding in findings:
@@ -224,17 +214,13 @@ def _collect_analysis_artifact(
             basis.append(text)
 
     confidence = "medium"
-    if evidence_quality.get("gate") == "pass":
-        confidence = "high"
-    elif evidence_quality.get("gate") == "blocked":
-        confidence = "low"
 
     return {
         "conclusion": _compact_text(final_content),
         "basis": basis[:5],
         "recommendations": [],
         "confidence": confidence,
-        "risk_notice": _compact_text(evidence_quality.get("gate")),
+        "risk_notice": "",
     }
 
 
@@ -269,20 +255,16 @@ def save_legacy_diagnosis_artifact(
     user_message: str,
     user_identity: str,
     final_content: str,
-    findings: list[dict[str, Any]],
-    evidence_records: list[dict[str, Any]],
-    evidence_quality: dict[str, Any],
-    finding_links: list[dict[str, Any]] | None = None,
     workflow_stage_details: list[dict[str, Any]] | None = None,
     route_result: Any = None,
 ) -> WorkflowArtifactEnvelope:
     """Persist the legacy diagnosis output as a workflow artifact envelope."""
 
-    fault_code_hint = _guess_fault_code(user_message, findings, evidence_records)
-    equipment_hint = _guess_equipment_hint(user_message, evidence_records)
-    sql_artifact = _collect_sql_artifact(evidence_records)
-    knowledge_artifact = _collect_knowledge_artifact(evidence_records)
-    analysis_artifact = _collect_analysis_artifact(final_content, findings, evidence_quality)
+    fault_code_hint = _guess_fault_code(user_message, [], [])
+    equipment_hint = _guess_equipment_hint(user_message, [])
+    sql_artifact = _collect_sql_artifact([])
+    knowledge_artifact = _collect_knowledge_artifact([])
+    analysis_artifact = _collect_analysis_artifact(final_content, [])
     if route_result is None:
         route_result = {
             "workflow_type": WorkflowType.FAULT_DIAGNOSIS.value,
@@ -292,12 +274,6 @@ def save_legacy_diagnosis_artifact(
             "needs_knowledge": True,
             "needs_report": True,
         }
-    governance = build_governance_snapshot(
-        route_result=route_result,
-        evidence_quality=evidence_quality,
-        findings=findings,
-    )
-
     envelope = WorkflowArtifactEnvelope(
         workflow_type=WorkflowType.FAULT_DIAGNOSIS,
         thread_id=thread_id,
@@ -317,17 +293,12 @@ def save_legacy_diagnosis_artifact(
             "sql_artifact": sql_artifact,
             "knowledge_artifact": knowledge_artifact,
             "analysis_artifact": analysis_artifact,
-            "governance": governance,
             "legacy_bridge": {
                 "source": "legacy_streaming_complete",
                 "workflow_stage_details": workflow_stage_details or [],
-                "route_result": governance.get("route_result") or {},
-                "evidence_quality": evidence_quality,
-                "findings": findings,
-                "finding_links": finding_links or [],
-                "evidence_records": evidence_records,
+                "route_result": route_result,
             },
         },
-        evidence=_build_workflow_evidence_items(evidence_records),
+        evidence=[],
     )
     return save_thread_artifact(envelope)

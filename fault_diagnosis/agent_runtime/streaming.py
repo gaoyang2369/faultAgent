@@ -25,7 +25,7 @@ from ..common.logger import bind_request_id, get_logger, new_request_id
 from ..runtime import build_diagnosis_runtime_payload
 from ..runtime.session_store import clear_namespace, set_namespace
 from .stream_control import StreamCancellationHandle, clear_stream_handle
-from ..common.utils import summarize_identifier_for_log, summarize_text_for_log
+from ..common.utils import summarize_identifier_for_log
 from ..workflows.artifact_store import get_thread_artifact
 from ..workflows.contracts import WorkflowType
 from ..workflows.router import route_workflow_request
@@ -44,95 +44,6 @@ _REPORT_HANDOFF_CONTEXT_HINTS = (
     "诊断结果",
     "巡检结果",
 )
-
-
-def _should_auto_supplement_evidence(evidence_quality: dict[str, Any] | None) -> str | None:
-    if not isinstance(evidence_quality, dict):
-        return None
-    if str(evidence_quality.get("gate") or "").lower() != "blocked":
-        return None
-
-    coverage = evidence_quality.get("coverage_summary") or {}
-    sql_count = int(coverage.get("sql_count") or 0)
-    rag_count = int(coverage.get("rag_count") or 0)
-
-    if sql_count <= 0:
-        return "sql_db_query"
-    if rag_count <= 0:
-        return "query_knowledge_base"
-    return None
-
-
-async def _run_auto_evidence_supplement(
-    message: str,
-    user_identity: str,
-    supplement_tool: str,
-) -> dict[str, Any] | None:
-    try:
-        if supplement_tool == "sql_db_query":
-            from ..workflows.adapters import build_sql_tools_map, find_sql_tool, invoke_tool
-            from ..workflows.contracts import DiagnosisRequest
-            from ..workflows.prompts import build_sql_generation_prompt, build_understanding_prompt
-            from ..workflows.scenarios.fault_diagnosis import _invoke_json_model
-
-            understanding = await _invoke_json_model(build_understanding_prompt(message, user_identity))
-            request = DiagnosisRequest(
-                user_message=message,
-                user_identity=user_identity,
-                equipment_hint=understanding.get("equipment_hint"),
-                metric_hint=understanding.get("metric_hint"),
-                fault_code_hint=understanding.get("fault_code_hint"),
-                time_range_hint=understanding.get("time_range_hint"),
-                needs_report=True,
-                report_format="markdown",
-                analysis_goal=str(understanding.get("analysis_goal") or message),
-            )
-            sql_payload = await _invoke_json_model(build_sql_generation_prompt(request))
-            sql_query = str(sql_payload.get("sql_query") or sql_payload.get("query") or "").strip()
-            if not sql_query:
-                return None
-
-            tools_map = build_sql_tools_map()
-            checker_tool = find_sql_tool(tools_map, "sql_db_query_checker", required=False)
-            if checker_tool is not None:
-                checked_query = await invoke_tool(checker_tool, {"query": sql_query})
-                checked_text = str(checked_query or "").strip()
-                if checked_text:
-                    sql_query = checked_text
-            query_tool = find_sql_tool(tools_map, "sql_db_query")
-            raw_output = await invoke_tool(query_tool, {"query": sql_query})
-            return {
-                "tool_name": "sql_db_query",
-                "tool_input": {
-                    "query": sql_query,
-                    "goal": request.analysis_goal,
-                    "auto_supplement": True,
-                },
-                "tool_output": raw_output,
-            }
-
-        if supplement_tool == "query_knowledge_base":
-            from ..workflows.adapters import query_knowledge_text
-
-            raw_output = query_knowledge_text(message)
-            return {
-                "tool_name": "query_knowledge_base",
-                "tool_input": {
-                    "query": message,
-                    "auto_supplement": True,
-                },
-                "tool_output": raw_output,
-            }
-    except Exception as exc:
-        _log.warning(
-            "自动补查一步执行失败",
-            supplement_tool=supplement_tool,
-            error=str(exc),
-            message_preview=summarize_text_for_log(message, limit=72),
-        )
-        return None
-
-    return None
 
 
 def _should_use_workflow_report_generation(message: str, thread_id: str, user_identity: str) -> bool:
@@ -239,8 +150,6 @@ async def token_stream_events(
     )
     legacy_engine = LegacyReactStreamEngine(
         diagnosis_payload_builder=build_diagnosis_runtime_payload,
-        auto_evidence_selector=_should_auto_supplement_evidence,
-        auto_evidence_runner=_run_auto_evidence_supplement,
         logger=_log,
     )
 

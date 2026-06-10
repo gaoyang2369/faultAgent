@@ -16,7 +16,6 @@ class WorkflowType(str, Enum):
     MANUAL_QA = "manual_qa"
     REPORT_GENERATION = "report_generation"
     CLARIFICATION = "clarification"
-    EVIDENCE_REVIEW = "evidence_review"
 
 
 class DiagnosisRequest(BaseModel):
@@ -47,7 +46,7 @@ class WorkflowRouteResult(BaseModel):
     candidate_workflows: list[str] = Field(default_factory=list, description="候选场景流")
     missing_slots: list[str] = Field(default_factory=list, description="当前识别出的缺失槽位")
     disambiguation_needed: bool = Field(default=False, description="是否需要先做澄清")
-    review_needed: bool = Field(default=False, description="是否需要先做证据复核")
+    review_needed: bool = Field(default=False, description="是否需要人工复核")
     upstream_artifact_required: bool = Field(default=False, description="是否依赖上游 artifact")
 
 
@@ -142,22 +141,6 @@ class ClarificationArtifact(BaseModel):
     error: str | None = None
 
 
-class EvidenceReviewArtifact(BaseModel):
-    """证据链复核阶段产物。"""
-
-    success: bool
-    review_target_workflow: str
-    total_findings: int = 0
-    total_evidences: int = 0
-    coverage_score: float | None = None
-    quality_gate_status: str = "unknown"
-    unsupported_findings: list[str] = Field(default_factory=list)
-    missing_evidence_ids: list[str] = Field(default_factory=list)
-    recommended_action: str = ""
-    review_summary: str = ""
-    error: str | None = None
-
-
 class PlanningEvidenceRequirement(BaseModel):
     """planner 生成的证据需求。"""
 
@@ -233,7 +216,6 @@ class WorkflowRunResult(BaseModel):
     inspection_artifact: InspectionStepArtifact | None = None
     manual_qa_artifact: ManualQaArtifact | None = None
     clarification_artifact: ClarificationArtifact | None = None
-    evidence_review_artifact: EvidenceReviewArtifact | None = None
     report_artifact: ReportStepArtifact | None = None
     planning_artifact: PlanningArtifact | None = None
     route_result: WorkflowRouteResult | None = None

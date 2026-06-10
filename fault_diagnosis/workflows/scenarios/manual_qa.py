@@ -6,7 +6,6 @@ import time
 from datetime import datetime
 from typing import Any, AsyncGenerator
 
-from ...quality.governance import build_workflow_governance_snapshot
 from ...common.logger import get_logger
 from ...common.utils import safe_json_dumps
 from ..adapters import query_knowledge_text
@@ -79,16 +78,8 @@ class ManualQaRunner(BaseScenarioRunner):
         final_answer: str,
         planning_artifact: PlanningArtifact | None = None,
     ) -> WorkflowArtifactEnvelope:
-        """保存手册问答流结构化产物，供证据复核和 complete 契约复用。"""
+        """保存手册问答流结构化产物。"""
 
-        governance = build_workflow_governance_snapshot(
-            route_result=self._route_payload(),
-            finding_text=manual_qa_artifact.answer,
-            confidence=manual_qa_artifact.confidence,
-            has_sql=False,
-            has_knowledge=knowledge_artifact.success,
-            knowledge_required=True,
-        )
         envelope = WorkflowArtifactEnvelope(
             workflow_type=WorkflowType.MANUAL_QA,
             thread_id=self.thread_id,
@@ -102,7 +93,6 @@ class ManualQaRunner(BaseScenarioRunner):
                 "manual_qa_artifact": manual_qa_artifact.model_dump(exclude_none=True),
                 "planning": planning_artifact.model_dump(exclude_none=True) if planning_artifact else None,
                 "route_result": self._route_payload(),
-                "governance": governance,
             },
             evidence=self.build_evidence_items(knowledge_artifact, manual_qa_artifact),
         )
@@ -425,7 +415,6 @@ class ManualQaRunner(BaseScenarioRunner):
                 "final_content": final_answer,
                 "route_result": self._route_payload(),
                 "planning": planning_artifact.model_dump(exclude_none=True),
-                "governance": (saved_envelope.payload or {}).get("governance", {}),
                 "todos": current_todos,
                 "event_count": event_count,
                 "timestamp": datetime.now().isoformat(),

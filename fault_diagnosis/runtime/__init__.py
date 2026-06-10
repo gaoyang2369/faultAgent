@@ -15,8 +15,6 @@ _LAZY_EXPORTS = {
     "build_tool_start_payload": ("tool_runtime", "build_tool_start_payload"),
     "build_workflow_stage_details": ("workflow_runtime", "build_workflow_stage_details"),
     "complete_stage": ("workflow_runtime", "complete_stage"),
-    "get_current_quality_summary": ("diagnosis_runtime", "get_current_quality_summary"),
-    "register_tool_runtime_evidence": ("tool_runtime", "register_tool_runtime_evidence"),
     "resolve_tool_stage": ("workflow_runtime", "resolve_tool_stage"),
     "touch_tool_stage_detail": ("tool_runtime", "touch_tool_stage_detail"),
     "upsert_stage_detail": ("workflow_runtime", "upsert_stage_detail"),

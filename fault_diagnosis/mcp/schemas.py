@@ -31,8 +31,6 @@ class McpToolName(str, Enum):
     GET_FAULT_CONTEXT = "get_fault_context"
     ANALYZE_FAULT = "analyze_fault"
     RANK_POSSIBLE_CAUSES = "rank_possible_causes"
-    EVALUATE_EVIDENCE_QUALITY = "evaluate_evidence_quality"
-    EXPLAIN_REPORT_GATE = "explain_report_gate"
     SUGGEST_FAULT_ACTIONS = "suggest_fault_actions"
     CREATE_WORK_ORDER_DRAFT = "create_work_order_draft"
 
@@ -143,7 +141,6 @@ class DiagnoseFaultRequest(McpBaseRequest):
     needs_report: bool = Field(default=True, description="是否需要报告")
     report_format: str = Field(default="markdown", description="报告格式")
     time_range: dict[str, str | None] = Field(default_factory=dict, description="诊断时间范围")
-    include_evidence_quality: bool = Field(default=True, description="是否返回证据质量")
     include_ranked_causes: bool = Field(default=True, description="是否返回原因排序")
     analysis_depth: Literal["basic", "standard", "deep"] = Field(default="standard", description="诊断深度")
 
@@ -159,7 +156,6 @@ class DiagnoseFaultResponse(McpToolResponse):
     root_causes: list[str] = Field(default_factory=list, description="可能根因")
     diagnosis_summary: str = Field(default="", description="诊断摘要")
     ranked_causes: list[dict[str, Any]] = Field(default_factory=list, description="原因排序")
-    evidence_quality: dict[str, Any] = Field(default_factory=dict, description="证据质量")
     recommended_next_steps: list[str] = Field(default_factory=list, description="建议下一步")
     resource_refs: list[str] = Field(default_factory=list, description="资源 URI 引用")
 
@@ -540,9 +536,9 @@ class GenerateDiagnosisReportResponse(McpToolResponse):
 
 
 class GenerateDiagnosisArtifactRequest(McpBaseRequest):
-    """诊断报告、门禁解释、处置建议和工单草稿聚合生成 tool 的请求结构。"""
+    """诊断报告、处置建议和工单草稿聚合生成 tool 的请求结构。"""
 
-    artifact_type: Literal["report", "gate_explanation", "action_suggestion", "work_order_draft"] = Field(
+    artifact_type: Literal["report", "action_suggestion", "work_order_draft"] = Field(
         description="产物类型"
     )
     diagnosis_result: dict[str, Any] = Field(default_factory=dict, description="可选诊断结果")
@@ -553,7 +549,6 @@ class GenerateDiagnosisArtifactRequest(McpBaseRequest):
     audience: Literal["operator", "engineer", "manager"] = Field(default="engineer", description="产物受众")
     thread_id: str | None = Field(default=None, description="关联诊断线程")
     report_title: str | None = Field(default=None, description="报告标题")
-    report_gate: dict[str, Any] = Field(default_factory=dict, description="报告门禁")
     conclusion: str = Field(default="", description="当前判断")
     work_order_id: str | None = Field(default=None, description="工单编号或前缀")
     title: str | None = Field(default=None, description="工单标题")
@@ -563,10 +558,10 @@ class GenerateDiagnosisArtifactRequest(McpBaseRequest):
 
 
 class GenerateDiagnosisArtifactResponse(McpToolResponse):
-    """诊断报告、门禁解释、处置建议和工单草稿聚合生成 tool 的响应结构。"""
+    """诊断报告、处置建议和工单草稿聚合生成 tool 的响应结构。"""
 
     tool_name: Literal[McpToolName.GENERATE_DIAGNOSIS_ARTIFACT] = McpToolName.GENERATE_DIAGNOSIS_ARTIFACT
-    artifact_type: Literal["report", "gate_explanation", "action_suggestion", "work_order_draft"] = Field(
+    artifact_type: Literal["report", "action_suggestion", "work_order_draft"] = Field(
         description="产物类型"
     )
     artifact: dict[str, Any] = Field(default_factory=dict, description="聚合产物")
@@ -589,8 +584,6 @@ class AnalyzeFaultResponse(McpToolResponse):
     fault_code: str | None = Field(default=None, description="故障码")
     conclusion: str = Field(default="", description="综合判断")
     cause_rankings: list[dict[str, Any]] = Field(default_factory=list, description="原因排序")
-    report_gate: dict[str, Any] = Field(default_factory=dict, description="报告门禁")
-    evidence_quality: dict[str, Any] = Field(default_factory=dict, description="证据质量")
 
 
 class RankPossibleCausesRequest(McpBaseRequest):
@@ -608,36 +601,10 @@ class RankPossibleCausesResponse(McpToolResponse):
     ranked_causes: list[dict[str, Any]] = Field(default_factory=list, description="排序后的候选原因")
 
 
-class EvaluateEvidenceQualityRequest(McpBaseRequest):
-    thread_id: str | None = Field(default=None, description="关联诊断线程")
-    findings_snapshot: list[dict[str, Any]] = Field(default_factory=list, description="结论快照")
-    finding_links_snapshot: list[dict[str, Any]] = Field(default_factory=list, description="结论和证据绑定快照")
-    evidence_records_snapshot: list[dict[str, Any]] = Field(default_factory=list, description="证据快照")
-
-
-class EvaluateEvidenceQualityResponse(McpToolResponse):
-    tool_name: Literal[McpToolName.EVALUATE_EVIDENCE_QUALITY] = McpToolName.EVALUATE_EVIDENCE_QUALITY
-    evidence_quality: dict[str, Any] = Field(default_factory=dict, description="证据质量结果")
-    report_gate: dict[str, Any] = Field(default_factory=dict, description="报告门禁")
-
-
-class ExplainReportGateRequest(McpBaseRequest):
-    thread_id: str | None = Field(default=None, description="关联诊断线程")
-    report_gate: dict[str, Any] = Field(default_factory=dict, description="已有门禁结果")
-
-
-class ExplainReportGateResponse(McpToolResponse):
-    tool_name: Literal[McpToolName.EXPLAIN_REPORT_GATE] = McpToolName.EXPLAIN_REPORT_GATE
-    report_gate: dict[str, Any] = Field(default_factory=dict, description="报告门禁")
-    explanation: str = Field(default="", description="通俗解释")
-    recommendation: str = Field(default="", description="下一步建议")
-
-
 class SuggestFaultActionsRequest(McpBaseRequest):
     equipment_id: str = Field(description="设备编号或设备名称")
     fault_code: str | None = Field(default=None, description="故障码")
     conclusion: str = Field(default="", description="当前判断")
-    report_gate: dict[str, Any] = Field(default_factory=dict, description="报告门禁")
     top_k: int = Field(default=5, ge=1, le=10, description="返回建议数")
 
 
@@ -656,7 +623,6 @@ class CreateWorkOrderDraftRequest(McpBaseRequest):
     summary: str = Field(description="工单摘要")
     assignee: str = Field(default="maintenance-team", description="执行人或组织")
     source_report: str = Field(default="", description="来源报告")
-    report_gate: dict[str, Any] = Field(default_factory=dict, description="报告门禁")
 
 
 class CreateWorkOrderDraftResponse(McpToolResponse):

@@ -118,7 +118,7 @@ def read_diagnosis_evidence_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "workflow_type": str(envelope.workflow_type),
         "request_summary": envelope.request_summary,
         "governance": payload_data.get("governance") or {},
-        "report_gate_summary": payload_data.get("report_gate_summary") or {},
+        "report_gate_summary": {},
         "findings_snapshot": list(payload_data.get("findings_snapshot") or []),
         "finding_links_snapshot": list(payload_data.get("finding_links_snapshot") or []),
         "evidence_records_snapshot": list(payload_data.get("evidence_records_snapshot") or []),

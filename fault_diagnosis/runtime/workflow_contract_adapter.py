@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..quality.evidence import build_quality_gate_notice, summarize_evidence_quality
 from ..workflows.contracts import WorkflowArtifactEnvelope
 
 
@@ -163,39 +162,6 @@ def _build_finding_links(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
     return links
 
 
-def _quality_evidence_type(value: Any) -> str:
-    normalized = str(value or "").strip().lower()
-    if normalized in {"sql", "sql_result", "database"}:
-        return "sql"
-    if normalized in {"rag", "knowledge", "knowledge_base", "knowledge_lookup"}:
-        return "rag"
-    if normalized in {"chart", "figure", "visualization"}:
-        return "chart"
-    if normalized in {"report", "artifact_report"}:
-        return "report"
-    return normalized or "generic"
-
-
-def _build_quality_records(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for item in evidence:
-        metadata = dict(item.get("metadata") or {})
-        records.append(
-            {
-                "evidence_id": item.get("evidence_id") or item.get("id"),
-                "type": _quality_evidence_type(item.get("type")),
-                "source": item.get("source"),
-                "title": item.get("title"),
-                "summary": item.get("summary"),
-                "raw_ref": item.get("source"),
-                "stage": metadata.get("stage") or "workflow",
-                "created_at": metadata.get("created_at"),
-                "metadata": metadata,
-            }
-        )
-    return records
-
-
 def _build_timeline(envelope: WorkflowArtifactEnvelope, evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
     payload = envelope.payload or {}
     events: list[dict[str, Any]] = []
@@ -264,13 +230,6 @@ def build_phase4_contract_payload(envelope: WorkflowArtifactEnvelope | None) -> 
     evidence = _build_standard_evidence(envelope)
     findings = _build_findings(envelope, evidence)
     finding_links = _build_finding_links(findings)
-    quality_records = _build_quality_records(evidence)
-    evidence_quality = summarize_evidence_quality(
-        findings=findings,
-        links=finding_links,
-        records=quality_records,
-    )
-    quality_gate_notice = build_quality_gate_notice(evidence_quality)
     timeline = _build_timeline(envelope, evidence)
     artifacts = _build_artifacts(envelope)
     governance = _build_governance(envelope)
@@ -315,9 +274,4 @@ def build_phase4_contract_payload(envelope: WorkflowArtifactEnvelope | None) -> 
         "evidence_count": len(evidence),
         "findings": findings,
         "finding_links": finding_links,
-        "evidence_quality": evidence_quality,
-        "evidence_coverage": evidence_quality.get("coverage_summary"),
-        "report_gate": evidence_quality.get("gate"),
-        "quality_gate_notice": quality_gate_notice,
-        "release_ready": evidence_quality.get("release_ready"),
     }

@@ -10,8 +10,6 @@ from typing import Any
 from dotenv import load_dotenv
 
 from ...config import DCMA_DB_NAME, KB_QUERY_TIMEOUT_SECONDS, MYSQL_USER
-from ...quality.evidence import build_quality_gate_notice, summarize_evidence_quality
-from ...quality.governance import build_governance_snapshot
 from ...knowledge.base import get_knowledge_retriever, has_knowledge_base_index
 from ...common.paths import PROJECT_ENV_FILE
 from ...tools.report_tools import save_html_report
@@ -40,10 +38,6 @@ from ..schemas import (
     AnalyzeFaultResponse,
     ExplainFaultCodeRequest,
     ExplainFaultCodeResponse,
-    ExplainReportGateRequest,
-    ExplainReportGateResponse,
-    EvaluateEvidenceQualityRequest,
-    EvaluateEvidenceQualityResponse,
     CreateWorkOrderDraftRequest,
     CreateWorkOrderDraftResponse,
     GetEquipmentSnapshotRequest,
@@ -671,7 +665,6 @@ def _build_html_report_from_artifact(thread_id: str, report_title: str | None = 
         return None
     payload = map_artifact_to_report_payload(envelope)
     findings_snapshot = list(payload.get("findings_snapshot") or [])
-    report_gate_summary = dict(payload.get("report_gate_summary") or {})
 
     summary = f"<p>{payload.get('executive_summary') or envelope.final_answer}</p>"
     findings_html = "".join(
@@ -693,10 +686,6 @@ def _build_html_report_from_artifact(thread_id: str, report_title: str | None = 
             "findings": f"<ul>{findings_html}</ul>",
             "recommendations": f"<ul>{recommendations_html}</ul>",
             "report_filename": f"{payload.get('report_filename') or 'diagnosis_report'}_html",
-            "report_gate_summary": report_gate_summary,
-            "findings_snapshot": findings_snapshot,
-            "finding_links_snapshot": list(payload.get("finding_links_snapshot") or []),
-            "evidence_records_snapshot": list(payload.get("evidence_records_snapshot") or []),
         }
     )
     return _compact(html_result)
@@ -998,27 +987,6 @@ async def generate_diagnosis_artifact_handler(
             governance=response.governance,
         )
 
-    if request.artifact_type == "gate_explanation":
-        response = await explain_report_gate_handler(
-            ExplainReportGateRequest(thread_id=thread_id or None, report_gate=request.report_gate, **common),
-            context,
-        )
-        return GenerateDiagnosisArtifactResponse(
-            summary=response.summary,
-            artifact_type=request.artifact_type,
-            artifact={
-                "report_gate": response.report_gate,
-                "explanation": response.explanation,
-                "recommendation": response.recommendation,
-            },
-            findings=response.findings,
-            evidence=response.evidence,
-            timeline=response.timeline,
-            artifacts=response.artifacts,
-            resources=response.resources,
-            governance=response.governance,
-        )
-
     if request.artifact_type == "action_suggestion":
         equipment_id = _compact(request.equipment_id) or _compact(diagnosis_result.get("equipment_id"))
         if not equipment_id:
@@ -1034,7 +1002,6 @@ async def generate_diagnosis_artifact_handler(
                 equipment_id=equipment_id,
                 fault_code=request.fault_code or diagnosis_result.get("fault_code"),
                 conclusion=request.conclusion or _compact(diagnosis_result.get("conclusion")),
-                report_gate=request.report_gate or dict(diagnosis_result.get("report_gate") or {}),
                 **common,
             ),
             context,
@@ -1063,7 +1030,6 @@ async def generate_diagnosis_artifact_handler(
             summary=summary,
             assignee=request.assignee,
             source_report=_compact(diagnosis_result.get("source_report")),
-            report_gate=request.report_gate or dict(diagnosis_result.get("report_gate") or {}),
             **common,
         ),
         context,
@@ -1608,7 +1574,7 @@ async def diagnose_fault_handler(request: DiagnoseFaultRequest, context) -> Diag
             {
                 "thread_id": thread_id,
                 "governance": governance_payload,
-                "report_gate_summary": (envelope.payload or {}).get("report_gate_summary") or {},
+                "report_gate_summary": {},
                 "findings_snapshot": findings_snapshot,
                 "evidence_records_snapshot": evidence_snapshot,
             },
@@ -1617,9 +1583,6 @@ async def diagnose_fault_handler(request: DiagnoseFaultRequest, context) -> Diag
     analysis_artifact = result.analysis_artifact.model_dump() if result.analysis_artifact else {}
     diagnosis_text = _compact(analysis_artifact.get("conclusion") or result.final_answer)
     recommended_actions = list(analysis_artifact.get("recommendations") or [])
-    evidence_quality = {}
-    if request.include_evidence_quality:
-        evidence_quality = dict(governance_payload.get("evidence_quality") or governance_payload.get("report_gate") or {})
     ranked_causes = []
     if request.include_ranked_causes:
         ranked_causes = list(
@@ -1634,14 +1597,11 @@ async def diagnose_fault_handler(request: DiagnoseFaultRequest, context) -> Diag
         diagnosis=diagnosis_text,
         diagnosis_summary=diagnosis_text,
         confidence=_compact(analysis_artifact.get("confidence")) or "unknown",
-        risk_level=_compact(governance_payload.get("report_gate", {}).get("risk_level"))
-        or _compact(governance_payload.get("risk_level"))
-        or "unknown",
+        risk_level=_compact(governance_payload.get("risk_level")) or "unknown",
         recommended_actions=recommended_actions,
         recommended_next_steps=recommended_actions,
         root_causes=list(analysis_artifact.get("missing_information") or []),
         ranked_causes=ranked_causes,
-        evidence_quality=evidence_quality,
         resource_refs=[resource.uri for resource in build_resource_references(
             thread_id=thread_id,
             report_filename=report_filename,
@@ -1963,7 +1923,7 @@ async def generate_diagnosis_report_handler(
         {
             "thread_id": thread_id,
             "governance": (upstream.payload or {}).get("governance") or {},
-            "report_gate_summary": (upstream.payload or {}).get("report_gate_summary") or {},
+            "report_gate_summary": {},
             "findings_snapshot": list((upstream.payload or {}).get("findings_snapshot") or []),
             "evidence_records_snapshot": list((upstream.payload or {}).get("evidence_records_snapshot") or []),
         },
@@ -2038,11 +1998,7 @@ def _load_phase8_bundle(
     return {
         "thread_id": thread_id,
         "run_id": run_id,
-        "report_gate_summary": summarize_evidence_quality(
-            findings=findings_snapshot or [],
-            links=finding_links_snapshot or [],
-            records=evidence_records_snapshot or [],
-        ),
+        "report_gate_summary": {},
         "findings_snapshot": list(findings_snapshot or []),
         "finding_links_snapshot": list(finding_links_snapshot or []),
         "evidence_records_snapshot": list(evidence_records_snapshot or []),
@@ -2093,18 +2049,8 @@ async def analyze_fault_handler(request: AnalyzeFaultRequest, context) -> Analyz
         fault_rows, fault_sql = await asyncio.to_thread(_query_fault_record_rows, request.fault_code)
 
     bundle = _load_phase8_bundle(thread_id=request.thread_id, run_id=context.run_id)
-    report_gate = dict(bundle.get("report_gate_summary") or {})
-    evidence_quality = dict(bundle.get("governance", {}).get("evidence_quality") or report_gate or {})
     findings_snapshot = list(bundle.get("findings_snapshot") or [])
     evidence_records_snapshot = list(bundle.get("evidence_records_snapshot") or [])
-
-    if not evidence_quality:
-        evidence_quality = summarize_evidence_quality(
-            findings=findings_snapshot,
-            links=list(bundle.get("finding_links_snapshot") or []),
-            records=evidence_records_snapshot,
-        )
-    report_gate = dict(evidence_quality or report_gate)
 
     fault_record = fault_rows[0] if fault_rows else {}
     possible_causes = _split_cause_text(fault_record.get("possible_cause")) or [
@@ -2143,12 +2089,7 @@ async def analyze_fault_handler(request: AnalyzeFaultRequest, context) -> Analyz
         except (TypeError, ValueError):
             high_pressure = False
 
-    if report_gate.get("gate") == "pass":
-        conclusion = "当前证据已足够支撑初步判断，可以继续出报告。"
-    elif report_gate.get("gate") == "review_required":
-        conclusion = "当前可以出初步分析，但还不建议直接锁死唯一根因。"
-    else:
-        conclusion = "当前证据不足，建议继续补数据后再下正式结论。"
+    conclusion = "当前已完成轻量初步分析；可靠性门禁已从最小运行链路中移除。"
     if high_pressure and request.fault_code:
         conclusion = f"{request.fault_code} 对应的过载特征已经出现，{conclusion}"
 
@@ -2166,8 +2107,7 @@ async def analyze_fault_handler(request: AnalyzeFaultRequest, context) -> Analyz
     )
     governance = build_governance_info(
         {
-            "evidence_quality": evidence_quality,
-            "report_gate": report_gate,
+            "reliability_evaluation": "disabled",
             "analysis": conclusion,
             "fault_sql": fault_sql,
         },
@@ -2180,8 +2120,6 @@ async def analyze_fault_handler(request: AnalyzeFaultRequest, context) -> Analyz
         fault_code=request.fault_code,
         conclusion=conclusion,
         cause_rankings=cause_rankings,
-        report_gate=report_gate,
-        evidence_quality=evidence_quality,
         findings=findings,
         evidence=evidence,
         artifacts=build_artifact_items(thread_id=request.thread_id or context.run_id, workflow_type="analyze_fault"),
@@ -2235,74 +2173,6 @@ async def rank_possible_causes_handler(
     )
 
 
-async def evaluate_evidence_quality_handler(
-    request: EvaluateEvidenceQualityRequest,
-    context,
-) -> EvaluateEvidenceQualityResponse:
-    bundle = _load_phase8_bundle(
-        thread_id=request.thread_id,
-        run_id=context.run_id,
-        findings_snapshot=request.findings_snapshot,
-        finding_links_snapshot=request.finding_links_snapshot,
-        evidence_records_snapshot=request.evidence_records_snapshot,
-    )
-    findings_snapshot = list(bundle.get("findings_snapshot") or request.findings_snapshot or [])
-    finding_links_snapshot = list(bundle.get("finding_links_snapshot") or request.finding_links_snapshot or [])
-    evidence_records_snapshot = list(bundle.get("evidence_records_snapshot") or request.evidence_records_snapshot or [])
-    evidence_quality = summarize_evidence_quality(findings_snapshot, finding_links_snapshot, evidence_records_snapshot)
-    report_gate = dict(bundle.get("report_gate_summary") or {})
-    if not report_gate:
-        report_gate = dict(evidence_quality)
-    summary = "当前证据质量已评估完成。"
-    return EvaluateEvidenceQualityResponse(
-        summary=summary,
-        evidence_quality=evidence_quality,
-        report_gate=report_gate,
-        findings=build_diagnosis_findings(
-            [{"finding_id": "evaluate_evidence_quality", "text": summary, "confidence": "high", "severity": "low"}],
-            fallback_text=summary,
-            fallback_confidence="high",
-        ),
-        evidence=build_evidence_items([], evidence_records_snapshot),
-        governance=build_governance_info(
-            {"evidence_quality": evidence_quality, "report_gate": report_gate},
-            emitted_events=["evidence_review"],
-            extra_metadata={"thread_id": request.thread_id or context.run_id},
-        ),
-    )
-
-
-async def explain_report_gate_handler(
-    request: ExplainReportGateRequest,
-    context,
-) -> ExplainReportGateResponse:
-    bundle = _load_phase8_bundle(thread_id=request.thread_id, run_id=context.run_id)
-    report_gate = dict(request.report_gate or bundle.get("report_gate_summary") or {})
-    evidence_quality = dict(bundle.get("governance", {}).get("evidence_quality") or report_gate or {})
-    explanation = build_quality_gate_notice(report_gate) or "当前门禁通过，可以继续出报告。"
-    recommendation = _compact(report_gate.get("recommended_action")) or _compact(evidence_quality.get("recommended_action"))
-    if not recommendation:
-        recommendation = "先保留初步判断，若证据还不够就继续补 SQL 或知识证据。"
-    summary = "已解释当前报告门禁。"
-    return ExplainReportGateResponse(
-        summary=summary,
-        report_gate=report_gate,
-        explanation=explanation,
-        recommendation=recommendation,
-        findings=build_diagnosis_findings(
-            [{"finding_id": "explain_report_gate", "text": explanation, "confidence": "high", "severity": "low"}],
-            fallback_text=explanation,
-            fallback_confidence="high",
-        ),
-        evidence=build_evidence_items([], list(bundle.get("evidence_records_snapshot") or [])),
-        governance=build_governance_info(
-            {"report_gate": report_gate, "evidence_quality": evidence_quality},
-            emitted_events=["evidence_review"],
-            extra_metadata={"thread_id": request.thread_id or context.run_id},
-        ),
-    )
-
-
 async def suggest_fault_actions_handler(
     request: SuggestFaultActionsRequest,
     context,
@@ -2311,8 +2181,6 @@ async def suggest_fault_actions_handler(
     if request.fault_code:
         fault_rows, _ = await asyncio.to_thread(_query_fault_record_rows, request.fault_code)
     fault_record = fault_rows[0] if fault_rows else {}
-    bundle = _load_phase8_bundle(thread_id=None, run_id=context.run_id)
-    report_gate = dict(request.report_gate or bundle.get("report_gate_summary") or {})
     possible_actions = _split_cause_text(fault_record.get("suggestion"))
     if not possible_actions:
         possible_actions = [
@@ -2322,8 +2190,6 @@ async def suggest_fault_actions_handler(
             "检查润滑和轴承阻力",
         ]
     work_order_hint = "建议先出初步报告，再根据现场复核结果决定是否生成正式工单。"
-    if report_gate.get("gate") == "pass":
-        work_order_hint = "证据已足够，可以直接整理工单草稿并进入执行。"
     summary = "已生成处置建议。"
     return SuggestFaultActionsResponse(
         summary=summary,
@@ -2336,9 +2202,9 @@ async def suggest_fault_actions_handler(
             fallback_text=work_order_hint,
             fallback_confidence="medium",
         ),
-        evidence=build_evidence_items([], list(bundle.get("evidence_records_snapshot") or [])),
+        evidence=build_evidence_items([], []),
         governance=build_governance_info(
-            {"report_gate": report_gate, "recommended_actions": possible_actions},
+            {"recommended_actions": possible_actions, "reliability_evaluation": "disabled"},
             emitted_events=["action_suggestion"],
             extra_metadata={"thread_id": context.run_id},
         ),
@@ -2349,7 +2215,6 @@ async def create_work_order_draft_handler(
     request: CreateWorkOrderDraftRequest,
     context,
 ) -> CreateWorkOrderDraftResponse:
-    report_gate = dict(request.report_gate or {})
     draft = {
         "work_order_id": request.work_order_id,
         "title": request.title,
@@ -2358,7 +2223,6 @@ async def create_work_order_draft_handler(
         "assignee": request.assignee,
         "source_report": request.source_report,
         "created_at": datetime.now().isoformat(timespec="seconds"),
-        "report_gate": report_gate,
         "publication_status": "draft",
     }
     summary = "工单草稿已生成。"
@@ -2374,7 +2238,7 @@ async def create_work_order_draft_handler(
         ),
         evidence=build_evidence_items([], []),
         governance=build_governance_info(
-            {"report_gate": report_gate, "draft": draft},
+            {"draft": draft, "reliability_evaluation": "disabled"},
             emitted_events=["work_order_draft"],
             extra_metadata={"thread_id": context.run_id},
         ),

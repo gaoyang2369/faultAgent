@@ -250,7 +250,6 @@ class ReportGenerationRunner(BaseScenarioRunner):
                 "final_content": final_answer,
                 "route_result": self._route_payload(),
                 "planning": planning_artifact.model_dump(exclude_none=True),
-                "governance": (envelope.payload or {}).get("governance", {}),
                 "report_filename": report_artifact.report_filename,
                 "report_url": _extract_report_url(report_artifact.save_result),
                 "report_artifact": {

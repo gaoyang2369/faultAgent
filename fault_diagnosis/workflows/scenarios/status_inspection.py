@@ -6,7 +6,6 @@ import time
 from datetime import datetime
 from typing import Any, AsyncGenerator
 
-from ...quality.governance import build_workflow_evidence_bundle
 from ...common.logger import get_logger
 from ...common.utils import safe_json_dumps
 from ..adapters import (
@@ -169,22 +168,6 @@ class StatusInspectionRunner(BaseScenarioRunner):
     ) -> WorkflowArtifactEnvelope:
         """保存状态巡检流结构化产物。"""
 
-        evidence_bundle = build_workflow_evidence_bundle(
-            route_result=self._route_payload(),
-            finding_text=inspection_artifact.summary,
-            confidence=inspection_artifact.confidence,
-            has_sql=sql_artifact.success,
-            sql_title="Workflow SQL 结果",
-            sql_summary=sql_artifact.result_preview or sql_artifact.raw_output or sql_artifact.summary,
-            sql_query="; ".join(sql_artifact.sql_used or []),
-            has_knowledge=knowledge_artifact.success if knowledge_artifact else False,
-            knowledge_title="Workflow 知识检索结果",
-            knowledge_summary=knowledge_artifact.raw_output if knowledge_artifact else "",
-            knowledge_query=knowledge_artifact.query if knowledge_artifact else "",
-            knowledge_required=False,
-        )
-        governance = evidence_bundle["governance"]
-
         envelope = WorkflowArtifactEnvelope(
             workflow_type=WorkflowType.STATUS_INSPECTION,
             thread_id=self.thread_id,
@@ -200,11 +183,6 @@ class StatusInspectionRunner(BaseScenarioRunner):
                 "report_artifact": report_artifact.model_dump(exclude_none=True) if report_artifact else None,
                 "planning": planning_artifact.model_dump(exclude_none=True) if planning_artifact else None,
                 "route_result": self._route_payload(),
-                "governance": governance,
-                "report_gate_summary": evidence_bundle["report_gate_summary"],
-                "findings_snapshot": evidence_bundle["findings_snapshot"],
-                "finding_links_snapshot": evidence_bundle["finding_links_snapshot"],
-                "evidence_records_snapshot": evidence_bundle["evidence_records_snapshot"],
             },
             evidence=self.build_evidence_items(request, sql_artifact, inspection_artifact, knowledge_artifact),
         )
@@ -401,17 +379,6 @@ class StatusInspectionRunner(BaseScenarioRunner):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_filename = f"dcma_status_inspection_{timestamp}_{self.thread_id[-6:]}"
         try:
-            evidence_bundle = build_workflow_evidence_bundle(
-                route_result=self._route_payload(),
-                finding_text=inspection_artifact.summary,
-                confidence=inspection_artifact.confidence,
-                has_sql=sql_artifact.success,
-                sql_title="Workflow SQL 结果",
-                sql_summary=sql_artifact.result_preview or sql_artifact.raw_output or sql_artifact.summary,
-                sql_query="; ".join(sql_artifact.sql_used or []),
-                has_knowledge=False,
-                knowledge_required=False,
-            )
             save_result = save_markdown_report_from_analysis(
                 title="DCMA 状态巡检报告",
                 report_time=current_time,
@@ -435,10 +402,6 @@ class StatusInspectionRunner(BaseScenarioRunner):
                     f"观察指标：{'; '.join(inspection_artifact.observed_metrics) or '无'}"
                 ),
                 report_filename=report_filename,
-                report_gate_summary=evidence_bundle["report_gate_summary"],
-                findings_snapshot=evidence_bundle["findings_snapshot"],
-                finding_links_snapshot=evidence_bundle["finding_links_snapshot"],
-                evidence_records_snapshot=evidence_bundle["evidence_records_snapshot"],
             )
             artifact = ReportStepArtifact(
                 success=True,
@@ -685,7 +648,6 @@ class StatusInspectionRunner(BaseScenarioRunner):
                 "thread_id": self.thread_id,
                 "final_content": final_answer,
                 "route_result": self._route_payload(),
-                "governance": (saved_envelope.payload or {}).get("governance", {}),
                 "todos": current_todos,
                 "event_count": event_count,
                 "timestamp": datetime.now().isoformat(),

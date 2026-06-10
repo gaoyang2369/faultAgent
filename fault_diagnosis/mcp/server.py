@@ -385,23 +385,19 @@ GENERATE_DIAGNOSIS_REPORT_DESCRIPTION = _sectioned_description(
         "输入要点：thread_id 是核心；report_title 用于报告标题；report_format 默认为 markdown；include_html 用于控制是否同时生成 HTML。",
         "输出要点：返回 summary、report_resource、html_resource（若启用）、findings、evidence、resources 和 governance。",
         "推荐步骤：先调用 diagnose_fault，并显式传 metadata.thread_id；确认诊断完成后，使用同一个 thread_id 调用本工具；再读取 reports://thread/{thread_id}/markdown。",
-        "后续动作：若报告生成失败，使用同一个 thread_id 调用 explain_report_gate 检查门禁原因。",
+        "后续动作：若报告生成失败，检查 thread_id 是否存在结构化诊断产物以及报告文件是否写入成功。",
         "不要用于：不要在没有 thread_id 时调用；不要指望本工具替代 diagnose_fault 自动补齐诊断线程。",
-        "常见失败：缺少 thread_id、当前线程没有结构化诊断产物，或线程门禁未通过。",
+        "常见失败：缺少 thread_id、当前线程没有结构化诊断产物，或报告保存失败。",
     ]
 )
 
 EXPLAIN_REPORT_GATE_DESCRIPTION = _sectioned_description(
     [
-        "用途：用通俗语言解释当前线程为什么能出报告或不能出报告，并给出下一步建议。",
-        "适用场景：报告生成被拦截，或在正式调用 generate_diagnosis_report 之前先检查门禁状态。",
-        "前置条件：建议提供诊断线程 thread_id；若已有 report_gate 快照，也可结合当前上下文解释。",
-        "输入要点：thread_id 用于定位同一诊断线程；report_gate 可用于补充已有门禁结果。",
-        "输出要点：返回 report_gate、explanation、recommendation，并保留治理信息用于联调追踪。",
-        "推荐步骤：先完成 diagnose_fault；若 generate_diagnosis_report 失败或用户追问为什么不能出报告，再用同一 thread_id 调用本工具。",
-        "后续动作：根据 recommendation 补充证据、回到 diagnose_fault，或再次尝试 generate_diagnosis_report。",
-        "不要用于：不要把本工具当成诊断工具或报告生成工具；它只负责解释门禁和建议下一步。",
-        "常见失败：线程下缺少证据快照或结构化产物，导致只能解释为上下文不足。",
+        "用途：兼容旧接口；报告门禁解释能力已从最小运行链路中停用。",
+        "适用场景：仅用于旧调用方平滑过渡，不再作为推荐工作流的一部分。",
+        "输入要点：请求会被接受，但不会执行门禁评估。",
+        "输出要点：固定返回空 report_gate 和停用说明。",
+        "推荐步骤：需要判断报告质量时，后续应基于重构后的 trace 重新实现可靠性评估。",
     ]
 )
 
@@ -550,11 +546,11 @@ EXPLAIN_FAULT_CODE_DESCRIPTION = _sectioned_description(
 
 ANALYZE_FAULT_DESCRIPTION = _sectioned_description(
     [
-        "用途：基于现有诊断上下文给出初步判断、原因排序和门禁摘要。",
+        "用途：基于现有诊断上下文给出初步判断和原因排序。",
         "适用场景：已经有 thread_id 或证据快照，想在不重跑完整诊断的情况下做进一步判断。",
         "前置条件：建议提供 equipment_id；若要复用现有上下文，建议提供 thread_id 或 findings/evidence 快照。",
         "输入要点：thread_id 用于读取已沉淀的证据上下文；fault_code 和 conclusion 可用于增强判断焦点。",
-        "输出要点：返回 conclusion、cause_rankings、report_gate 和 evidence_quality。",
+        "输出要点：返回 conclusion 和 cause_rankings；report_gate/evidence_quality 仅作为兼容空字段保留。",
         "推荐步骤：先用 get_fault_context 或 diagnose_fault 形成上下文，再调用本工具做结构化判断。",
         "不要用于：不要把它当成原始取数工具；它依赖已有上下文，而不是直接采集现场数据。",
         "常见失败：缺少 thread_id 或可用证据快照，导致只能基于很弱的上下文做判断。",
@@ -576,40 +572,37 @@ RANK_POSSIBLE_CAUSES_DESCRIPTION = _sectioned_description(
 
 EVALUATE_EVIDENCE_QUALITY_DESCRIPTION = _sectioned_description(
     [
-        "用途：评估当前结论与证据之间的覆盖度、质量门禁和可出报告性。",
-        "适用场景：需要判断当前诊断是否足够支撑正式报告、工单或后续自动化动作。",
-        "前置条件：建议提供 thread_id；若没有线程，也可显式传 findings、links 和 evidence 快照。",
-        "输入要点：findings_snapshot、finding_links_snapshot、evidence_records_snapshot 共同决定质量评分和门禁结论。",
-        "输出要点：返回 evidence_quality 和 report_gate，适合作为 explain_report_gate 或 create_work_order_draft 的上游输入。",
-        "推荐步骤：先形成初步结论，再用本工具做质量复核；若门禁未通过，可补证据后再次评估。",
-        "不要用于：不要把它当成生成结论的工具；它评估的是结论质量，不是结论本身。",
-        "常见失败：证据为空、结论和证据没有绑定关系，或输入快照结构不完整。",
+        "用途：兼容旧接口；可靠性评估已从最小运行链路中停用。",
+        "适用场景：仅用于旧调用方平滑过渡，不再作为推荐工作流的一部分。",
+        "输入要点：请求会被接受，但不会计算证据质量或报告门禁。",
+        "输出要点：固定返回空 evidence_quality 和空 report_gate。",
+        "推荐步骤：后续应基于新的 trace 结构重新实现可靠性评估。",
     ]
 )
 
 SUGGEST_FAULT_ACTIONS_DESCRIPTION = _sectioned_description(
     [
-        "用途：根据当前判断和门禁状态输出下一步处置建议与工单提示。",
+        "用途：根据当前判断输出下一步处置建议与工单提示。",
         "适用场景：已有初步判断，想知道下一步应检查什么、先停机还是继续观察。",
-        "前置条件：建议提供 equipment_id、fault_code 和 conclusion；report_gate 可提升建议精度。",
-        "输入要点：conclusion 决定建议方向；report_gate 决定建议是保守推进还是可以直接执行。",
+        "前置条件：建议提供 equipment_id、fault_code 和 conclusion。",
+        "输入要点：conclusion 决定建议方向；fault_code 可用于补充标准处置建议。",
         "输出要点：返回 recommended_actions 和 work_order_hint，便于转给维修或操作团队。",
-        "推荐步骤：先完成 analyze_fault 或 evaluate_evidence_quality，再调用本工具生成执行建议。",
+        "推荐步骤：先完成 analyze_fault 或 diagnose_fault，再调用本工具生成执行建议。",
         "不要用于：不要把它当成正式工单生成器；若要结构化工单草稿，应继续调用 create_work_order_draft。",
-        "常见失败：结论过空、门禁未知，导致建议只能停留在泛化层面。",
+        "常见失败：结论过空或故障码缺失，导致建议只能停留在泛化层面。",
     ]
 )
 
 CREATE_WORK_ORDER_DRAFT_DESCRIPTION = _sectioned_description(
     [
-        "用途：基于诊断结论和门禁状态生成结构化工单草稿，便于人工复核和后续派发。",
+        "用途：基于诊断结论生成结构化工单草稿，便于人工复核和后续派发。",
         "适用场景：已经有较明确的故障结论，希望形成标准化维修工单草稿。",
-        "前置条件：必须提供 work_order_id；建议同时提供 equipment_id、fault_code、conclusion 和 report_gate。",
-        "输入要点：report_gate 决定工单草稿的稳妥程度；severity、summary 等内容会反映当前结论强弱。",
+        "前置条件：必须提供 work_order_id；建议同时提供 equipment_id、fault_code 和 conclusion。",
+        "输入要点：severity、summary 等内容会反映当前结论强弱。",
         "输出要点：返回 draft、publication_status 和工单核心字段，适合人工确认后入正式系统。",
         "推荐步骤：先完成 analyze_fault 或 suggest_fault_actions，再调用本工具沉淀工单草稿。",
-        "不要用于：不要在门禁明显未通过时直接作为正式工单发布依据；它只是草稿。",
-        "常见失败：缺少必要结论字段、门禁状态不足，或输入信息无法支撑可执行工单。",
+        "不要用于：不要直接作为正式工单发布依据；它只是草稿。",
+        "常见失败：缺少必要结论字段，或输入信息无法支撑可执行工单。",
     ]
 )
 
@@ -642,7 +635,7 @@ QUERY_EVENT_HISTORY_DESCRIPTION = _sectioned_description(
 
 GENERATE_DIAGNOSIS_ARTIFACT_DESCRIPTION = _sectioned_description(
     [
-        "用途：统一生成诊断报告、报告门禁解释、处置建议和工单草稿。",
+        "用途：统一生成诊断报告、处置建议和工单草稿；门禁解释仅兼容保留且固定返回停用说明。",
         "适用场景：用户需要可交付材料或后续处置材料时调用。",
         "输入要点：artifact_type 可选 report、gate_explanation、action_suggestion、work_order_draft。",
         "输出要点：返回 artifact、report_resource、recommended_actions 或 work_order_draft。",
@@ -726,7 +719,7 @@ def build_fault_diagnosis_mcp_server() -> McpServer:
         McpToolDefinition(
             name=McpToolName.GENERATE_DIAGNOSIS_ARTIFACT.value,
             title="诊断产物聚合生成",
-            description="统一生成报告、门禁解释、处置建议和工单草稿。",
+            description="统一生成报告、处置建议和工单草稿；门禁解释仅作为停用兼容入口保留。",
             input_model=GenerateDiagnosisArtifactRequest,
             output_model=GenerateDiagnosisArtifactResponse,
             handler=generate_diagnosis_artifact_handler,
@@ -791,7 +784,7 @@ def build_fault_diagnosis_mcp_server() -> McpServer:
         McpResourceDefinition(
             name="diagnosis_evidence_summary",
             title="诊断证据摘要",
-            description="读取证据、门禁和结论摘要。",
+            description="读取诊断上下文、证据和结论摘要。",
             handler=read_diagnosis_evidence_summary,
             media_type="application/json",
             tags=("evidence", "phase1"),

@@ -27,7 +27,6 @@ _WORKFLOW_LABELS = {
     WorkflowType.MANUAL_QA.value: "手册问答",
     WorkflowType.REPORT_GENERATION.value: "报告生成",
     WorkflowType.CLARIFICATION.value: "澄清",
-    WorkflowType.EVIDENCE_REVIEW.value: "证据复核",
 }
 
 
@@ -306,7 +305,7 @@ def build_default_plan(
             _constraint("report_uses_upstream_artifact", "报告生成必须依赖上游 artifact。", "blocking"),
             _constraint("no_full_rediagnosis", "报告生成场景不重新执行完整故障诊断。", "blocking"),
         ]
-        plan.risk_flags = ["上游证据不充分时，报告只能标记为草稿或保守结论。"]
+        plan.risk_flags = ["上游结构化产物缺失时，报告生成无法继续。"]
 
     elif workflow_type == WorkflowType.CLARIFICATION.value:
         questions = [f"请补充 {slot}。" for slot in missing_slots] or ["请补充设备、故障码、指标或时间范围等关键信息。"]
@@ -329,25 +328,6 @@ def build_default_plan(
         plan.clarification_questions = questions
         plan.risk_flags = ["信息不足时强行执行主链路会导致错误诊断或错误报告。"]
 
-    elif workflow_type == WorkflowType.EVIDENCE_REVIEW.value:
-        plan.diagnosis_goals = [
-            "复核已有结论是否覆盖计划目标。",
-            "检查必需证据是否满足、是否存在无证据结论或矛盾点。",
-        ]
-        plan.required_evidence = [
-            _evidence(
-                "artifact",
-                "上游 workflow artifact 或 evidence bundle。",
-                required=True,
-                source_hint="WorkflowArtifactEnvelope.payload 或 EvidenceBundle",
-                missing_impact="缺少上游证据时无法完成证据复核。",
-            )
-        ]
-        plan.constraints = [
-            _constraint("review_existing_evidence_only", "证据复核只检查既有证据，不重新生成业务结论。", "blocking")
-        ]
-        plan.risk_flags = ["证据覆盖不足时必须给出质量门禁状态和下一步补证建议。"]
-
     return validate_planning_boundary(plan)
 
 
@@ -366,8 +346,6 @@ def validate_planning_boundary(plan: PlanningArtifact | dict[str, Any]) -> Plann
         raise ValueError("报告生成计划必须依赖上游 artifact。")
     if workflow_type == WorkflowType.CLARIFICATION.value and not artifact.clarification_questions:
         raise ValueError("澄清计划必须输出澄清问题。")
-    if workflow_type == WorkflowType.EVIDENCE_REVIEW.value and not ({"artifact", "manual_confirmation"} & evidence_types):
-        raise ValueError("证据复核计划必须要求上游 artifact 或证据包。")
     return artifact
 
 

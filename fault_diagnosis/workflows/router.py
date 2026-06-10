@@ -100,35 +100,6 @@ _SQL_FIRST_DOMAIN_KEYWORDS = (
     "最近",
     "数据",
 )
-_EVIDENCE_KEYWORDS = (
-    "证据链",
-    "证据",
-    "依据",
-    "复核",
-    "复查",
-    "支撑",
-    "覆盖率",
-    "门禁",
-    "站得住脚",
-    "充分吗",
-    "可靠吗",
-    "哪里还不够",
-    "哪些地方还不够",
-)
-_EVIDENCE_CONTEXT_KEYWORDS = (
-    "刚才",
-    "刚刚",
-    "上一轮",
-    "上一条",
-    "这个结论",
-    "该结论",
-    "这个报告",
-    "诊断结果",
-    "巡检结果",
-    "分析结果",
-    "结论",
-    "报告",
-)
 _CLARIFICATION_HINT_KEYWORDS = (
     "帮我看看",
     "帮我看一下",
@@ -190,14 +161,6 @@ def _is_report_only_request(message: str) -> bool:
     if not _contains_any(message, _REPORT_KEYWORDS):
         return False
     return _contains_any(message, _REPORT_CONTEXT_KEYWORDS)
-
-
-def _is_evidence_review_request(message: str) -> bool:
-    if "证据链" in message or "复核" in message or "复查" in message:
-        return True
-    if not _contains_any(message, _EVIDENCE_KEYWORDS):
-        return False
-    return _contains_any(message, _EVIDENCE_CONTEXT_KEYWORDS)
 
 
 def _has_fault_signal(message: str) -> bool:
@@ -416,18 +379,6 @@ def route_workflow_request(message: str, user_identity: str = "游客") -> Workf
     """根据用户消息路由到对应 Workflow 场景。"""
 
     normalized_message = _normalize_message(message)
-
-    if _is_evidence_review_request(normalized_message):
-        return _build_route_result(
-            WorkflowType.EVIDENCE_REVIEW,
-            confidence="high",
-            reason="识别到显式证据质疑或复核请求，优先进入证据复核流",
-            candidate_workflows=[WorkflowType.EVIDENCE_REVIEW.value],
-            missing_slots=[],
-            disambiguation_needed=False,
-            review_needed=True,
-            needs_report=False,
-        )
 
     scores = _select_business_routes(normalized_message)
     candidate_workflows = _build_candidate_workflows(scores)

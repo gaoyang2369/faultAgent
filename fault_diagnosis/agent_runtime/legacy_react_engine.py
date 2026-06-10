@@ -6,7 +6,7 @@ import asyncio
 import re
 import time
 from datetime import datetime
-from typing import Any, AsyncGenerator, Awaitable, Callable
+from typing import Any, AsyncGenerator, Callable
 
 from fastapi import FastAPI
 from langchain_core.messages import HumanMessage, RemoveMessage
@@ -17,7 +17,6 @@ from ..config import (
     STREAM_HEARTBEAT_SECONDS,
 )
 from .error_classification import classify_model_gateway_error, model_error_code
-from ..quality.governance import build_governance_snapshot
 from ..common.logger import get_logger, new_request_id
 from ..prompts.dynamic_prompt import Context
 from ..runtime import (
@@ -25,7 +24,6 @@ from ..runtime import (
     build_tool_end_payload,
     build_tool_start_payload,
     build_workflow_stage_details,
-    register_tool_runtime_evidence,
     resolve_tool_stage,
     touch_tool_stage_detail,
 )
@@ -206,13 +204,9 @@ class LegacyReactStreamEngine:
         self,
         *,
         diagnosis_payload_builder: Callable[[str], dict[str, Any]],
-        auto_evidence_selector: Callable[[dict[str, Any] | None], str | None],
-        auto_evidence_runner: Callable[[str, str, str], Awaitable[dict[str, Any] | None]],
         logger: Any | None = None,
     ) -> None:
         self.diagnosis_payload_builder = diagnosis_payload_builder
-        self.auto_evidence_selector = auto_evidence_selector
-        self.auto_evidence_runner = auto_evidence_runner
         self._log = logger or _log
 
     async def stream(
@@ -523,11 +517,7 @@ class LegacyReactStreamEngine:
                         tool_output = sanitize_for_json(tool_raw_output)
                         tool_input_raw, started_at = runtime_context.pop_tool_run(tool_run_id)
                         tool_result_preview = summarize_value_for_log(tool_raw_output, limit=180)
-                        tool_evidence = register_tool_runtime_evidence(
-                            tool_name=tool_name,
-                            tool_input=tool_input_raw,
-                            tool_output=tool_raw_output,
-                        )
+                        del tool_input_raw
                         duration_ms = round((time.monotonic() - started_at) * 1000, 1) if started_at else None
                         now_time = time.monotonic()
                         stage_now_ms = runtime_context.elapsed_ms(now_time)
@@ -543,11 +533,7 @@ class LegacyReactStreamEngine:
                             now=now_time,
                             duration_ms=duration_ms,
                             result_preview=tool_result_preview,
-                            evidence_ids=[
-                                item.get("evidence_id")
-                                for item in tool_evidence
-                                if isinstance(item, dict) and item.get("evidence_id")
-                            ],
+                            evidence_ids=[],
                         )
                         payload = build_tool_end_payload(
                             tool_name=tool_name,
@@ -557,7 +543,6 @@ class LegacyReactStreamEngine:
                             tool_run_id=tool_run_id,
                             trace_id=trace_id,
                             stage_duration_ms=stage_detail.get("duration_ms"),
-                            tool_evidence=tool_evidence,
                         )
                         yield encode_sse_event("tool_end", payload, trace_id=trace_id)
                         progress_payload = ToolProgressEvent(
@@ -647,79 +632,13 @@ class LegacyReactStreamEngine:
 
             runtime_context.finalize_workflow(time.monotonic())
             diagnosis_payload = self.diagnosis_payload_builder(accumulated_content)
-            supplement_tool = self.auto_evidence_selector(diagnosis_payload["evidence_quality"])
-            if supplement_tool:
-                supplement_result = await self.auto_evidence_runner(
-                    message,
-                    user_identity,
-                    supplement_tool,
-                )
-                if supplement_result:
-                    tool_name = str(supplement_result.get("tool_name") or supplement_tool)
-                    tool_input_raw = supplement_result.get("tool_input") or {}
-                    tool_run_id = f"auto-supplement-{tool_name}-{tool_event_count + 1}"
-                    tool_stage = runtime_context.handle_tool_start(
-                        tool_name=tool_name,
-                        tool_run_id=tool_run_id,
-                        tool_input=tool_input_raw,
-                        now=time.monotonic(),
-                    )
-                    tool_start_payload = build_tool_start_payload(
-                        tool_name=tool_name,
-                        tool_input=sanitize_for_json(tool_input_raw),
-                        tool_stage=tool_stage,
-                        current_workflow_stage=runtime_context.current_workflow_stage,
-                        tool_run_id=tool_run_id,
-                    )
-                    yield encode_sse_event("tool_start", tool_start_payload, trace_id=trace_id)
-                    tool_event_count += 1
-
-                    tool_raw_output = supplement_result.get("tool_output", "")
-                    tool_evidence = register_tool_runtime_evidence(
-                        tool_name=tool_name,
-                        tool_input=tool_input_raw,
-                        tool_output=tool_raw_output,
-                    )
-                    now_time = time.monotonic()
-                    stage_now_ms = runtime_context.elapsed_ms(now_time)
-                    stage_detail = touch_tool_stage_detail(
-                        runtime_context.workflow_stage_details,
-                        tool_stage,
-                        now_ms=stage_now_ms,
-                    )
-                    runtime_context.record_tool_end(
-                        tool_name=tool_name,
-                        tool_run_id=tool_run_id,
-                        tool_stage=tool_stage,
-                        now=now_time,
-                        duration_ms=0.0,
-                        result_preview=summarize_value_for_log(tool_raw_output, limit=180),
-                        evidence_ids=[
-                            item.get("evidence_id")
-                            for item in tool_evidence
-                            if isinstance(item, dict) and item.get("evidence_id")
-                        ],
-                    )
-                    tool_end_payload = build_tool_end_payload(
-                        tool_name=tool_name,
-                        tool_stage=tool_stage,
-                        current_workflow_stage=runtime_context.current_workflow_stage,
-                        tool_output=sanitize_for_json(tool_raw_output),
-                        stage_duration_ms=stage_detail.get("duration_ms"),
-                        tool_evidence=tool_evidence,
-                    )
-                    yield encode_sse_event("tool_end", tool_end_payload, trace_id=trace_id)
-                    diagnosis_payload = self.diagnosis_payload_builder(accumulated_content)
 
             if used_non_stream_fallback and event_count == 0 and tool_event_count == 0:
                 diagnosis_payload["raw_final_content"] = accumulated_content
                 diagnosis_payload["final_content"] = accumulated_content
                 diagnosis_payload["grounded_final_content"] = accumulated_content
-                diagnosis_payload["quality_gate_notice"] = None
 
-            linked_tool_lifecycle_ledger = runtime_context.enrich_lifecycle_with_findings(
-                diagnosis_payload["finding_links"],
-            )
+            linked_tool_lifecycle_ledger = runtime_context.enrich_lifecycle_with_findings([])
             route_result = {
                 "workflow_type": WorkflowType.FAULT_DIAGNOSIS.value,
                 "confidence": "high",
@@ -728,11 +647,6 @@ class LegacyReactStreamEngine:
                 "needs_knowledge": True,
                 "needs_report": True,
             }
-            governance_snapshot = build_governance_snapshot(
-                route_result=route_result,
-                evidence_quality=diagnosis_payload["evidence_quality"],
-                findings=diagnosis_payload["findings"],
-            )
             completion_data = {
                 "type": "chat_complete",
                 "thread_id": thread_id,
@@ -742,17 +656,6 @@ class LegacyReactStreamEngine:
                 "grounded_final_content": diagnosis_payload["grounded_final_content"],
                 "todos": current_todos,
                 "event_count": event_count,
-                "evidence_count": len(diagnosis_payload["evidence_records"]),
-                "evidences": diagnosis_payload["evidence_records"],
-                "normalized_evidences": diagnosis_payload["normalized_evidence_records"],
-                "findings": diagnosis_payload["findings"],
-                "finding_links": diagnosis_payload["finding_links"],
-                "evidence_quality": diagnosis_payload["evidence_quality"],
-                "governance": governance_snapshot,
-                "evidence_coverage": diagnosis_payload["evidence_quality"].get("coverage_summary"),
-                "report_gate": diagnosis_payload["evidence_quality"].get("gate"),
-                "quality_gate_notice": diagnosis_payload["quality_gate_notice"],
-                "release_ready": diagnosis_payload["evidence_quality"].get("release_ready"),
                 "workflow_stages": runtime_context.workflow_stages_seen,
                 "current_stage": runtime_context.current_workflow_stage,
                 "workflow_stage_details": build_workflow_stage_details(
@@ -767,10 +670,6 @@ class LegacyReactStreamEngine:
                 user_message=message,
                 user_identity=user_identity,
                 final_content=diagnosis_payload["raw_final_content"],
-                findings=diagnosis_payload["findings"],
-                evidence_records=diagnosis_payload["evidence_records"],
-                evidence_quality=diagnosis_payload["evidence_quality"],
-                finding_links=diagnosis_payload["finding_links"],
                 workflow_stage_details=completion_data["workflow_stage_details"],
                 route_result=route_result,
             )

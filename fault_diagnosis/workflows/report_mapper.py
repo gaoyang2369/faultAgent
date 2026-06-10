@@ -13,37 +13,6 @@ def _build_report_filename(prefix: str, thread_id: str) -> str:
     return f"{prefix}_{timestamp}_{thread_id[-6:]}"
 
 
-def _extract_bridge_snapshots(payload: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    direct_report_gate_summary = payload.get("report_gate_summary") or {}
-    direct_findings_snapshot = list(payload.get("findings_snapshot") or [])
-    direct_finding_links_snapshot = list(payload.get("finding_links_snapshot") or [])
-    direct_evidence_records_snapshot = list(payload.get("evidence_records_snapshot") or [])
-    if (
-        direct_report_gate_summary
-        or direct_findings_snapshot
-        or direct_finding_links_snapshot
-        or direct_evidence_records_snapshot
-    ):
-        return (
-            direct_report_gate_summary,
-            direct_findings_snapshot,
-            direct_finding_links_snapshot,
-            direct_evidence_records_snapshot,
-        )
-
-    legacy_bridge = payload.get("legacy_bridge") or {}
-    report_gate_summary = legacy_bridge.get("evidence_quality") or {}
-    findings_snapshot = list(legacy_bridge.get("findings") or [])
-    finding_links_snapshot = list(legacy_bridge.get("finding_links") or [])
-    evidence_records_snapshot = list(legacy_bridge.get("evidence_records") or [])
-    return (
-        report_gate_summary,
-        findings_snapshot,
-        finding_links_snapshot,
-        evidence_records_snapshot,
-    )
-
-
 def map_artifact_to_report_payload(envelope: WorkflowArtifactEnvelope) -> dict[str, Any]:
     """将结构化产物映射为 `save_report` 所需字段。"""
 
@@ -51,12 +20,6 @@ def map_artifact_to_report_payload(envelope: WorkflowArtifactEnvelope) -> dict[s
     payload = envelope.payload or {}
     request = payload.get("request") or {}
     report_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-    (
-        report_gate_summary,
-        findings_snapshot,
-        finding_links_snapshot,
-        evidence_records_snapshot,
-    ) = _extract_bridge_snapshots(payload)
 
     if workflow_type == WorkflowType.FAULT_DIAGNOSIS.value:
         sql_artifact = payload.get("sql_artifact") or {}
@@ -87,10 +50,6 @@ def map_artifact_to_report_payload(envelope: WorkflowArtifactEnvelope) -> dict[s
                 f"分析依据：{'; '.join(analysis_artifact.get('basis') or []) or '无'}"
             ),
             "report_filename": report_filename,
-            "report_gate_summary": report_gate_summary,
-            "findings_snapshot": findings_snapshot,
-            "finding_links_snapshot": finding_links_snapshot,
-            "evidence_records_snapshot": evidence_records_snapshot,
         }
 
     if workflow_type == WorkflowType.STATUS_INSPECTION.value:
@@ -124,10 +83,6 @@ def map_artifact_to_report_payload(envelope: WorkflowArtifactEnvelope) -> dict[s
                 f"观察指标：{'; '.join(inspection_artifact.get('observed_metrics') or []) or '无'}"
             ),
             "report_filename": report_filename,
-            "report_gate_summary": report_gate_summary,
-            "findings_snapshot": findings_snapshot,
-            "finding_links_snapshot": finding_links_snapshot,
-            "evidence_records_snapshot": evidence_records_snapshot,
         }
 
     raise ValueError(f"当前 workflow_type 不支持独立生成报告：{workflow_type}")

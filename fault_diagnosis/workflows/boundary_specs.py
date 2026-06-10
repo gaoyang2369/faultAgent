@@ -20,7 +20,7 @@ class WorkflowBoundarySpec(BaseModel):
     optional_slots: list[str] = Field(default_factory=list, description="可选输入槽位")
     default_needs_report: bool = Field(default=False, description="默认是否需要报告")
     supports_artifact_resume: bool = Field(default=False, description="是否支持从上游 artifact 恢复")
-    supports_evidence_gate: bool = Field(default=False, description="是否支持证据门禁")
+    supports_evidence_gate: bool = Field(default=False, description="兼容字段，当前最小链路不启用")
     fallback_workflow: str | None = Field(default=None, description="当前流失败时建议回退的场景")
     review_workflow: str | None = Field(default=None, description="当前流建议进入的复核场景")
 
@@ -35,9 +35,9 @@ BOUNDARY_SPECS: dict[str, WorkflowBoundarySpec] = {
         optional_slots=["equipment_hint", "fault_code_hint", "metric_hint", "time_range_hint"],
         default_needs_report=True,
         supports_artifact_resume=False,
-        supports_evidence_gate=True,
+        supports_evidence_gate=False,
         fallback_workflow=WorkflowType.MANUAL_QA.value,
-        review_workflow=WorkflowType.EVIDENCE_REVIEW.value,
+        review_workflow=None,
     ),
     WorkflowType.STATUS_INSPECTION.value: WorkflowBoundarySpec(
         workflow_type=WorkflowType.STATUS_INSPECTION,
@@ -48,9 +48,9 @@ BOUNDARY_SPECS: dict[str, WorkflowBoundarySpec] = {
         optional_slots=["equipment_hint", "metric_hint", "time_range_hint"],
         default_needs_report=False,
         supports_artifact_resume=False,
-        supports_evidence_gate=True,
+        supports_evidence_gate=False,
         fallback_workflow=WorkflowType.MANUAL_QA.value,
-        review_workflow=WorkflowType.EVIDENCE_REVIEW.value,
+        review_workflow=None,
     ),
     WorkflowType.MANUAL_QA.value: WorkflowBoundarySpec(
         workflow_type=WorkflowType.MANUAL_QA,
@@ -76,7 +76,7 @@ BOUNDARY_SPECS: dict[str, WorkflowBoundarySpec] = {
         supports_artifact_resume=True,
         supports_evidence_gate=False,
         fallback_workflow=None,
-        review_workflow=WorkflowType.EVIDENCE_REVIEW.value,
+        review_workflow=None,
     ),
     WorkflowType.CLARIFICATION.value: WorkflowBoundarySpec(
         workflow_type=WorkflowType.CLARIFICATION,
@@ -88,19 +88,6 @@ BOUNDARY_SPECS: dict[str, WorkflowBoundarySpec] = {
         default_needs_report=False,
         supports_artifact_resume=False,
         supports_evidence_gate=False,
-        fallback_workflow=WorkflowType.MANUAL_QA.value,
-        review_workflow=None,
-    ),
-    WorkflowType.EVIDENCE_REVIEW.value: WorkflowBoundarySpec(
-        workflow_type=WorkflowType.EVIDENCE_REVIEW,
-        display_name="证据链复核流",
-        goal="复核当前线程结论与证据之间的覆盖率、质量门禁和后续建议动作。",
-        required_capabilities=["artifact_store", "evidence_registry", "final_answer"],
-        required_slots=["analysis_goal"],
-        optional_slots=["upstream_artifact", "evidence_records"],
-        default_needs_report=False,
-        supports_artifact_resume=True,
-        supports_evidence_gate=True,
         fallback_workflow=WorkflowType.MANUAL_QA.value,
         review_workflow=None,
     ),

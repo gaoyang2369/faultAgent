@@ -2,7 +2,6 @@
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 from ..config import KB_QUERY_TIMEOUT_SECONDS
-from ..quality.evidence import register_evidence
 
 
 def _invoke_retriever_with_timeout(db_retriever, query: str, timeout_seconds: int):
@@ -156,16 +155,6 @@ def query_knowledge_base(query: str) -> str:
             if isinstance(doc, dict):
                 file_name = doc.get("file_name", "")
                 file_id = doc.get("file_id", "")
-                register_evidence(
-                    evidence_type="rag",
-                    source=f"uploaded_pdf:{file_id or file_name or 'unknown'}",
-                    title=f"上传 PDF 知识库命中文档片段 {idx}",
-                    summary=doc.get("preview", ""),
-                    raw_ref=f"file_id={file_id};file_name={file_name};query={query}",
-                    stage="retrieve",
-                    tool_name="query_knowledge_base",
-                    metadata={"file_id": file_id, "file_name": file_name, "query": query},
-                )
                 rendered.append(
                     "来源：上传PDF知识库\n"
                     f"来源文件：{doc.get('file_name', '')}\n"
@@ -180,16 +169,6 @@ def query_knowledge_base(query: str) -> str:
             metadata = getattr(doc, "metadata", {}) or {}
             page = metadata.get("page", "未知")
             source_type = metadata.get("source_type", "knowledge_base")
-            register_evidence(
-                evidence_type="rag",
-                source=f"{source_type}:page_{page}",
-                title=f"知识库命中文档片段 {idx}",
-                summary=getattr(doc, "page_content", ""),
-                raw_ref=f"page={page};query={query}",
-                stage="retrieve",
-                tool_name="query_knowledge_base",
-                metadata={"page": page, "query": query, **metadata},
-            )
             rendered.append(_format_doc_result(doc))
         return "\n\n".join(rendered)
     except ImportError:
