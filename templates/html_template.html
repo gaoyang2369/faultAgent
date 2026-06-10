@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{title}}</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', Arial, sans-serif;
+            background: #ffffff;
+            color: #333333;
+            line-height: 1.6;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .header {
+            background: #2c3e50;
+            color: white;
+            padding: 25px 30px;
+            margin-bottom: 20px;
+            border: 1px solid #1a252f;
+        }
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+        .header .summary {
+            font-size: 14px;
+            opacity: 0.9;
+            line-height: 1.7;
+        }
+        .card {
+            background: #f8f9fa;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #dee2e6;
+        }
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #dee2e6;
+        }
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .kpi-card {
+            background: #f8f9fa;
+            color: #2c3e50;
+            padding: 18px;
+            border: 1px solid #dee2e6;
+            border-left: 4px solid #007bff;
+        }
+        .kpi-card.warning {
+            border-left-color: #dc3545;
+        }
+        .kpi-card.success {
+            border-left-color: #28a745;
+        }
+        .kpi-label {
+            font-size: 14px;
+            color: #495057;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+        .kpi-value {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .kpi-unit {
+            font-size: 14px;
+            color: #6c757d;
+        }
+        .chart-container {
+            width: 100%;
+            height: 350px;
+            margin-bottom: 15px;
+        }
+        .chart-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 15px;
+        }
+        .chart-card {
+            background: #f8f9fa;
+            padding: 18px;
+            border: 1px solid #dee2e6;
+        }
+        .chart-card h3 {
+            font-size: 16px;
+            color: #2c3e50;
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+        .findings {
+            background: #f8f9fa;
+            border-left: 4px solid #fd7e14;
+            padding: 14px 18px;
+            margin-bottom: 16px;
+            border: 1px solid #dee2e6;
+        }
+        .findings-title {
+            font-weight: 600;
+            color: #d48806;
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+        .findings-list {
+            list-style: none;
+        }
+        .findings-list li {
+            padding: 6px 0;
+            padding-left: 18px;
+            position: relative;
+            color: #495057;
+        }
+        .findings-list li:before {
+            content: "•";
+            position: absolute;
+            left: 0;
+            color: #fd7e14;
+            font-weight: bold;
+        }
+        .recommendations {
+            background: #f8f9fa;
+            border-left: 4px solid #2c3e50;
+            padding: 14px 18px;
+            border: 1px solid #dee2e6;
+        }
+        .recommendations-title {
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+        .recommendations-list {
+            list-style: none;
+        }
+        .recommendations-list li {
+            padding: 6px 0;
+            padding-left: 18px;
+            position: relative;
+            color: #495057;
+        }
+        .recommendations-list li:before {
+            content: "•";
+            position: absolute;
+            left: 0;
+            color: #2c3e50;
+            font-weight: bold;
+        }
+        .footer {
+            text-align: center;
+            color: #6c757d;
+            margin-top: 30px;
+            padding: 15px;
+            font-size: 12px;
+            border-top: 1px solid #dee2e6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{title}}</h1>
+            <div class="summary">{{summary}}</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">关键指标概览</div>
+            <div class="kpi-grid">
+                {{kpi_cards}}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">数据趋势分析</div>
+            <div class="chart-grid">
+                {{charts}}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">评估与建议</div>
+            <div class="findings">
+                <div class="findings-title">评估</div>
+                <ul class="findings-list">
+                    {{findings}}
+                </ul>
+            </div>
+            <div class="recommendations">
+                <div class="recommendations-title">处置建议</div>
+                <ul class="recommendations-list">
+                    {{recommendations}}
+                </ul>
+            </div>
+        </div>
+
+        <div class="footer">
+            报告生成时间：{{timestamp}}
+        </div>
+    </div>
+
+    <script>
+        {{chart_scripts}}
+
+        // 自动初始化ECharts图表
+        (function() {
+            var chartContainers = document.querySelectorAll('.chart-container[id]');
+            chartContainers.forEach(function(container) {
+                var chartId = container.id;
+                var optionName = chartId + 'Option';
+
+                // 查找对应的配置对象
+                if (typeof window[optionName] !== 'undefined') {
+                    try {
+                        var chart = echarts.init(container);
+                        chart.setOption(window[optionName]);
+                        // 响应式调整
+                        window.addEventListener('resize', function() {
+                            chart.resize();
+                        });
+                    } catch (e) {
+                        console.error('图表初始化失败: ' + chartId, e);
+                    }
+                }
+            });
+        })();
+    </script>
+</body>
+</html>

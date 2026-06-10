@@ -1,0 +1,133 @@
+"""统一把 workflow 产物映射为报告生成参数。"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from .contracts import WorkflowArtifactEnvelope, WorkflowType
+
+
+def _build_report_filename(prefix: str, thread_id: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{prefix}_{timestamp}_{thread_id[-6:]}"
+
+
+def _extract_bridge_snapshots(payload: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    direct_report_gate_summary = payload.get("report_gate_summary") or {}
+    direct_findings_snapshot = list(payload.get("findings_snapshot") or [])
+    direct_finding_links_snapshot = list(payload.get("finding_links_snapshot") or [])
+    direct_evidence_records_snapshot = list(payload.get("evidence_records_snapshot") or [])
+    if (
+        direct_report_gate_summary
+        or direct_findings_snapshot
+        or direct_finding_links_snapshot
+        or direct_evidence_records_snapshot
+    ):
+        return (
+            direct_report_gate_summary,
+            direct_findings_snapshot,
+            direct_finding_links_snapshot,
+            direct_evidence_records_snapshot,
+        )
+
+    legacy_bridge = payload.get("legacy_bridge") or {}
+    report_gate_summary = legacy_bridge.get("evidence_quality") or {}
+    findings_snapshot = list(legacy_bridge.get("findings") or [])
+    finding_links_snapshot = list(legacy_bridge.get("finding_links") or [])
+    evidence_records_snapshot = list(legacy_bridge.get("evidence_records") or [])
+    return (
+        report_gate_summary,
+        findings_snapshot,
+        finding_links_snapshot,
+        evidence_records_snapshot,
+    )
+
+
+def map_artifact_to_report_payload(envelope: WorkflowArtifactEnvelope) -> dict[str, Any]:
+    """将结构化产物映射为 `save_report` 所需字段。"""
+
+    workflow_type = str(envelope.workflow_type)
+    payload = envelope.payload or {}
+    request = payload.get("request") or {}
+    report_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    (
+        report_gate_summary,
+        findings_snapshot,
+        finding_links_snapshot,
+        evidence_records_snapshot,
+    ) = _extract_bridge_snapshots(payload)
+
+    if workflow_type == WorkflowType.FAULT_DIAGNOSIS.value:
+        sql_artifact = payload.get("sql_artifact") or {}
+        knowledge_artifact = payload.get("knowledge_artifact") or {}
+        analysis_artifact = payload.get("analysis_artifact") or {}
+        report_filename = _build_report_filename("dcma_report_generation_fault", envelope.thread_id)
+        return {
+            "title": "DCMA 故障诊断报告",
+            "report_time": report_time,
+            "diagnosis_object": request.get("equipment_hint") or "DCMA 系统",
+            "diagnosis_type": request.get("fault_code_hint") or "故障诊断",
+            "executive_summary": analysis_artifact.get("conclusion") or envelope.final_answer,
+            "diagnosis_overview": "本报告基于当前线程最近一次故障诊断结果生成，无需重新执行 SQL 查询和分析。",
+            "diagnosis_details": (
+                f"【SQL 结果摘要】\n{sql_artifact.get('result_preview') or sql_artifact.get('raw_output') or '无'}\n\n"
+                f"【知识检索摘要】\n{knowledge_artifact.get('raw_output') or '无'}"
+            ),
+            "fault_inference": analysis_artifact.get("conclusion") or envelope.final_answer,
+            "repair_recommendations": "\n".join(
+                f"- {item}" for item in (analysis_artifact.get("recommendations") or [])
+            ) or "- 暂无具体处置建议",
+            "preventive_maintenance": "建议结合本次诊断结果持续跟踪关键指标，并复核相关部件状态。",
+            "diagnosis_basis": (
+                f"请求摘要：{envelope.request_summary}\n"
+                f"SQL 摘要：{sql_artifact.get('summary') or '无'}\n"
+                f"SQL 语句：{'; '.join(sql_artifact.get('sql_used') or []) or '无'}\n"
+                f"知识查询：{knowledge_artifact.get('query') or '无'}\n"
+                f"分析依据：{'; '.join(analysis_artifact.get('basis') or []) or '无'}"
+            ),
+            "report_filename": report_filename,
+            "report_gate_summary": report_gate_summary,
+            "findings_snapshot": findings_snapshot,
+            "finding_links_snapshot": finding_links_snapshot,
+            "evidence_records_snapshot": evidence_records_snapshot,
+        }
+
+    if workflow_type == WorkflowType.STATUS_INSPECTION.value:
+        sql_artifact = payload.get("sql_artifact") or {}
+        knowledge_artifact = payload.get("knowledge_artifact") or {}
+        inspection_artifact = payload.get("inspection_artifact") or {}
+        report_filename = _build_report_filename("dcma_report_generation_inspection", envelope.thread_id)
+        return {
+            "title": "DCMA 状态巡检报告",
+            "report_time": report_time,
+            "diagnosis_object": request.get("equipment_hint") or "DCMA 系统",
+            "diagnosis_type": "状态巡检",
+            "executive_summary": inspection_artifact.get("summary") or envelope.final_answer,
+            "diagnosis_overview": "本报告基于当前线程最近一次状态巡检结果生成，无需重新执行 SQL 查询和巡检分析。",
+            "diagnosis_details": (
+                f"【巡检 SQL 摘要】\n{sql_artifact.get('result_preview') or sql_artifact.get('raw_output') or '无'}\n\n"
+                f"【观察指标】\n{'; '.join(inspection_artifact.get('observed_metrics') or []) or '无'}\n\n"
+                f"【发现异常】\n{'; '.join(inspection_artifact.get('detected_anomalies') or []) or '无'}\n\n"
+                f"【知识补充】\n{knowledge_artifact.get('raw_output') or '无'}"
+            ),
+            "fault_inference": inspection_artifact.get("summary") or envelope.final_answer,
+            "repair_recommendations": "\n".join(
+                f"- {item}" for item in (inspection_artifact.get("suggested_actions") or [])
+            ) or "- 暂无具体建议动作",
+            "preventive_maintenance": "建议根据巡检风险等级持续关注关键指标趋势，必要时安排复检。",
+            "diagnosis_basis": (
+                f"请求摘要：{envelope.request_summary}\n"
+                f"SQL 摘要：{sql_artifact.get('summary') or '无'}\n"
+                f"SQL 语句：{'; '.join(sql_artifact.get('sql_used') or []) or '无'}\n"
+                f"风险等级：{inspection_artifact.get('risk_level') or 'low'}\n"
+                f"观察指标：{'; '.join(inspection_artifact.get('observed_metrics') or []) or '无'}"
+            ),
+            "report_filename": report_filename,
+            "report_gate_summary": report_gate_summary,
+            "findings_snapshot": findings_snapshot,
+            "finding_links_snapshot": finding_links_snapshot,
+            "evidence_records_snapshot": evidence_records_snapshot,
+        }
+
+    raise ValueError(f"当前 workflow_type 不支持独立生成报告：{workflow_type}")
