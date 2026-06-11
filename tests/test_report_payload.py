@@ -168,6 +168,36 @@ def test_report_html_embeds_echarts_visualization() -> None:
     assert "A07089" in html
 
 
+def test_report_html_keeps_metric_formula_and_formats_sql_appendix() -> None:
+    html = _build_report_html(
+        title="DCMA 故障诊断报告",
+        report_time="2026-06-11 20:00:00",
+        diagnosis_object="DCMA 系统",
+        diagnosis_type="故障诊断",
+        executive_summary="摘要",
+        diagnosis_overview="概述",
+        diagnosis_details=(
+            "### 关键指标工程判定\n"
+            "| 指标 | 计算/取值方式 |\n"
+            "| --- | --- |\n"
+            "| 速度跟随偏差 | \\|给定-实际\\| / max(\\|给定\\|, 1) |"
+        ),
+        fault_inference="推断",
+        repair_recommendations="- 建议",
+        preventive_maintenance="- 维护",
+        diagnosis_basis=(
+            "### SQL 语句\n"
+            "```sql\n"
+            "SELECT id, timestamp FROM real_data_01 ORDER BY create_time DESC LIMIT 50\n"
+            "```"
+        ),
+    )
+
+    assert "|给定-实际| / max(|给定|, 1)" in html
+    assert '<pre class="code-block">' in html
+    assert "SELECT id, timestamp FROM real_data_01" in html
+
+
 def test_report_html_renders_grouped_trends_and_metric_snapshot() -> None:
     chart_payload = json.dumps(
         {

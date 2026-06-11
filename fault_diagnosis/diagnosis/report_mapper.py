@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from .contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
+from ..single_agent.report_sections import build_workorder_todo_markdown
 
 
 def _build_report_filename(prefix: str, thread_id: str) -> str:
@@ -16,26 +17,19 @@ def _build_report_filename(prefix: str, thread_id: str) -> str:
 def _workorder_section(workorder_decision: dict[str, Any]) -> str:
     if not workorder_decision or not workorder_decision.get("need_workorder"):
         return ""
-    evidence = "\n".join(f"- {item}" for item in (workorder_decision.get("key_evidence") or [])[:5]) or "- 暂无"
-    steps = "\n".join(f"- {item}" for item in (workorder_decision.get("processing_steps") or [])[:5]) or "- 暂无"
-    criteria = "\n".join(f"- {item}" for item in (workorder_decision.get("acceptance_criteria") or [])[:5]) or "- 暂无"
-    lines = [
-        "### 待处理事项",
-        "- 建议动作：生成维修工单",
-        f"- 工单标题：{workorder_decision.get('title') or '-'}",
-        f"- 工单类型：{workorder_decision.get('workorder_type') or '-'}",
-        f"- 风险等级：{workorder_decision.get('risk_level') or '-'}",
-        f"- 优先级：{workorder_decision.get('priority') or '-'} {workorder_decision.get('priority_label') or ''}".rstrip(),
-        f"- 建议负责人：{workorder_decision.get('assignee_role') or '-'}",
-        f"- 建议完成时间：{workorder_decision.get('suggested_completion_window') or '-'}",
-        "- 关键证据：",
-        evidence,
-        "- 处理步骤：",
-        steps,
-        "- 验收标准：",
-        criteria,
-    ]
-    return "\n\n" + "\n".join(lines)
+    section = build_workorder_todo_markdown(
+        title=workorder_decision.get("title"),
+        workorder_type=workorder_decision.get("workorder_type"),
+        risk_level=workorder_decision.get("risk_level"),
+        priority=workorder_decision.get("priority"),
+        priority_label=workorder_decision.get("priority_label"),
+        assignee_role=workorder_decision.get("assignee_role"),
+        suggested_completion_window=workorder_decision.get("suggested_completion_window"),
+        key_evidence=workorder_decision.get("key_evidence") or [],
+        processing_steps=workorder_decision.get("processing_steps") or [],
+        acceptance_criteria=workorder_decision.get("acceptance_criteria") or [],
+    )
+    return f"\n\n{section}"
 
 
 def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[str, Any]:
@@ -55,6 +49,7 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
         repair_recommendations = "\n".join(
             f"- {item}" for item in (analysis_artifact.get("recommendations") or [])
         ) or "- 暂无具体处置建议"
+        sql_statement_text = ";\n".join(sql_artifact.get("sql_used") or []) or "无"
         return {
             "title": "DCMA 故障诊断报告",
             "report_time": report_time,
@@ -70,11 +65,15 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
             "repair_recommendations": f"{repair_recommendations}{_workorder_section(workorder_decision)}",
             "preventive_maintenance": "建议结合本次诊断结果持续跟踪关键指标，并复核相关部件状态。",
             "diagnosis_basis": (
-                f"请求摘要：{envelope.request_summary}\n"
-                f"SQL 摘要：{sql_artifact.get('summary') or '无'}\n"
-                f"SQL 语句：{'; '.join(sql_artifact.get('sql_used') or []) or '无'}\n"
-                f"知识查询：{knowledge_artifact.get('query') or '无'}\n"
-                f"分析依据：{'; '.join(analysis_artifact.get('basis') or []) or '无'}"
+                "### 请求摘要\n"
+                f"- {envelope.request_summary or '无'}\n\n"
+                "### SQL 摘要\n"
+                f"- {sql_artifact.get('summary') or '无'}\n\n"
+                "### SQL 语句\n"
+                f"```sql\n{sql_statement_text}\n```\n\n"
+                "### 知识与分析依据\n"
+                f"- 知识查询：{knowledge_artifact.get('query') or '无'}\n"
+                f"- 分析依据：{'; '.join(analysis_artifact.get('basis') or []) or '无'}"
             ),
             "report_filename": report_filename,
         }
@@ -84,6 +83,7 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
         knowledge_artifact = payload.get("knowledge_artifact") or {}
         inspection_artifact = payload.get("inspection_artifact") or {}
         report_filename = _build_report_filename("dcma_report_generation_inspection", envelope.thread_id)
+        sql_statement_text = ";\n".join(sql_artifact.get("sql_used") or []) or "无"
         return {
             "title": "DCMA 运行诊断报告",
             "report_time": report_time,
@@ -103,11 +103,15 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
             ) or "- 暂无具体建议动作",
             "preventive_maintenance": "建议根据巡检风险等级持续关注关键指标趋势，必要时安排复检。",
             "diagnosis_basis": (
-                f"请求摘要：{envelope.request_summary}\n"
-                f"SQL 摘要：{sql_artifact.get('summary') or '无'}\n"
-                f"SQL 语句：{'; '.join(sql_artifact.get('sql_used') or []) or '无'}\n"
-                f"风险等级：{inspection_artifact.get('risk_level') or 'low'}\n"
-                f"观察指标：{'; '.join(inspection_artifact.get('observed_metrics') or []) or '无'}"
+                "### 请求摘要\n"
+                f"- {envelope.request_summary or '无'}\n\n"
+                "### SQL 摘要\n"
+                f"- {sql_artifact.get('summary') or '无'}\n\n"
+                "### SQL 语句\n"
+                f"```sql\n{sql_statement_text}\n```\n\n"
+                "### 巡检依据\n"
+                f"- 风险等级：{inspection_artifact.get('risk_level') or 'low'}\n"
+                f"- 观察指标：{'; '.join(inspection_artifact.get('observed_metrics') or []) or '无'}"
             ),
             "report_filename": report_filename,
         }

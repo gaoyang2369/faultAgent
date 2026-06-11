@@ -8,6 +8,7 @@ from fault_diagnosis.diagnosis.contracts import (
 )
 from fault_diagnosis.repositories.workorder_repository import FileWorkOrderRepository
 from fault_diagnosis.services.workorder_service import CreateWorkOrderPayload, UpdateWorkOrderPayload, WorkOrderService
+from fault_diagnosis.single_agent.report_sections import build_workorder_todo_markdown
 from fault_diagnosis.single_agent.reporting import build_workorder_suggestion
 
 
@@ -94,6 +95,46 @@ def test_workorder_suggestion_triggers_for_persistent_a07089() -> None:
     assert "A07089 不再持续出现" in suggestion.acceptance_criteria
     assert any("速度偏差" in item["evidence"] for item in suggestion.task_mappings)
     assert any("暂不生成供电异常排查任务" in "；".join(item["tasks"]) for item in suggestion.task_mappings)
+
+
+def test_workorder_todo_markdown_is_compact_and_grouped() -> None:
+    markdown = build_workorder_todo_markdown(
+        title="DCMA / G120电机1 A07089 事件及速度偏差排查",
+        workorder_type="参数复核 / 运行异常排查",
+        risk_level="中",
+        priority="P1",
+        priority_label="中优先级",
+        assignee_role="电气维护人员",
+        suggested_completion_window="24小时内",
+        key_evidence=[
+            "最近 50 条均出现 A07089",
+            "速度偏差 46.3%",
+            "负载率 78.47%",
+            "温度正常，电机最高 56.01℃，变频器最高 39.11℃",
+            "母线电压 552.45-558.99V",
+        ],
+        processing_steps=[
+            "备份当前参数快照",
+            "核查单位制相关参数",
+            "按手册建议恢复单位设置",
+            "重新激活功能块并观察 A07089 是否复现",
+            "复核速度设定与反馈链路",
+        ],
+        acceptance_criteria=[
+            "A07089 不再持续出现",
+            "速度偏差恢复至阈值以内",
+            "负载率回落至正常区间",
+            "温度和母线电压无新增异常",
+        ],
+    )
+
+    assert "| 项目 | 内容 |" in markdown
+    assert "#### 关键证据" in markdown
+    assert "温度正常" not in markdown
+    assert "母线电压 552.45-558.99V" not in markdown
+    assert "温度和母线电压无新增异常" not in markdown
+    assert "复核速度设定与反馈链路" in markdown
+    assert "按手册建议恢复单位设置" not in markdown
 
 
 def test_file_workorder_repository_creates_trace_bound_record(tmp_path) -> None:

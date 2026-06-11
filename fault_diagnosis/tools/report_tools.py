@@ -90,7 +90,35 @@ def _format_inline(text: str) -> str:
 
 
 def _split_table_row(line: str) -> list[str]:
-    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+    text = line.strip()
+    if text.startswith("|"):
+        text = text[1:]
+    if text.endswith("|"):
+        text = text[:-1]
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in text:
+        if escaped:
+            if char == "|":
+                current.append("|")
+            else:
+                current.append("\\")
+                current.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == "|":
+            cells.append("".join(current).strip())
+            current.clear()
+            continue
+        current.append(char)
+    if escaped:
+        current.append("\\")
+    cells.append("".join(current).strip())
+    return cells
 
 
 def _is_table_separator(line: str) -> bool:
@@ -169,6 +197,23 @@ def _markdown_to_html(markdown: str) -> str:
             html_parts.append(
                 f"<details class=\"details-block\"><summary>{_format_inline(summary)}</summary>"
                 f"<div class=\"details-body\">{_markdown_to_html(chr(10).join(nested_lines))}</div></details>"
+            )
+            continue
+        if stripped.startswith("```"):
+            flush_paragraph()
+            flush_list()
+            flush_quote()
+            language = re.sub(r"[^A-Za-z0-9_-]+", "", stripped[3:].strip())
+            code_lines: list[str] = []
+            index += 1
+            while index < len(lines) and not lines[index].strip().startswith("```"):
+                code_lines.append(lines[index].rstrip())
+                index += 1
+            if index < len(lines) and lines[index].strip().startswith("```"):
+                index += 1
+            class_name = f' class="language-{escape(language, quote=True)}"' if language else ""
+            html_parts.append(
+                f"<pre class=\"code-block\"><code{class_name}>{escape(chr(10).join(code_lines))}</code></pre>"
             )
             continue
         if stripped.startswith("|") and index + 1 < len(lines) and _is_table_separator(lines[index + 1]):
@@ -1006,8 +1051,9 @@ def _build_report_html(
     .details-block summary::marker {{ color: var(--teal); }}
     .details-body {{
       border-top: 1px solid var(--line);
-      padding: 12px 14px 2px;
+      padding: 14px 16px 4px;
       background: #fbfcfe;
+      overflow-wrap: anywhere;
     }}
     .metric-panel h3 {{ margin-bottom: 4px; }}
     .metric-groups {{
@@ -1035,6 +1081,15 @@ def _build_report_html(
     .metric-name {{ color: #334155; font-size: 13px; }}
     .metric-row strong {{ font-size: 15px; white-space: nowrap; }}
     p {{ margin: 0 0 12px; }}
+    .section-body h3,
+    .section-body h4 {{
+      margin: 16px 0 8px;
+      color: #1f2a3d;
+      font-size: 16px;
+      line-height: 1.35;
+    }}
+    .details-body h3:first-child,
+    .details-body h4:first-child {{ margin-top: 0; }}
     ul {{ margin: 0 0 12px 20px; padding: 0; }}
     li {{ margin: 4px 0; }}
     blockquote {{
@@ -1047,9 +1102,33 @@ def _build_report_html(
     }}
     .table-wrap {{ width: 100%; overflow-x: auto; margin: 10px 0 18px; }}
     table {{ width: 100%; border-collapse: collapse; min-width: 680px; background: #fff; }}
-    th, td {{ border: 1px solid var(--line); padding: 9px 10px; text-align: left; vertical-align: top; }}
+    th, td {{
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }}
     th {{ background: #f0f5f8; color: #29384f; font-weight: 800; }}
     tr:nth-child(even) td {{ background: #fbfcfe; }}
+    .code-block {{
+      margin: 8px 0 16px;
+      padding: 12px 14px;
+      border: 1px solid #dbe3ee;
+      border-radius: 6px;
+      background: #f8fafc;
+      color: #1e293b;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.55;
+    }}
+    .code-block code {{
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      border-radius: 0;
+    }}
     code {{ background: #eef2f7; padding: 1px 5px; border-radius: 4px; color: #9b2c2c; }}
     strong {{ color: #111827; }}
     @media (max-width: 860px) {{

@@ -18,6 +18,7 @@ from ..diagnosis.contracts import (
 from .report_sections import (
     build_capability_boundary_markdown,
     build_sop_recommendations_markdown,
+    build_workorder_todo_markdown,
     details_block,
 )
 from .reporting_defs import (
@@ -334,9 +335,12 @@ def _unique_codes(rows: list[dict[str, object]], key: str) -> list[str]:
 def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
     if not rows:
         return "暂无可展示数据。"
-    header_line = "| " + " | ".join(headers) + " |"
+    def table_cell(value: object) -> str:
+        return _format_value(value).replace("\r\n", " ").replace("\n", " ").replace("|", r"\|")
+
+    header_line = "| " + " | ".join(table_cell(header) for header in headers) + " |"
     sep_line = "| " + " | ".join("---" for _ in headers) + " |"
-    row_lines = ["| " + " | ".join(_format_value(cell) for cell in row) + " |" for row in rows]
+    row_lines = ["| " + " | ".join(table_cell(cell) for cell in row) + " |" for row in rows]
     return "\n".join([header_line, sep_line, *row_lines])
 
 
@@ -2073,28 +2077,21 @@ def build_report_payload(
     )
     workorder_section = ""
     if workorder_suggestion and workorder_suggestion.need_workorder:
-        evidence_lines = "\n".join(f"- {item}" for item in workorder_suggestion.key_evidence[:5]) or "- 暂无"
-        step_lines = "\n".join(f"- {item}" for item in workorder_suggestion.processing_steps[:5]) or "- 暂无"
-        criteria_lines = "\n".join(f"- {item}" for item in workorder_suggestion.acceptance_criteria[:5]) or "- 暂无"
-        workorder_lines = [
-            "### 待处理事项",
-            "- 建议动作：生成维修工单",
-            f"- 工单标题：{workorder_suggestion.title or '-'}",
-            f"- 工单类型：{workorder_suggestion.workorder_type or '-'}",
-            f"- 风险等级：{workorder_suggestion.risk_level or '-'}",
-            f"- 优先级：{workorder_suggestion.priority or '-'} {workorder_suggestion.priority_label or ''}".rstrip(),
-            f"- 建议负责人：{workorder_suggestion.assignee_role or '-'}",
-            f"- 建议完成时间：{workorder_suggestion.suggested_completion_window or '-'}",
-            "- 关键证据：",
-            evidence_lines,
-            "- 处理步骤：",
-            step_lines,
-            "- 验收标准：",
-            criteria_lines,
-        ]
-        workorder_section = "\n".join(workorder_lines)
+        workorder_section = build_workorder_todo_markdown(
+            title=workorder_suggestion.title,
+            workorder_type=workorder_suggestion.workorder_type,
+            risk_level=workorder_suggestion.risk_level,
+            priority=workorder_suggestion.priority,
+            priority_label=workorder_suggestion.priority_label,
+            assignee_role=workorder_suggestion.assignee_role,
+            suggested_completion_window=workorder_suggestion.suggested_completion_window,
+            key_evidence=workorder_suggestion.key_evidence,
+            processing_steps=workorder_suggestion.processing_steps,
+            acceptance_criteria=workorder_suggestion.acceptance_criteria,
+        )
     workorder_suffix = f"\n\n{workorder_section}" if workorder_section else ""
     repair_recommendations = f"{base_recommendations}{workorder_suffix}"
+    sql_statement_text = ";\n".join(sql_artifact.sql_used) or "无"
 
     return {
         "title": title,
@@ -2115,11 +2112,14 @@ def build_report_payload(
         "repair_recommendations": repair_recommendations,
         "preventive_maintenance": preventive_maintenance,
         "diagnosis_basis": (
-            f"SQL 摘要：{sql_artifact.summary}\n"
-            f"SQL 语句：{'; '.join(sql_artifact.sql_used) or '无'}\n"
-            f"SQL 返回：{len(sql_report.rows)} 条可解析 {REAL_DATA_LATEST_TABLE} 行数据\n"
-            f"知识查询：{knowledge_artifact.query or '无'}\n"
-            f"分析依据：{'; '.join(analysis_artifact.basis) or '无'}"
+            "### SQL 摘要\n"
+            f"- {sql_artifact.summary or '无'}\n"
+            f"- SQL 返回：{len(sql_report.rows)} 条可解析 {REAL_DATA_LATEST_TABLE} 行数据\n\n"
+            "### SQL 语句\n"
+            f"```sql\n{sql_statement_text}\n```\n\n"
+            "### 知识与分析依据\n"
+            f"- 知识查询：{knowledge_artifact.query or '无'}\n"
+            f"- 分析依据：{'; '.join(analysis_artifact.basis) or '无'}"
         ),
         "report_filename": report_filename,
         "chart_payload": sql_report.chart_payload,
