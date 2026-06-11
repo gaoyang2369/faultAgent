@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, AsyncGenerator
 
@@ -44,7 +45,6 @@ from .reporting import (
     build_analysis_evidence_summary,
     build_structured_analysis_artifact,
     build_final_answer_fallback,
-    build_final_answer_prompt,
     build_report_payload,
     extract_report_filename,
     extract_report_url,
@@ -275,6 +275,7 @@ class SingleAgentStagesMixin:
         conclusion = str(payload.get("conclusion") or "").strip()
         basis = text_list(payload.get("basis"))
         recommendations = text_list(payload.get("recommendations"))
+        recommendations = self._sanitize_analysis_recommendations(recommendations)
         missing_information = text_list(payload.get("missing_information"))
         risk_notice = str(payload.get("risk_notice") or "").strip() or None
 
@@ -295,6 +296,26 @@ class SingleAgentStagesMixin:
             confidence=confidence,
             error=None,
         )
+
+    def _sanitize_analysis_recommendations(self, recommendations: list[str]) -> list[str]:
+        sanitized: list[str] = []
+        for item in recommendations:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            text = re.sub(
+                r"降载至\s*\d+(?:\.\d+)?\s*%\s*(?:以下|以内|左右)?",
+                "按现场规程降载",
+                text,
+            )
+            text = re.sub(
+                r"负载(?:率)?(?:控制|降至|降到)\s*\d+(?:\.\d+)?\s*%\s*(?:以下|以内|左右)?",
+                "负载按现场规程控制在安全范围",
+                text,
+            )
+            if text not in sanitized:
+                sanitized.append(text)
+        return sanitized
 
     async def stream_report_step(
         self,
@@ -371,17 +392,8 @@ class SingleAgentStagesMixin:
         report_name = (
             report_artifact.report_filename
             if report_artifact and report_artifact.report_filename
-            else "未生成"
+            else None
         )
-        if report_artifact and report_artifact.success:
-            return build_final_answer_fallback(analysis_artifact, report_name)
-        prompt = build_final_answer_prompt(analysis_artifact, report_name)
-        try:
-            final_answer = (await self._invoke_text_model(prompt)).strip()
-            if final_answer:
-                return final_answer
-        except Exception as exc:  # noqa: BLE001
-            _log.warning("最终答复整理失败，回退到模板输出", thread_id=self.thread_id, error=str(exc))
         return build_final_answer_fallback(analysis_artifact, report_name)
 
     def _build_skipped_sql_artifact(self, reason: str) -> SqlStepArtifact:

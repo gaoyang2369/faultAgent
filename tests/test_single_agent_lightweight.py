@@ -62,6 +62,34 @@ def test_stream_events_short_circuits_greeting_without_model(monkeypatch) -> Non
     asyncio.run(_assert_stream_events_short_circuits_greeting_without_model(monkeypatch))
 
 
+def test_analysis_payload_sanitizes_unsupported_load_thresholds(monkeypatch) -> None:
+    from fault_diagnosis.single_agent import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "get_trace_exporter", lambda: _NoopTraceExporter())
+    runner = runner_module.RestrictedSingleAgentRunner(
+        message="诊断一下DCMA系统最近情况如何",
+        thread_id="thread.test",
+        user_identity="游客",
+        request_id="request.test",
+        stream_id="stream.test",
+        trace_id="trace.test",
+    )
+
+    artifact = runner._build_analysis_artifact_from_payload(
+        {
+            "conclusion": "存在故障码",
+            "basis": ["SQL 检出异常码"],
+            "recommendations": ["临时措施：若无法立即停机，先降载至50%以下运行，避免风险。"],
+            "risk_notice": "按现场规程确认安全状态。",
+            "missing_information": [],
+            "confidence": "medium",
+        }
+    )
+
+    assert "50%" not in "\n".join(artifact.recommendations)
+    assert "按现场规程降载" in artifact.recommendations[0]
+
+
 async def _assert_stream_events_short_circuits_greeting_without_model(monkeypatch) -> None:
     from fault_diagnosis.single_agent import runner as runner_module
 

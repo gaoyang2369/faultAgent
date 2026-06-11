@@ -10,6 +10,7 @@ from fault_diagnosis.diagnosis.contracts import (
 )
 from fault_diagnosis.single_agent.reporting import (
     build_analysis_evidence_summary,
+    build_final_answer_fallback,
     build_report_payload,
     build_structured_analysis_artifact,
 )
@@ -275,3 +276,23 @@ def test_structured_analysis_uses_rag_fault_code_actions() -> None:
     assert any("RAG 处置要点" in item for item in artifact.basis)
     assert "RAG知识要点" in evidence_summary
     assert "F01002" in evidence_summary
+
+
+def test_final_answer_omits_report_section_when_report_not_generated() -> None:
+    artifact = AnalysisStepArtifact(
+        success=True,
+        conclusion="设备存在异常码，需结合数据和 RAG 处理。",
+        basis=["SQL 返回最新运行数据", "RAG 命中故障码处理步骤"],
+        recommendations=["立即处置：按现场规程确认安全状态后处理"],
+        risk_notice="处置前确认现场安全状态。",
+        missing_information=["现场是否已复位"],
+        confidence="medium",
+    )
+
+    answer = build_final_answer_fallback(artifact)
+
+    assert "【报告文件】" not in answer
+    assert "未生成" not in answer
+    assert "【已确认事实】" in answer
+    assert "【可能原因与待验证】" in answer
+    assert "【建议处置与验证】" in answer

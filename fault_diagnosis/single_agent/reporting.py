@@ -801,14 +801,23 @@ def build_final_answer_prompt(analysis_artifact: AnalysisStepArtifact, report_na
 """.strip()
 
 
-def build_final_answer_fallback(analysis_artifact: AnalysisStepArtifact, report_name: str) -> str:
+def build_final_answer_fallback(analysis_artifact: AnalysisStepArtifact, report_name: str | None = None) -> str:
     basis_lines = "\n".join(f"- {item}" for item in analysis_artifact.basis) or "- 暂无明确数据支撑"
     recommendation_lines = "\n".join(f"- {item}" for item in analysis_artifact.recommendations) or "- 暂无具体处置建议"
     risk_notice = analysis_artifact.risk_notice or "当前未发现额外风险提示。"
-    return (
-        f"【结论】{analysis_artifact.conclusion}\n"
-        f"【数据支撑】\n{basis_lines}\n"
-        f"【处置建议】\n{recommendation_lines}\n"
-        f"【风险提示】{risk_notice}\n"
-        f"【报告文件】{report_name}"
+    missing_lines = (
+        "\n".join(f"- {item}" for item in analysis_artifact.missing_information)
+        if analysis_artifact.missing_information
+        else "- 暂无额外缺失信息"
     )
+    sections = [
+        f"【结论】{analysis_artifact.conclusion}",
+        f"【已确认事实】\n{basis_lines}",
+        f"【可能原因与待验证】\n{missing_lines}",
+        f"【建议处置与验证】\n{recommendation_lines}",
+        f"【风险提示】{risk_notice}",
+        f"【置信度】{analysis_artifact.confidence}",
+    ]
+    if report_name:
+        sections.append(f"【报告文件】{report_name}")
+    return "\n".join(sections)
