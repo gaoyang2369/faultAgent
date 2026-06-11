@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import re
 from dataclasses import dataclass
-from datetime import datetime
 
 from ..diagnosis.contracts import (
     AnalysisStepArtifact,
@@ -17,6 +16,17 @@ from .sql_safety import REAL_DATA_FALLBACK_COLUMN_NAMES
 
 _REPORT_URL_RE = re.compile(r"(/reports/[A-Za-z0-9._\-]+\.(?:md|html))", re.IGNORECASE)
 _EMPTY_CODE_VALUES = {"", "0", "0.0", "none", "null", "无", "正常", "nan"}
+_SPARKLINE_BLOCKS = "▁▂▃▄▅▆▇█"
+_TREND_METRICS = (
+    ("dc_voltage", "母线电压(V)"),
+    ("motor_temp", "电机温度"),
+    ("inverter_temp", "变频器温度"),
+    ("speed_actual", "实际转速"),
+    ("current_actual", "实际电流"),
+    ("inverter_load_rate", "变频器负载率"),
+    ("motor_load_rate", "电机负载率"),
+    ("motor_power", "电机功率"),
+)
 
 
 @dataclass
@@ -45,6 +55,13 @@ def _format_float(value: object, digits: int = 2) -> str:
         return f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
     except (TypeError, ValueError):
         return _format_value(value)
+
+
+def _to_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_sql_rows(raw_output: str) -> list[dict[str, object]]:
@@ -97,20 +114,54 @@ def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join([header_line, sep_line, *row_lines])
 
 
-def _build_freshness_notice(latest_time: object, current_time: str) -> str:
-    try:
-        latest_dt = datetime.fromisoformat(str(latest_time).strip())
-        current_dt = datetime.fromisoformat(str(current_time).strip())
-    except (TypeError, ValueError):
-        return ""
-    age_seconds = (current_dt - latest_dt).total_seconds()
-    if age_seconds <= 24 * 3600:
-        return ""
-    age_days = max(1, int(age_seconds // (24 * 3600)))
-    return f"最新数据距报告生成时间约 {age_days} 天，不能等同于当前实时状态。"
+def _sparkline(values: list[float], *, limit: int = 24) -> str:
+    if not values:
+        return "-"
+    sampled = values[-limit:]
+    low = min(sampled)
+    high = max(sampled)
+    if high == low:
+        return _SPARKLINE_BLOCKS[len(_SPARKLINE_BLOCKS) // 2] * len(sampled)
+    chars = []
+    for value in sampled:
+        index = round((value - low) / (high - low) * (len(_SPARKLINE_BLOCKS) - 1))
+        chars.append(_SPARKLINE_BLOCKS[index])
+    return "".join(chars)
 
 
-def _build_sql_report_summary(sql_artifact: SqlStepArtifact, current_time: str) -> SqlReportSummary:
+def _metric_trend_rows(rows: list[dict[str, object]]) -> list[list[str]]:
+    trend_rows: list[list[str]] = []
+    chronological_rows = list(reversed(rows))
+    for key, label in _TREND_METRICS:
+        values = [value for row in chronological_rows if (value := _to_float(row.get(key))) is not None]
+        if not values:
+            continue
+        latest = values[-1]
+        average = sum(values) / len(values)
+        trend_rows.append(
+            [
+                label,
+                _format_float(latest),
+                _format_float(min(values)),
+                _format_float(max(values)),
+                _format_float(average),
+                _sparkline(values),
+            ]
+        )
+    return trend_rows
+
+
+def _count_rows(rows: list[dict[str, object]], key: str, *, normalize_code: bool = False) -> list[list[str]]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = _normalize_code(row.get(key)) if normalize_code else _format_value(row.get(key))
+        if not value or value == "-":
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    return [[value, str(count)] for value, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+
+
+def _build_sql_report_summary(sql_artifact: SqlStepArtifact) -> SqlReportSummary:
     rows = _parse_sql_rows(sql_artifact.raw_output or sql_artifact.result_preview)
     if not rows:
         return SqlReportSummary(
@@ -126,7 +177,6 @@ def _build_sql_report_summary(sql_artifact: SqlStepArtifact, current_time: str) 
     fault_codes = _unique_codes(rows, "fault_code")
     alarm_codes = _unique_codes(rows, "alarm_code")
     latest_time = _format_value(latest.get("create_time"))
-    freshness_notice = _build_freshness_notice(latest_time, current_time)
     status = _format_value(latest.get("status"))
     abnormal_text = (
         f"发现故障码：{', '.join(fault_codes)}"
@@ -182,24 +232,37 @@ def _build_sql_report_summary(sql_artifact: SqlStepArtifact, current_time: str) 
         if _normalize_code(row.get("fault_code")) or _normalize_code(row.get("alarm_code"))
     ][:10]
     abnormal_table = _markdown_table(["时间", "设备", "状态", "故障码", "告警码"], abnormal_rows)
-    freshness_line = f"- 数据新鲜度提示：{freshness_notice}\n" if freshness_notice else ""
+    trend_table = _markdown_table(
+        ["指标", "最新", "最小", "最大", "平均", "趋势"],
+        _metric_trend_rows(rows),
+    )
+    status_table = _markdown_table(["状态字", "记录数"], _count_rows(rows, "status"))
+    fault_count_table = _markdown_table(["故障码", "记录数"], _count_rows(rows, "fault_code", normalize_code=True))
+    overview_table = _markdown_table(
+        ["维度", "结果"],
+        [
+            ["数据样本", f"{len(rows)} 条"],
+            ["覆盖设备", ", ".join(devices) or "未识别"],
+            ["最新记录时间", latest_time],
+            ["最新状态字", status],
+            ["故障码", ", ".join(fault_codes) if fault_codes else "无"],
+            ["告警码", ", ".join(alarm_codes) if alarm_codes else "无"],
+        ],
+    )
 
     details = (
-        f"### 数据覆盖\n"
-        f"- 本次 SQL 返回 {len(rows)} 条最近运行数据。\n"
-        f"- 覆盖设备：{', '.join(devices) or '未识别'}。\n"
-        f"- 最新数据时间：{latest_time}。\n"
-        f"{freshness_line}\n"
+        f"### 运行概览\n{overview_table}\n\n"
+        f"### 指标趋势可视化\n{trend_table}\n\n"
         f"### 最新运行快照\n{state_table}\n\n"
         f"### 最新关键指标\n{metric_table}\n\n"
-        f"### 异常码与告警码\n{abnormal_table}"
+        f"### 状态分布\n{status_table}\n\n"
+        f"### 故障码分布\n{fault_count_table}\n\n"
+        f"### 异常码与告警码明细\n{abnormal_table}"
     )
     summary = (
         f"已获取 {len(rows)} 条 DCMA 运行数据，最新设备 {devices[0] if devices else '未知'} "
         f"在 {latest_time} 的状态字为 {status}，{abnormal_text}。"
     )
-    if freshness_notice:
-        summary = f"{summary} {freshness_notice}"
     fault_inference = (
         f"数据库最近记录中{abnormal_text}。"
         if fault_codes or alarm_codes
@@ -210,9 +273,79 @@ def _build_sql_report_summary(sql_artifact: SqlStepArtifact, current_time: str) 
         if fault_codes or alarm_codes
         else "建议继续跟踪状态字、温度、母线电压、负载率和功率指标，若出现非零故障码或告警码再进入故障排查流程。"
     )
-    if freshness_notice:
-        maintenance = f"{maintenance} 同时建议确认数据采集链路是否仍在持续写入 real_data。"
     return SqlReportSummary(rows=rows, summary=summary, details_markdown=details, fault_inference=fault_inference, maintenance=maintenance)
+
+
+def _knowledge_report_section(knowledge_artifact: KnowledgeStepArtifact) -> str:
+    raw_output = (knowledge_artifact.raw_output or "").strip()
+    if not raw_output:
+        return "知识库未返回故障码相关内容。"
+    if not knowledge_artifact.success:
+        return f"知识库检索结果：{raw_output}"
+    return raw_output[:2000].strip()
+
+
+def build_structured_analysis_artifact(
+    *,
+    request: DiagnosisRequest,
+    sql_artifact: SqlStepArtifact,
+    knowledge_artifact: KnowledgeStepArtifact,
+) -> AnalysisStepArtifact | None:
+    sql_report = _build_sql_report_summary(sql_artifact)
+    if not sql_report.rows:
+        return None
+
+    latest = sql_report.rows[0]
+    devices = _unique_non_empty(sql_report.rows, "device_name")
+    fault_codes = _unique_codes(sql_report.rows, "fault_code")
+    alarm_codes = _unique_codes(sql_report.rows, "alarm_code")
+    code_text = ", ".join(fault_codes) if fault_codes else "未见有效故障码"
+    alarm_text = ", ".join(alarm_codes) if alarm_codes else "未见有效告警码"
+    device_text = ", ".join(devices) or request.equipment_hint or "DCMA 系统"
+    latest_time = _format_value(latest.get("create_time"))
+    status = _format_value(latest.get("status"))
+    conclusion = (
+        f"DCMA 最近运行数据已获取，{device_text} 最新记录状态字为 {status}，"
+        f"故障码为 {code_text}，告警码为 {alarm_text}。"
+    )
+    if knowledge_artifact.success:
+        conclusion += " 已自动补充知识库检索结果用于报告说明。"
+    elif fault_codes:
+        conclusion += " 已自动查询知识库，但当前知识库未命中该故障码的明确释义。"
+
+    basis = [
+        f"SQL 返回 {len(sql_report.rows)} 条 real_data 最近运行记录。",
+        f"最新记录时间 {latest_time}，设备 {device_text}，状态字 {status}。",
+        f"故障码统计：{code_text}；告警码统计：{alarm_text}。",
+        (
+            "知识库已返回故障码相关片段。"
+            if knowledge_artifact.success
+            else "知识库未返回该故障码的明确片段。"
+        ),
+    ]
+    if fault_codes and knowledge_artifact.success:
+        knowledge_recommendation = "结合报告中的 RAG 检索结果核对故障码含义、触发条件和处理步骤。"
+    elif fault_codes:
+        knowledge_recommendation = "系统已自动检索知识库但未命中该故障码，建议导入对应厂家手册或故障码表后重新生成报告。"
+    else:
+        knowledge_recommendation = "当前未见有效故障码，建议继续跟踪状态字、温度、负载率和功率指标。"
+
+    recommendations = [
+        knowledge_recommendation,
+        "现场复核状态字、控制字、母线电压、温度、负载率和功率指标是否与设备现象一致。",
+        "若确认故障码持续出现，按设备手册流程执行停机安全检查、复位条件确认和试运行观察。",
+        "演示后建议接入持续采集任务，将 real_data 写入频率和最新采集时间纳入健康检查。",
+    ]
+
+    return AnalysisStepArtifact(
+        success=True,
+        conclusion=conclusion,
+        basis=basis,
+        recommendations=recommendations,
+        risk_notice="如现场设备处于运行状态，复位或试运行前应先完成安全确认。",
+        missing_information=[] if knowledge_artifact.success or not fault_codes else ["知识库未命中故障码释义"],
+        confidence="high" if knowledge_artifact.success else "medium",
+    )
 
 
 def extract_report_url(save_result: str) -> str | None:
@@ -236,7 +369,7 @@ def build_report_payload(
     current_time: str,
     report_filename: str,
 ) -> dict[str, str]:
-    sql_report = _build_sql_report_summary(sql_artifact, current_time)
+    sql_report = _build_sql_report_summary(sql_artifact)
     executive_summary = analysis_artifact.conclusion
     if sql_report.rows:
         executive_summary = f"{analysis_artifact.conclusion}\n\n{sql_report.summary}"
@@ -253,7 +386,7 @@ def build_report_payload(
         ),
         "diagnosis_details": (
             f"{sql_report.details_markdown}\n\n"
-            f"【知识检索摘要】\n{knowledge_artifact.raw_output or '无'}"
+            f"### RAG 故障码知识补充\n{_knowledge_report_section(knowledge_artifact)}"
         ),
         "fault_inference": f"{analysis_artifact.conclusion}\n\n{sql_report.fault_inference}",
         "repair_recommendations": "\n".join(f"- {item}" for item in analysis_artifact.recommendations)

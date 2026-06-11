@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 from ..agent_runtime.sse_adapter import encode_sse_event
 from ..common.logger import get_logger
+from ..diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from ..runtime.diagnosis_contract_adapter import build_diagnosis_contract_payload
 from .contracts import SingleAgentDecision
 from .intent import build_lightweight_conversation_reply
@@ -201,8 +202,17 @@ class SingleAgentFlowMixin:
                 yield self._build_cancel_complete_frame()
                 return
 
-            if decision.needs_knowledge:
-                stage_started = self._start_stage("knowledge", "执行知识库检索")
+            sql_fault_codes = extract_fault_codes_from_text(
+                getattr(sql_artifact, "raw_output", "") or getattr(sql_artifact, "result_preview", "")
+            )
+            needs_knowledge = decision.needs_knowledge or bool(sql_fault_codes)
+            if needs_knowledge:
+                knowledge_message = (
+                    f"执行知识库检索（故障码：{', '.join(sql_fault_codes)}）"
+                    if sql_fault_codes
+                    else "执行知识库检索"
+                )
+                stage_started = self._start_stage("knowledge", knowledge_message)
                 async for chunk in self.stream_knowledge_step(request, sql_artifact):
                     yield chunk
                     event_count += 1
@@ -230,7 +240,7 @@ class SingleAgentFlowMixin:
                 return
 
             if decision.needs_report:
-                stage_started = self._start_stage("report", "生成 Markdown 报告")
+                stage_started = self._start_stage("report", "生成可视化 HTML 报告")
                 async for chunk in self.stream_report_step(
                     request,
                     sql_artifact,

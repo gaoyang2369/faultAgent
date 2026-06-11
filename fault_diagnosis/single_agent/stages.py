@@ -24,6 +24,7 @@ from ..diagnosis.steps import (
     build_request_from_payload,
     build_sql_plan,
 )
+from ..diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from .artifacts import build_diagnosis_artifact_envelope
 from .contracts import SingleAgentDecision
 from .errors import SingleAgentExecutionError
@@ -36,6 +37,7 @@ from .intent import (
 )
 from .prompts import build_single_agent_analysis_prompt, build_single_agent_understanding_prompt
 from .reporting import (
+    build_structured_analysis_artifact,
     build_final_answer_fallback,
     build_final_answer_prompt,
     build_report_payload,
@@ -165,8 +167,17 @@ class SingleAgentStagesMixin:
         request: DiagnosisRequest,
         sql_artifact: SqlStepArtifact | None,
     ) -> AsyncGenerator[str, None]:
+        fault_codes = extract_fault_codes_from_text(
+            (sql_artifact.raw_output or sql_artifact.result_preview) if sql_artifact else ""
+        )
+        fault_code_query = (
+            " ".join(f"故障码 {code} 含义 触发原因 处理步骤" for code in fault_codes)
+            if fault_codes
+            else ""
+        )
         query = build_default_knowledge_query(
             request,
+            fault_code_query,
             sql_artifact.summary if sql_artifact and sql_artifact.success else "",
         )
         async for chunk in self._invoke_restricted_tool(
@@ -192,6 +203,15 @@ class SingleAgentStagesMixin:
         knowledge_artifact: KnowledgeStepArtifact,
         current_time: str,
     ) -> AnalysisStepArtifact:
+        structured_artifact = build_structured_analysis_artifact(
+            request=request,
+            sql_artifact=sql_artifact,
+            knowledge_artifact=knowledge_artifact,
+        )
+        if structured_artifact is not None:
+            self._record_artifact("analysis", structured_artifact, stage="analysis")
+            return structured_artifact
+
         payload = await self._invoke_json_model(
             build_single_agent_analysis_prompt(
                 request,
@@ -247,7 +267,7 @@ class SingleAgentStagesMixin:
         save_result = stringify(self._last_step_result)
         artifact = ReportStepArtifact(
             success="失败" not in save_result,
-            report_filename=extract_report_filename(save_result, f"{report_filename}.md"),
+            report_filename=extract_report_filename(save_result, f"{report_filename}.html"),
             save_result=save_result,
             error=None if "失败" not in save_result else save_result,
         )

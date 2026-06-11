@@ -53,6 +53,7 @@ def test_rule_based_understanding_handles_dcma_status_report_fast_path() -> None
     assert should_use_rule_based_understanding(message) is True
     assert payload["equipment_hint"] is None
     assert payload["needs_sql"] is True
+    assert payload["needs_knowledge"] is True
     assert payload["needs_report"] is True
     assert normalize_equipment_hint("dcma") is None
 

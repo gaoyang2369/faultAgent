@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
+import re
 from typing import Callable
 
 from ..contracts import DiagnosisRequest, KnowledgeStepArtifact
+
+_FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{4,})(?:-[0-9/]+)?(?![A-Z0-9])", re.IGNORECASE)
+
+
+def extract_fault_codes_from_text(text: str, *, limit: int = 5) -> list[str]:
+    """Extract normalized base fault codes such as F1030 from SQL/tool text."""
+
+    codes: list[str] = []
+    for match in _FAULT_CODE_RE.finditer(text or ""):
+        code = match.group(1).upper()
+        if code not in codes:
+            codes.append(code)
+        if len(codes) >= limit:
+            break
+    return codes
 
 
 def build_default_knowledge_query(request: DiagnosisRequest, *extra_parts: str) -> str:
