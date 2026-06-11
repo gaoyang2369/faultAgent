@@ -13,6 +13,7 @@ from typing import Any, AsyncGenerator
 from ..agent_runtime.error_classification import classify_model_gateway_error, model_error_code
 from ..agent_runtime.sse_adapter import build_server_error_payload, encode_sse_event
 from ..common.logger import get_logger
+from ..config import AGENT_TRACE_CONSOLE, AGENT_TRACE_CONSOLE_PREVIEW_CHARS
 from ..observability import NoopTraceRun, TraceRunContext, get_trace_exporter, write_local_trace
 from ..diagnosis.adapters import invoke_tool
 from .contracts import AgentTrace, SingleAgentLimits
@@ -64,6 +65,23 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self._round_count = 0
         self._tool_call_count = 0
         self._last_step_result: Any = None
+
+    def _console_trace(self, message: str, **fields: Any) -> None:
+        if not AGENT_TRACE_CONSOLE:
+            return
+        _log.info(
+            message,
+            request_id=self.request_id,
+            trace_id=self.trace_id,
+            thread_id=preview(self.thread_id, limit=80),
+            stream_id=preview(self.stream_id, limit=80),
+            **fields,
+        )
+
+    def _console_preview(self, value: Any) -> str:
+        return " ".join(
+            preview(sanitize_for_json(value), limit=AGENT_TRACE_CONSOLE_PREVIEW_CHARS).split()
+        )
 
     def _resolve_model(self):
         if self.model is not None:
@@ -124,6 +142,14 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         }
         if metadata:
             trace_metadata.update(metadata)
+        self._console_trace(
+            "Agent run finished",
+            status=status,
+            duration_ms=self.trace_duration_ms(),
+            tool_call_count=self._tool_call_count,
+            error=error,
+            summary=self._console_preview(final_answer) if final_answer else "",
+        )
         try:
             self._trace_run.finish(
                 status=status,
@@ -147,6 +173,14 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             )
         self._trace_finalized = True
 
+    def trace_duration_ms(self) -> float | None:
+        try:
+            started_at = datetime.fromisoformat(self.trace.started_at)
+            finished_at = datetime.fromisoformat(self.trace.finished_at) if self.trace.finished_at else datetime.now()
+            return round((finished_at - started_at).total_seconds() * 1000, 1)
+        except (TypeError, ValueError):
+            return None
+
     def _finish_open_stage_observations(self, *, status: str, error: str | None = None) -> None:
         for stage, observations in list(self._stage_observations.items()):
             while observations:
@@ -162,6 +196,13 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         if self._round_count > self.limits.max_rounds:
             raise SingleAgentExecutionError(f"超过单 Agent 最大阶段轮次限制：{self.limits.max_rounds}")
         self.trace.add_event("stage", stage=stage, status="started", message=message)
+        self._console_trace(
+            "Agent stage started",
+            stage=stage,
+            status="started",
+            round=self._round_count,
+            summary=message,
+        )
         observation = self._trace_run.start_observation(
             name=f"single_agent.stage.{stage}",
             as_type="span",
@@ -199,6 +240,14 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             error=error,
             duration_ms=round((time.monotonic() - started_at) * 1000, 1),
         )
+        self._console_trace(
+            "Agent stage finished",
+            stage=stage,
+            status=status,
+            duration_ms=round((time.monotonic() - started_at) * 1000, 1),
+            summary=message,
+            error=error,
+        )
         if observation is not None:
             try:
                 observation.finish(
@@ -226,6 +275,12 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             status="created",
             artifact_type=artifact_type,
             artifact=payload if isinstance(payload, dict) else {"value": payload},
+        )
+        self._console_trace(
+            "Agent artifact recorded",
+            stage=stage,
+            status="created",
+            summary=f"{artifact_type}: {self._console_preview(payload)}",
         )
 
     def _build_ping_frame(self, stage: str) -> str:
@@ -278,6 +333,13 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
     async def _invoke_text_model(self, prompt: str, *, operation: str = "model.invoke_text") -> str:
         model = self._resolve_model()
         model_name = str(getattr(model, "model_name", None) or os.getenv("MODEL_NAME") or "unknown")
+        started_at = time.monotonic()
+        self._console_trace(
+            "Agent model call started",
+            operation=operation,
+            prompt_chars=len(prompt),
+            summary=model_name,
+        )
         with self._trace_run.observation(
             name=f"single_agent.{operation}",
             as_type="generation",
@@ -293,6 +355,14 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         ) as observation:
             response = await model.ainvoke(prompt)
             content = str(getattr(response, "content", "") or "")
+            self._console_trace(
+                "Agent model call finished",
+                operation=operation,
+                duration_ms=round((time.monotonic() - started_at) * 1000, 1),
+                prompt_chars=len(prompt),
+                output_chars=len(content),
+                summary=model_name,
+            )
             observation.update(
                 output={"content": content, "chars": len(content)},
                 metadata={
@@ -338,6 +408,15 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             run_id=run_id,
             input=sanitize_for_json(tool_input),
         )
+        self._console_trace(
+            "Agent tool started",
+            stage=stage,
+            status="started",
+            tool=tool_name,
+            run_id=run_id,
+            tool_call_count=self._tool_call_count,
+            input_preview=self._console_preview(tool_input),
+        )
         payload = {
             "type": "tool_start",
             "tool": tool_name,
@@ -368,6 +447,15 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             run_id=run_id,
             result_preview=result_preview,
             duration_ms=duration_ms,
+        )
+        self._console_trace(
+            "Agent tool finished",
+            stage=stage,
+            status="completed",
+            tool=tool_name,
+            run_id=run_id,
+            duration_ms=duration_ms,
+            result_preview=self._console_preview(output),
         )
         payload = {
             "type": "tool_end",

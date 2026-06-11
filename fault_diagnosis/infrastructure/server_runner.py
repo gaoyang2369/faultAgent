@@ -37,7 +37,7 @@ def run_backend_server(
     ensure_utf8_stdio()
 
     if _WINDOWS:
-        config = uvicorn.Config(app, host=host, port=port, log_level=log_level, reload=False)
+        config = uvicorn.Config(app, host=host, port=port, log_level=log_level, reload=False, access_log=False)
         server = uvicorn.Server(config)
         with asyncio.Runner(loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector())) as runner:
             runner.run(server.serve())
@@ -47,6 +47,7 @@ def run_backend_server(
         "host": host,
         "port": port,
         "log_level": log_level,
+        "access_log": False,
     }
     if reload:
         run_kwargs["reload"] = True

@@ -1369,6 +1369,7 @@ const governanceSaveState = ref({
     priority_counts: {}
   }
 });
+const legacyGovernanceExportEnabled = false;
 const governanceLedgerSummary = computed(() => ({
   total: governanceSaveState.value.ledgerSummary?.total || 0,
   statusItems: Object.entries(governanceSaveState.value.ledgerSummary?.status_counts || {}).map(([key, value]) => ({ key, value })),
@@ -4493,7 +4494,7 @@ watch(
       status_counts: {},
       priority_counts: {}
     };
-    if (!isUser.value && governanceLedger.value.items.length) {
+    if (legacyGovernanceExportEnabled && !isUser.value && governanceLedger.value.items.length) {
       loadGovernanceHistory();
       loadGovernanceLedger();
     }
@@ -4504,7 +4505,7 @@ watch(
 watch(
   () => ({ ...governanceSaveState.value.ledgerFilters }),
   () => {
-    if (!isUser.value && governanceLedger.value.items.length) {
+    if (legacyGovernanceExportEnabled && !isUser.value && governanceLedger.value.items.length) {
       loadGovernanceLedger();
     }
   },

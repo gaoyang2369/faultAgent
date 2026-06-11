@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..common.logger import get_logger, new_request_id
+from ..common.logger import ensure_request_id, get_logger
 from ..common.paths import REPORTS_DIR
 from ..services.governance_service import (
     GovernanceLedgerPayload,
@@ -40,7 +40,7 @@ def _sanitize_governance_thread_hint(thread_id: str | None) -> str:
 @router.post("/api/governance/save")
 async def save_governance_snapshot(request: Request, payload: GovernanceSnapshotPayload):
     _, session_id, _, _ = resolve_request_scope(request)
-    request_id = new_request_id()
+    request_id = ensure_request_id()
 
     _log.info(
         "收到治理快照保存请求",

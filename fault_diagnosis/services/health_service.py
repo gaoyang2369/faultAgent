@@ -14,6 +14,8 @@ from ..config import (
     ALLOW_DEFAULT_ADMIN_PASSWORD,
     AGENT_TRACE_BACKEND,
     AGENT_TRACE_CAPTURE_CONTENT,
+    AGENT_TRACE_CONSOLE,
+    AGENT_TRACE_CONSOLE_PREVIEW_CHARS,
     AGENT_TRACE_FLUSH_ON_RUN,
     AGENT_TRACE_LOCAL_LOG,
     AGENT_TRACE_LOCAL_LOG_PATH,
@@ -486,6 +488,8 @@ def _check_trace_exporter() -> dict[str, Any]:
             flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
             local_log=AGENT_TRACE_LOCAL_LOG,
             local_log_path=AGENT_TRACE_LOCAL_LOG_PATH,
+            console_log=AGENT_TRACE_CONSOLE,
+            console_preview_chars=AGENT_TRACE_CONSOLE_PREVIEW_CHARS,
             detail="trace export disabled",
         )
 
@@ -504,6 +508,8 @@ def _check_trace_exporter() -> dict[str, Any]:
             flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
             local_log=AGENT_TRACE_LOCAL_LOG,
             local_log_path=AGENT_TRACE_LOCAL_LOG_PATH,
+            console_log=AGENT_TRACE_CONSOLE,
+            console_preview_chars=AGENT_TRACE_CONSOLE_PREVIEW_CHARS,
             detail="LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY 未配置",
         )
     try:
@@ -519,6 +525,8 @@ def _check_trace_exporter() -> dict[str, Any]:
             flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
             local_log=AGENT_TRACE_LOCAL_LOG,
             local_log_path=AGENT_TRACE_LOCAL_LOG_PATH,
+            console_log=AGENT_TRACE_CONSOLE,
+            console_preview_chars=AGENT_TRACE_CONSOLE_PREVIEW_CHARS,
             detail=_redact(exc),
         )
     return _check_result(
@@ -531,6 +539,8 @@ def _check_trace_exporter() -> dict[str, Any]:
         flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
         local_log=AGENT_TRACE_LOCAL_LOG,
         local_log_path=AGENT_TRACE_LOCAL_LOG_PATH,
+        console_log=AGENT_TRACE_CONSOLE,
+        console_preview_chars=AGENT_TRACE_CONSOLE_PREVIEW_CHARS,
         detail="Langfuse SDK 已可用，等待运行时 trace 写入",
     )
 

@@ -39,6 +39,11 @@ class SingleAgentFlowMixin:
         event_count = 0
         token_count = 0
         started_at = time.monotonic()
+        self._console_trace(
+            "Agent run started",
+            status="started",
+            summary=self._console_preview(self.message),
+        )
 
         try:
             yield encode_sse_event(

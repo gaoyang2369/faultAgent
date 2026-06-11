@@ -87,6 +87,13 @@ class SingleAgentStagesMixin:
             decision=decision.model_dump(),
             message=decision.reason,
         )
+        self._console_trace(
+            "Agent decision made",
+            stage="understand",
+            status="completed",
+            decision=decision.model_dump(),
+            summary=decision.reason,
+        )
         self._record_artifact("request", request, stage="understand")
         return request, decision
 

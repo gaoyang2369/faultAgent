@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from ..auth.admin_auth import resolve_identity_payload
 from ..runtime.dev_mode import get_dev_messages
-from ..common.logger import get_logger, new_request_id
+from ..common.logger import ensure_request_id, get_logger
 from ..repositories.history_index import get_history_index_repository
 from ..auth.session_scope import resolve_request_scope
 from ..agent_runtime.stream_control import (
@@ -174,7 +174,7 @@ class ChatService:
     ):
         session_manager, session_id, legacy_bindings, identity = resolve_request_identity(request)
         trusted_user_identity = "管理员" if identity.get("is_admin") else "游客"
-        request_id = new_request_id()
+        request_id = ensure_request_id()
         try:
             if not message:
                 raise HTTPException(status_code=400, detail="message parameter is required")
@@ -292,7 +292,7 @@ class ChatService:
     ):
         session_manager, session_id, legacy_bindings, identity = resolve_request_identity(request)
         trusted_user_identity = "管理员" if identity.get("is_admin") else "游客"
-        request_id = new_request_id()
+        request_id = ensure_request_id()
         resolved_thread_id = session_manager.resolve_history_thread_id(session_id, thread_id, legacy_bindings)
         stream_id = (stream_id or "").strip() or str(uuid4())
 
@@ -414,7 +414,7 @@ class ChatService:
             )
         user_identity = trusted_user_identity
         thread_id = str(payload.session_id or metadata.get("thread_id") or str(uuid4())).strip()
-        request_id = new_request_id()
+        request_id = ensure_request_id()
 
         reply_text = ""
         accumulated_tokens: list[str] = []

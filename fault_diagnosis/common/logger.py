@@ -8,7 +8,7 @@ import os
 import sys
 import uuid
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from .encoding import ensure_utf8_stdio
@@ -35,13 +35,21 @@ def bind_request_id(request_id: str) -> str:
     return rid
 
 
+def ensure_request_id() -> str:
+    """Return the current request id or create one if the context is empty."""
+    rid = get_request_id()
+    if rid:
+        return rid
+    return new_request_id()
+
+
 def get_request_id() -> str:
     return _request_id.get("")
 
 
 def _build_payload(record: logging.LogRecord, *, include_exception: bool) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
         "level": record.levelname,
         "module": record.name,
         "msg": record.getMessage(),
@@ -95,7 +103,33 @@ class _ConsoleFormatter(logging.Formatter):
         ]
 
         extras: list[str] = []
-        for key in ("request_id", "error_id", "thread_id", "stream_id", "error", "error_category"):
+        for key in (
+            "request_id",
+            "trace_id",
+            "error_id",
+            "method",
+            "path",
+            "status_code",
+            "status",
+            "duration_ms",
+            "client",
+            "stage",
+            "operation",
+            "tool",
+            "run_id",
+            "thread_id",
+            "stream_id",
+            "round",
+            "tool_call_count",
+            "prompt_chars",
+            "output_chars",
+            "input_preview",
+            "result_preview",
+            "summary",
+            "decision",
+            "error",
+            "error_category",
+        ):
             value = payload.get(key)
             if value not in (None, "", []):
                 extras.append(f"{key}={value}")

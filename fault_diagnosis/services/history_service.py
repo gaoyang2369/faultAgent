@@ -204,9 +204,19 @@ class HistoryService:
             )
             return messages
 
+        checkpointer = getattr(self.app.state, "checkpointer", None)
+        if not checkpointer or not hasattr(checkpointer, "aget"):
+            self._log.info(
+                "未配置历史 checkpoint，返回空对话历史",
+                history_type=history_type,
+                session_id=summarize_session_id(self.session_id),
+                chat_id=summarize_thread_id(resolved_chat_id),
+            )
+            return []
+
         try:
             config = {"configurable": {"thread_id": resolved_chat_id}}
-            checkpoint = await self.app.state.checkpointer.aget(config)
+            checkpoint = await checkpointer.aget(config)
 
             if checkpoint and checkpoint.get("channel_values"):
                 messages = checkpoint["channel_values"].get("messages", [])
@@ -329,9 +339,20 @@ class HistoryService:
             self._log_todos_returned(resolved_thread_id, status, payload, dev_mode=True)
             return payload
 
+        checkpointer = getattr(self.app.state, "checkpointer", None)
+        if not checkpointer or not hasattr(checkpointer, "aget"):
+            payload = empty_todos_payload(thread_id)
+            self._log.info(
+                "未配置历史 checkpoint，返回空任务清单",
+                session_id=summarize_session_id(self.session_id),
+                thread_id=summarize_thread_id(thread_id),
+                status_filter=status or "all",
+            )
+            return payload
+
         try:
             config = {"configurable": {"thread_id": resolved_thread_id}}
-            checkpoint = await self.app.state.checkpointer.aget(config)
+            checkpoint = await checkpointer.aget(config)
 
             todos = []
             if checkpoint and checkpoint.get("channel_values"):

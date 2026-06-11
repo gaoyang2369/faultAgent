@@ -49,6 +49,16 @@ assert.match(
 )
 assert.match(
   source,
+  /const legacyGovernanceExportEnabled = false;/,
+  'legacy governance export API prefetch should stay disabled'
+)
+assert.match(
+  source,
+  /legacyGovernanceExportEnabled && !isUser\.value && governanceLedger\.value\.items\.length/,
+  'legacy governance API loads should require the explicit export flag'
+)
+assert.match(
+  source,
   /v-if="false && !isUser && evidenceFindings\.length"/,
   'legacy finding details should stay disabled'
 )

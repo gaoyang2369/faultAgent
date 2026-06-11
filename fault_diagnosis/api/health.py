@@ -5,7 +5,7 @@ import time
 from fastapi import APIRouter, Request
 
 from ..services.health_service import build_dependencies_health
-from ..common.logger import get_logger, new_request_id
+from ..common.logger import ensure_request_id, get_logger
 
 router = APIRouter()
 _log = get_logger("api.health")
@@ -30,7 +30,7 @@ def _health_issue_names(payload: dict) -> list[str]:
 @router.get("/health/dependencies")
 async def health_dependencies(request: Request, deep: bool = True):
     """检查真实依赖状态，不触发模型推理。"""
-    request_id = new_request_id()
+    request_id = ensure_request_id()
     started_at = time.monotonic()
     _log.info(
         "收到依赖健康检查请求",
@@ -69,7 +69,7 @@ async def health_ocr():
 @router.get("/health/real")
 async def health_real(request: Request, deep: bool = True):
     """真实环境健康检查别名，用于依赖恢复后的检查。"""
-    request_id = new_request_id()
+    request_id = ensure_request_id()
     started_at = time.monotonic()
     _log.info(
         "收到真实环境健康检查请求",
