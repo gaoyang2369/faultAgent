@@ -28,6 +28,29 @@ _TREND_METRICS = (
     ("motor_load_rate", "电机负载率"),
     ("motor_power", "电机功率"),
 )
+_KNOWLEDGE_ACTION_LABELS = (
+    "含义",
+    "说明",
+    "反应",
+    "原因",
+    "触发",
+    "处理",
+    "排除",
+    "措施",
+    "检查",
+    "维修",
+    "复位",
+)
+_KNOWLEDGE_SOURCE_PREFIXES = (
+    "来源",
+    "source_type",
+    "file_id",
+    "extract_backend",
+    "corrected",
+    "correction_source",
+    "检索方式",
+    "故障码",
+)
 
 
 @dataclass
@@ -334,20 +357,124 @@ def _build_chart_payload(rows: list[dict[str, object]]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def _knowledge_blocks(raw_output: str) -> list[str]:
+    return [block.strip() for block in (raw_output or "").split("\n\n") if block.strip()]
+
+
+def _line_has_knowledge_action(line: str) -> bool:
+    normalized = line.strip()
+    return any(label in normalized for label in _KNOWLEDGE_ACTION_LABELS)
+
+
+def _is_source_metadata_line(line: str) -> bool:
+    normalized = line.strip()
+    return any(normalized.startswith(prefix) for prefix in _KNOWLEDGE_SOURCE_PREFIXES)
+
+
+def _knowledge_action_summaries(
+    knowledge_artifact: KnowledgeStepArtifact,
+    codes: list[str],
+    *,
+    per_code_limit: int = 4,
+) -> list[str]:
+    raw_output = (knowledge_artifact.raw_output or "").strip()
+    if not raw_output or not knowledge_artifact.success:
+        return []
+
+    blocks = _knowledge_blocks(raw_output)
+    summaries: list[str] = []
+    normalized_codes = [code.upper() for code in codes if code]
+    target_codes = normalized_codes or [""]
+
+    for code in target_codes:
+        matched_blocks = [
+            block
+            for block in blocks
+            if not code or code in block.upper()
+        ]
+        selected_lines: list[str] = []
+        for block in matched_blocks:
+            for raw_line in block.splitlines():
+                line = raw_line.strip()
+                if not line or _is_source_metadata_line(line):
+                    continue
+                if _line_has_knowledge_action(line) or (code and code in line.upper()):
+                    if line not in selected_lines:
+                        selected_lines.append(line)
+                if len(selected_lines) >= per_code_limit:
+                    break
+            if len(selected_lines) >= per_code_limit:
+                break
+        if selected_lines:
+            prefix = f"{code}：" if code else ""
+            summaries.append(f"{prefix}{'；'.join(selected_lines[:per_code_limit])}")
+    return summaries
+
+
+def build_analysis_evidence_summary(
+    *,
+    request: DiagnosisRequest,
+    sql_artifact: SqlStepArtifact,
+    knowledge_artifact: KnowledgeStepArtifact,
+) -> str:
+    """Build compact structured evidence for the LLM synthesis step."""
+
+    sql_report = _build_sql_report_summary(sql_artifact)
+    lines = [
+        f"用户问题：{request.user_message}",
+        f"分析目标：{request.analysis_goal}",
+        f"SQL摘要：{sql_artifact.summary}",
+        f"数据侧结论：{sql_report.summary}",
+    ]
+    if sql_report.rows:
+        latest = sql_report.rows[0]
+        fault_codes = _unique_codes(sql_report.rows, "fault_code")
+        alarm_codes = _unique_codes(sql_report.rows, "alarm_code")
+        signal_rows = _build_signal_rows(sql_report.rows, fault_codes, alarm_codes)
+        lines.extend(
+            [
+                f"样本数：{len(sql_report.rows)}",
+                f"最新时间：{_format_value(latest.get('create_time'))}",
+                f"设备：{', '.join(_unique_non_empty(sql_report.rows, 'device_name')) or request.equipment_hint or '未识别'}",
+                f"状态字：{_format_value(latest.get('status'))}",
+                f"故障码：{', '.join(fault_codes) if fault_codes else '无'}",
+                f"告警码：{', '.join(alarm_codes) if alarm_codes else '无'}",
+                f"健康判定：{sql_report.health_level}",
+                f"异常持续性：{signal_rows[0][1]}；{signal_rows[0][2]}",
+            ]
+        )
+        for name, performance, hint in signal_rows[1:]:
+            lines.append(f"{name}：{performance}；{hint}")
+        knowledge_summaries = _knowledge_action_summaries(knowledge_artifact, fault_codes + alarm_codes)
+        if knowledge_summaries:
+            lines.append("RAG知识要点：")
+            lines.extend(f"- {item}" for item in knowledge_summaries)
+        elif knowledge_artifact.raw_output:
+            lines.append(f"RAG检索状态：{knowledge_artifact.error or '已返回片段但未提取到明确处置步骤'}")
+    elif knowledge_artifact.raw_output:
+        lines.append(f"RAG知识片段：{knowledge_artifact.raw_output[:1200]}")
+    return "\n".join(lines)
+
+
 def _build_recommendation_items(
     rows: list[dict[str, object]],
     fault_codes: list[str],
     alarm_codes: list[str],
     *,
-    knowledge_success: bool,
+    knowledge_artifact: KnowledgeStepArtifact,
 ) -> list[str]:
     items: list[str] = []
+    code_summaries = _knowledge_action_summaries(knowledge_artifact, fault_codes + alarm_codes)
     if fault_codes or alarm_codes:
-        if knowledge_success:
-            items.append("结合报告中的 RAG 检索结果核对异常码含义、触发条件和处理步骤。")
+        items.append("立即确认异常码是否仍在当前设备上保持激活；若最新连续异常仍存在，先按现场规程保持安全停机或降载，避免反复强启。")
+        if code_summaries:
+            for summary in code_summaries:
+                items.append(f"依据 RAG 手册片段执行故障码处置：{summary}")
+        elif knowledge_artifact.success:
+            items.append("已自动检索 RAG 知识片段，但片段中未抽取到明确处置步骤；先按数据侧异常特征复核复位条件、运行命令和关键电气量。")
         else:
-            items.append("系统已自动检索知识库但未命中明确释义，建议导入对应厂家手册或故障码表后重新生成报告。")
-        items.append("确认异常码是否连续出现，并记录复位前后的状态字、控制字、母线电压和运行命令。")
+            items.append("系统已自动检索知识库但未命中明确释义；当前建议先依据数据特征执行现场安全检查，并将故障码释义作为后续知识库补齐项。")
+        items.append("记录复位前后的状态字、控制字、母线电压、运行命令和异常码变化，用于确认故障是否可复现。")
     else:
         items.append("当前样本未见有效异常码，建议继续跟踪状态字、温度、负载率和功率指标。")
 
@@ -573,11 +700,13 @@ def build_structured_analysis_artifact(
             else "知识库未返回该故障码的明确片段。"
         ),
     ]
+    knowledge_summaries = _knowledge_action_summaries(knowledge_artifact, fault_codes + alarm_codes)
+    basis.extend(f"RAG 处置要点：{item}" for item in knowledge_summaries[:3])
     recommendations = _build_recommendation_items(
         sql_report.rows,
         fault_codes,
         alarm_codes,
-        knowledge_success=knowledge_artifact.success,
+        knowledge_artifact=knowledge_artifact,
     )
     recommendations.append(f"演示后建议接入持续采集任务，将 {REAL_DATA_LATEST_TABLE} 写入频率和最新采集时间纳入健康检查。")
     missing_information = []

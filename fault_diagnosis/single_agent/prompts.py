@@ -83,3 +83,43 @@ SQL 结果：
 知识库结果：
 {knowledge_result or "未执行或无结果"}
 """.strip()
+
+
+def build_single_agent_evidence_synthesis_prompt(
+    request: DiagnosisRequest,
+    evidence_summary: str,
+    fallback_conclusion: str,
+    fallback_basis: list[str],
+    fallback_recommendations: list[str],
+    current_time: str,
+) -> str:
+    """Build a constrained LLM synthesis prompt over structured evidence."""
+
+    return f"""
+你是 DCMA 故障诊断专家，请基于“结构化证据摘要”进行诊断合成。
+请只输出 JSON，字段必须完整：
+- conclusion: 一句话结论，必须同时体现数据侧异常和 RAG/手册侧证据是否支持
+- basis: 数组，列出 4-8 条支撑结论的关键证据；必须覆盖 SQL 数据特征和 RAG 知识
+- recommendations: 数组，给出可执行建议；必须包含“立即处置”、“验证步骤”、“根因排查”三类动作，不要只说“查询手册”
+- risk_notice: 字符串或 null
+- missing_information: 数组，列出影响置信度的缺失信息
+- confidence: 只能取 high / medium / low
+
+约束：
+1. 只基于输入证据，不能编造手册没有给出的故障码含义、原因或处理步骤。
+2. 如果 RAG 已给出原因/处理步骤，必须把它转成现场可执行动作。
+3. 如果 RAG 未命中，不能让用户自行查询作为主要建议；应先给出数据侧可验证动作，并把知识库缺口列入 missing_information。
+4. 建议要具体到检查对象，例如状态字/控制字、复位前后异常码、母线电压、速度给定与反馈、负载率、温度、散热、运行使能、反馈链路。
+5. 不要因为采集时间早于当前时间而否定演示数据，直接按给定样本做诊断。
+
+当前时间：{current_time}
+用户问题：{request.user_message}
+分析目标：{request.analysis_goal}
+
+结构化证据摘要：
+{evidence_summary}
+
+规则诊断兜底结论：{fallback_conclusion}
+规则诊断兜底依据：{fallback_basis}
+规则诊断兜底建议：{fallback_recommendations}
+""".strip()

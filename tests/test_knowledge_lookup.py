@@ -16,6 +16,14 @@ def test_fault_code_query_uses_exact_local_pdf_lookup() -> None:
     assert "重新为所有组件上电" in result
 
 
+def test_fault_code_query_checks_multiple_codes_from_local_pdfs() -> None:
+    result = query_fault_code_from_local_pdfs("同时诊断 F01002 和 F01003 的原因与处理")
+
+    assert "故障码：F01002" in result
+    assert "故障码：F01003" in result
+    assert result.count("检索方式：故障码精确匹配") >= 2
+
+
 def test_timeout_knowledge_output_is_not_successful() -> None:
     artifact = build_knowledge_artifact(
         "F01002",

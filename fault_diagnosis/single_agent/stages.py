@@ -35,8 +35,13 @@ from .intent import (
     normalize_equipment_hint,
     should_use_rule_based_understanding,
 )
-from .prompts import build_single_agent_analysis_prompt, build_single_agent_understanding_prompt
+from .prompts import (
+    build_single_agent_analysis_prompt,
+    build_single_agent_evidence_synthesis_prompt,
+    build_single_agent_understanding_prompt,
+)
 from .reporting import (
+    build_analysis_evidence_summary,
     build_structured_analysis_artifact,
     build_final_answer_fallback,
     build_final_answer_prompt,
@@ -209,6 +214,31 @@ class SingleAgentStagesMixin:
             knowledge_artifact=knowledge_artifact,
         )
         if structured_artifact is not None:
+            evidence_summary = build_analysis_evidence_summary(
+                request=request,
+                sql_artifact=sql_artifact,
+                knowledge_artifact=knowledge_artifact,
+            )
+            try:
+                payload = await self._invoke_json_model(
+                    build_single_agent_evidence_synthesis_prompt(
+                        request,
+                        evidence_summary,
+                        structured_artifact.conclusion,
+                        structured_artifact.basis,
+                        structured_artifact.recommendations,
+                        current_time,
+                    )
+                )
+                artifact = self._build_analysis_artifact_from_payload(payload, fallback=structured_artifact)
+                self._record_artifact("analysis", artifact, stage="analysis")
+                return artifact
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "诊断证据合成模型失败，使用结构化规则结果",
+                    thread_id=self.thread_id,
+                    error=str(exc),
+                )
             self._record_artifact("analysis", structured_artifact, stage="analysis")
             return structured_artifact
 
@@ -221,24 +251,50 @@ class SingleAgentStagesMixin:
                 current_time,
             )
         )
-        artifact = AnalysisStepArtifact(
-            success=True,
-            conclusion=str(payload.get("conclusion") or "").strip(),
-            basis=[str(item).strip() for item in (payload.get("basis") or []) if str(item).strip()],
-            recommendations=[str(item).strip() for item in (payload.get("recommendations") or []) if str(item).strip()],
-            risk_notice=(str(payload.get("risk_notice")).strip() if payload.get("risk_notice") else None),
-            missing_information=[
-                str(item).strip()
-                for item in (payload.get("missing_information") or [])
-                if str(item).strip()
-            ],
-            confidence=str(payload.get("confidence") or "low").strip().lower() or "low",
-            error=None,
-        )
+        artifact = self._build_analysis_artifact_from_payload(payload)
         if not artifact.conclusion:
             raise SingleAgentExecutionError("分析阶段未生成结论")
         self._record_artifact("analysis", artifact, stage="analysis")
         return artifact
+
+    def _build_analysis_artifact_from_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        fallback: AnalysisStepArtifact | None = None,
+    ) -> AnalysisStepArtifact:
+        def text_list(value: Any) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            return [str(item).strip() for item in value if str(item).strip()]
+
+        confidence = str(payload.get("confidence") or "").strip().lower()
+        if confidence not in {"high", "medium", "low"}:
+            confidence = fallback.confidence if fallback is not None else "low"
+
+        conclusion = str(payload.get("conclusion") or "").strip()
+        basis = text_list(payload.get("basis"))
+        recommendations = text_list(payload.get("recommendations"))
+        missing_information = text_list(payload.get("missing_information"))
+        risk_notice = str(payload.get("risk_notice") or "").strip() or None
+
+        if fallback is not None:
+            conclusion = conclusion or fallback.conclusion
+            basis = basis or fallback.basis
+            recommendations = recommendations or fallback.recommendations
+            missing_information = missing_information or fallback.missing_information
+            risk_notice = risk_notice or fallback.risk_notice
+
+        return AnalysisStepArtifact(
+            success=True,
+            conclusion=conclusion,
+            basis=basis,
+            recommendations=recommendations,
+            risk_notice=risk_notice,
+            missing_information=missing_information,
+            confidence=confidence,
+            error=None,
+        )
 
     async def stream_report_step(
         self,

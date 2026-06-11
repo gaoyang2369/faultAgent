@@ -50,9 +50,22 @@ def _invoke_retriever_with_timeout(db_retriever, query: str, timeout_seconds: in
     return payload
 
 
+def _extract_fault_codes(query: str, *, limit: int = 6) -> list[str]:
+    """Extract unique fault codes from a query in the order they appear."""
+
+    codes: list[str] = []
+    for matched in _FAULT_CODE_RE.finditer(query or ""):
+        code = matched.group(1).upper()
+        if code not in codes:
+            codes.append(code)
+        if len(codes) >= limit:
+            break
+    return codes
+
+
 def _extract_fault_code(query: str) -> str:
-    matched = _FAULT_CODE_RE.search(query or "")
-    return matched.group(1).upper() if matched else ""
+    codes = _extract_fault_codes(query, limit=1)
+    return codes[0] if codes else ""
 
 
 def _iter_pdf_paths(pdf_dir: str = PDFS_DIR) -> list[str]:
@@ -145,27 +158,33 @@ def _extract_fault_code_block(text: str, fault_code: str) -> str:
 def query_fault_code_from_local_pdfs(query: str, *, pdf_dir: str = PDFS_DIR) -> str:
     """Search local PDFs exactly by fault code before using vector retrieval."""
 
-    fault_code = _extract_fault_code(query)
-    if not fault_code:
+    fault_codes = _extract_fault_codes(query)
+    if not fault_codes:
         return ""
 
     rendered = []
-    for pdf_path in _iter_pdf_paths(pdf_dir):
-        for page_number, page_text in _extract_pdf_pages(pdf_path):
-            if fault_code not in page_text.upper():
-                continue
-            block = _extract_fault_code_block(page_text, fault_code)
-            if not block:
-                continue
-            rendered.append(
-                "来源：基础PDF知识库\n"
-                f"来源文件：{os.path.basename(pdf_path)}\n"
-                "source_type：knowledge_base\n"
-                "检索方式：故障码精确匹配\n"
-                f"来源页码：{page_number}\n"
-                f"文档片段：{block}"
-            )
-            break
+    for fault_code in fault_codes:
+        for pdf_path in _iter_pdf_paths(pdf_dir):
+            matched_current_pdf = False
+            for page_number, page_text in _extract_pdf_pages(pdf_path):
+                if fault_code not in page_text.upper():
+                    continue
+                block = _extract_fault_code_block(page_text, fault_code)
+                if not block:
+                    continue
+                rendered.append(
+                    f"故障码：{fault_code}\n"
+                    "来源：基础PDF知识库\n"
+                    f"来源文件：{os.path.basename(pdf_path)}\n"
+                    "source_type：knowledge_base\n"
+                    "检索方式：故障码精确匹配\n"
+                    f"来源页码：{page_number}\n"
+                    f"文档片段：{block}"
+                )
+                matched_current_pdf = True
+                break
+            if matched_current_pdf:
+                break
     return "\n\n".join(rendered[:3])
 
 
@@ -199,6 +218,13 @@ def _format_doc_result(doc) -> str:
     return "\n".join(extra_lines)
 
 
+def _knowledge_result_covers_codes(result: str, fault_codes: list[str]) -> bool:
+    if not fault_codes:
+        return bool(result.strip())
+    upper_result = result.upper()
+    return all(code.upper() in upper_result for code in fault_codes)
+
+
 @tool(args_schema=KnowledgeBaseQuerySchema)
 def query_knowledge_base(query: str) -> str:
     """
@@ -210,8 +236,9 @@ def query_knowledge_base(query: str) -> str:
     注意：知识库仅包含元信息，不包含实际数据。
     """
     try:
+        fault_codes = _extract_fault_codes(query)
         direct_fault_code_result = query_fault_code_from_local_pdfs(query)
-        if direct_fault_code_result:
+        if direct_fault_code_result and _knowledge_result_covers_codes(direct_fault_code_result, fault_codes):
             return direct_fault_code_result
 
         from ..knowledge.base import get_knowledge_retriever, has_knowledge_base_index
@@ -236,6 +263,8 @@ def query_knowledge_base(query: str) -> str:
             has_uploaded_corpus = False
 
         if not has_base_index and not has_uploaded_index and not has_uploaded_corpus:
+            if direct_fault_code_result:
+                return direct_fault_code_result
             return (
                 "知识库尚未预构建，当前请求不会在线触发全量建库。"
                 "请先执行 `python rebuild_kb.py` 生成本地向量索引后再重试。"
@@ -290,13 +319,15 @@ def query_knowledge_base(query: str) -> str:
             combined.append(doc)
 
         if not combined:
+            if direct_fault_code_result:
+                return direct_fault_code_result
             if uploaded_error and not base_docs:
                 return uploaded_error
             if base_error and not uploaded_docs:
                 return base_error
             return "未检索到相关知识片段，请尝试缩小问题范围或更换关键词。"
 
-        rendered = []
+        rendered = [direct_fault_code_result] if direct_fault_code_result else []
         for idx, doc in enumerate(combined[:4], start=1):
             if isinstance(doc, dict):
                 file_name = doc.get("file_name", "")

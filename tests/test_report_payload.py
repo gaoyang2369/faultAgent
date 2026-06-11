@@ -8,8 +8,13 @@ from fault_diagnosis.diagnosis.contracts import (
     KnowledgeStepArtifact,
     SqlStepArtifact,
 )
-from fault_diagnosis.single_agent.reporting import build_report_payload, build_structured_analysis_artifact
+from fault_diagnosis.single_agent.reporting import (
+    build_analysis_evidence_summary,
+    build_report_payload,
+    build_structured_analysis_artifact,
+)
 from fault_diagnosis.single_agent.sql_safety import REAL_DATA_FALLBACK_COLUMNS, REAL_DATA_LATEST_TABLE
+from fault_diagnosis.tools.kb_tools import query_fault_code_from_local_pdfs
 from fault_diagnosis.tools.report_tools import _build_report_html
 
 
@@ -200,3 +205,73 @@ def test_structured_analysis_avoids_stale_timestamp_language() -> None:
     assert "无法确认当前实时状态" not in artifact.conclusion
     assert "数据时间戳" not in artifact.conclusion
     assert artifact.confidence == "high"
+
+
+def test_structured_analysis_uses_rag_fault_code_actions() -> None:
+    request = DiagnosisRequest(
+        user_message="最近设备报 F01002，帮我诊断并给出处置建议",
+        user_identity="游客",
+        equipment_hint="G120电机1",
+        metric_hint=None,
+        fault_code_hint="F01002",
+        time_range_hint="最近",
+        needs_report=False,
+        report_format="markdown",
+        analysis_goal="诊断 F01002",
+    )
+    row = (
+        566,
+        "2026/01/14 18:27:24",
+        "G120电机1",
+        "G120电机1",
+        "2026/01/14",
+        "18:27:24 000ms",
+        "45",
+        "F01002",
+        "0",
+        "5120",
+        "8384",
+        563.5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        -200,
+        20.09,
+        23.3,
+        0,
+        0,
+        0,
+        "24.7",
+        20.09,
+        0,
+        0,
+        2,
+        0.44,
+        0,
+        "2026-01-14 18:27:24",
+    )
+    knowledge_output = query_fault_code_from_local_pdfs("F01002 原因 处理")
+    knowledge_artifact = KnowledgeStepArtifact(
+        success=True,
+        query="F01002 原因 处理",
+        raw_output=knowledge_output,
+    )
+    artifact = build_structured_analysis_artifact(
+        request=request,
+        sql_artifact=SqlStepArtifact(success=True, summary="ok", raw_output=str([row])),
+        knowledge_artifact=knowledge_artifact,
+    )
+    evidence_summary = build_analysis_evidence_summary(
+        request=request,
+        sql_artifact=SqlStepArtifact(success=True, summary="ok", raw_output=str([row])),
+        knowledge_artifact=knowledge_artifact,
+    )
+
+    assert artifact is not None
+    assert any("依据 RAG 手册片段执行故障码处置" in item for item in artifact.recommendations)
+    assert any("重新为所有组件上电" in item for item in artifact.recommendations)
+    assert any("RAG 处置要点" in item for item in artifact.basis)
+    assert "RAG知识要点" in evidence_summary
+    assert "F01002" in evidence_summary
