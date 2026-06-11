@@ -6,12 +6,14 @@ import ast
 import json
 import re
 from datetime import datetime
+from typing import Any
 
 from ..diagnosis.contracts import (
     AnalysisStepArtifact,
     DiagnosisRequest,
     KnowledgeStepArtifact,
     SqlStepArtifact,
+    WorkOrderSuggestion,
 )
 from .report_sections import (
     build_capability_boundary_markdown,
@@ -1660,6 +1662,281 @@ def build_structured_analysis_artifact(
     )
 
 
+def _workorder_priority_label(risk_level: str) -> str:
+    normalized = str(risk_level or "").strip()
+    if normalized == "高":
+        return "高优先级"
+    if normalized == "中":
+        return "中优先级"
+    if normalized == "低":
+        return "低优先级"
+    return "中优先级"
+
+
+def _workorder_completion_window(risk_level: str) -> str:
+    normalized = str(risk_level or "").strip()
+    if normalized == "高":
+        return "4小时内"
+    if normalized == "中":
+        return "24小时内"
+    return "72小时内"
+
+
+def _workorder_knowledge_hint(knowledge_artifact: KnowledgeStepArtifact, codes: list[str]) -> str:
+    summaries = _knowledge_action_summaries(knowledge_artifact, codes, per_code_limit=2)
+    for item in summaries:
+        if "：" in item:
+            label, value = item.split("：", 1)
+            if label.strip() in {"原因", "含义", "说明"}:
+                return value.strip().rstrip("。；;")
+    return summaries[0].strip().rstrip("。；;") if summaries else ""
+
+
+def _workorder_title(device_text: str, primary_code: str, workorder_type: str) -> str:
+    code_part = primary_code or "运行异常"
+    if workorder_type == "温升异常排查":
+        return f"{device_text} 温升异常排查"
+    if workorder_type == "供电检查":
+        return f"{device_text} 供电检查"
+    return f"{device_text} {code_part} 事件及速度偏差排查" if primary_code else f"{device_text} 运行异常排查"
+
+
+def _workorder_steps(
+    *,
+    primary_code: str,
+    speed_trigger: bool,
+    load_trigger: bool,
+    temp_trigger: bool,
+    voltage_trigger: bool,
+) -> list[str]:
+    steps = ["备份参数"]
+    if primary_code:
+        steps.append("检查单位制参数")
+        steps.append("重新激活功能块")
+    if speed_trigger:
+        steps.append("复核速度反馈链路")
+    if load_trigger:
+        steps.append("复核负载与机械传动状态")
+    if temp_trigger:
+        steps.append("检查散热与柜内温度")
+    if voltage_trigger:
+        steps.append("检查供电与母线电压波动")
+    return _dedupe_items(steps)
+
+
+def _workorder_acceptance_criteria(
+    *,
+    primary_code: str,
+    speed_trigger: bool,
+    load_trigger: bool,
+    temp_trigger: bool,
+    voltage_trigger: bool,
+) -> list[str]:
+    criteria = []
+    if primary_code:
+        criteria.append(f"{primary_code} 不再复现")
+    if speed_trigger:
+        criteria.append("速度偏差低于阈值")
+    if load_trigger:
+        criteria.append("负载率恢复正常")
+    if temp_trigger:
+        criteria.append("温度回落到关注阈值以下")
+    if voltage_trigger:
+        criteria.append("母线电压波动恢复正常")
+    return _dedupe_items(criteria)
+
+
+def build_workorder_suggestion(
+    *,
+    request: DiagnosisRequest,
+    sql_artifact: SqlStepArtifact,
+    knowledge_artifact: KnowledgeStepArtifact,
+    analysis_artifact: AnalysisStepArtifact,
+) -> WorkOrderSuggestion:
+    sql_report = _build_sql_report_summary(sql_artifact, knowledge_artifact=knowledge_artifact)
+    if not sql_report.rows:
+        return WorkOrderSuggestion(
+            need_workorder=False,
+            reason="SQL 未返回可解析运行数据，暂不自动生成工单。",
+            workorder_type="",
+            priority="P2",
+            priority_label=_workorder_priority_label("低"),
+            risk_level="低",
+            assignee_role="",
+            suggested_completion_window="",
+            diagnosis_conclusion=analysis_artifact.conclusion,
+            key_evidence=[],
+            processing_steps=[],
+            acceptance_criteria=[],
+            equipment_object=request.equipment_hint or "DCMA 系统",
+            fault_code=None,
+            title="",
+            trigger_source="故障诊断 Agent",
+            status="待派单",
+        )
+
+    latest = sql_report.rows[0]
+    devices = _unique_non_empty(sql_report.rows, "device_name")
+    fault_codes = _unique_codes(sql_report.rows, "fault_code")
+    alarm_codes = _unique_codes(sql_report.rows, "alarm_code")
+    effective_codes = _effective_codes(fault_codes, alarm_codes)
+    primary_code = effective_codes[0] if effective_codes else ""
+    primary_streak = _latest_code_streak(sql_report.rows, primary_code) if primary_code else 0
+    speed_deviation = _speed_deviation_percent(latest)
+    max_load = _metric_max(sql_report.rows, "inverter_load_rate", "motor_load_rate")
+    max_motor_temp = _metric_max(sql_report.rows, "motor_temp")
+    max_inverter_temp = _metric_max(sql_report.rows, "inverter_temp", "inverter_radiator_temp")
+    dc_voltage_values = _metric_values(sql_report.rows, "dc_voltage")
+    voltage_min = min(dc_voltage_values) if dc_voltage_values else None
+    voltage_max = max(dc_voltage_values) if dc_voltage_values else None
+    voltage_trigger = False
+    if voltage_min is not None and (voltage_min < _DC_VOLTAGE_LOWER or (voltage_max is not None and voltage_max > _DC_VOLTAGE_UPPER)):
+        voltage_trigger = True
+
+    speed_trigger = speed_deviation is not None and speed_deviation >= _SPEED_ERROR_WARNING_PERCENT
+    load_trigger = max_load is not None and max_load >= _LOAD_WARNING
+    temp_trigger = (
+        (max_motor_temp is not None and max_motor_temp >= _MOTOR_TEMP_WARNING)
+        or (max_inverter_temp is not None and max_inverter_temp >= _INVERTER_TEMP_WARNING)
+    )
+    severe_trigger = bool(
+        any(_is_fault_code(code) for code in effective_codes)
+        or primary_streak >= 3
+        or (speed_deviation is not None and speed_deviation >= _SPEED_ERROR_CRITICAL_PERCENT)
+        or (max_load is not None and max_load >= _LOAD_CRITICAL)
+        or (max_motor_temp is not None and max_motor_temp >= _MOTOR_TEMP_CRITICAL)
+        or (max_inverter_temp is not None and max_inverter_temp >= _INVERTER_TEMP_CRITICAL)
+        or voltage_trigger
+    )
+    need_workorder = bool(severe_trigger or speed_trigger or load_trigger or temp_trigger)
+
+    risk_level = "高" if (
+        any(_is_fault_code(code) for code in effective_codes)
+        or (speed_deviation is not None and speed_deviation >= _SPEED_ERROR_CRITICAL_PERCENT)
+        or (max_load is not None and max_load >= _LOAD_CRITICAL)
+        or (max_motor_temp is not None and max_motor_temp >= _MOTOR_TEMP_CRITICAL)
+        or (max_inverter_temp is not None and max_inverter_temp >= _INVERTER_TEMP_CRITICAL)
+        or voltage_trigger
+    ) else "中" if need_workorder else "低"
+
+    if any(_is_fault_code(code) for code in effective_codes) or primary_streak >= 3 or speed_trigger or load_trigger:
+        workorder_type = "参数复核 / 运行异常排查"
+    elif temp_trigger:
+        workorder_type = "温升异常排查"
+    elif voltage_trigger:
+        workorder_type = "供电检查"
+    else:
+        workorder_type = "运行异常排查"
+
+    device_label = devices[0] if devices else (request.equipment_hint or "DCMA 系统")
+    equipment_object = (
+        device_label if str(device_label).strip().startswith("DCMA") else f"DCMA / {device_label}"
+    )
+    knowledge_hint = _workorder_knowledge_hint(knowledge_artifact, effective_codes)
+    if primary_code:
+        code_text = primary_code
+    elif effective_codes:
+        code_text = " / ".join(effective_codes[:2])
+    else:
+        code_text = "运行异常"
+
+    diagnosis_clauses: list[str] = []
+    if knowledge_hint:
+        diagnosis_clauses.append(f"{code_text} 相关知识库提示：{knowledge_hint}")
+    elif effective_codes:
+        diagnosis_clauses.append(f"{code_text} 为持续异常事件线索")
+    if speed_trigger and speed_deviation is not None:
+        diagnosis_clauses.append(f"速度偏差 { _format_float(speed_deviation)}%")
+    if load_trigger and max_load is not None:
+        diagnosis_clauses.append(f"负载率 { _format_float(max_load)}%")
+    if temp_trigger:
+        diagnosis_clauses.append(
+            f"温度关注：电机 {_format_float(max_motor_temp)}℃，变频器 {_format_float(max_inverter_temp)}℃"
+        )
+    if voltage_trigger and voltage_min is not None and voltage_max is not None:
+        diagnosis_clauses.append(f"母线电压 {_format_float(voltage_min)}-{_format_float(voltage_max)}V 波动异常")
+
+    diagnosis_conclusion = "；".join(diagnosis_clauses) if diagnosis_clauses else analysis_artifact.conclusion
+
+    key_evidence: list[str] = []
+    if primary_code:
+        if primary_streak > 1:
+            key_evidence.append(f"最近 {primary_streak} 条均出现 {primary_code}")
+        else:
+            key_evidence.append(f"最近样本出现 {primary_code}")
+    elif effective_codes:
+        key_evidence.append(f"最近样本出现 {', '.join(effective_codes[:2])}")
+    if speed_trigger and speed_deviation is not None:
+        key_evidence.append(f"速度偏差 { _format_float(speed_deviation)}%")
+    if load_trigger and max_load is not None:
+        key_evidence.append(f"负载率 { _format_float(max_load)}%")
+    if not temp_trigger and (max_motor_temp is not None or max_inverter_temp is not None):
+        key_evidence.append(
+            f"温度正常，电机最高 {_format_float(max_motor_temp)}℃，变频器最高 {_format_float(max_inverter_temp)}℃"
+        )
+    if voltage_min is not None and voltage_max is not None and not voltage_trigger:
+        key_evidence.append(f"母线电压 {_format_float(voltage_min)}-{_format_float(voltage_max)}V")
+    if knowledge_hint:
+        key_evidence.append(f"RAG 提示：{knowledge_hint}")
+
+    processing_steps = _workorder_steps(
+        primary_code=primary_code,
+        speed_trigger=speed_trigger,
+        load_trigger=load_trigger,
+        temp_trigger=temp_trigger,
+        voltage_trigger=voltage_trigger,
+    )
+    acceptance_criteria = _workorder_acceptance_criteria(
+        primary_code=primary_code,
+        speed_trigger=speed_trigger,
+        load_trigger=load_trigger,
+        temp_trigger=temp_trigger,
+        voltage_trigger=voltage_trigger,
+    )
+
+    reason_parts: list[str] = []
+    if primary_code:
+        if primary_streak >= 3:
+            reason_parts.append(f"{primary_code} 持续出现 {primary_streak} 条")
+        else:
+            reason_parts.append(f"{primary_code} 事件持续存在")
+    if speed_trigger and speed_deviation is not None:
+        reason_parts.append(f"速度偏差 {_format_float(speed_deviation)}% 超过关注阈值")
+    if load_trigger and max_load is not None:
+        reason_parts.append(f"负载率 {_format_float(max_load)}% 进入关注区间")
+    if temp_trigger:
+        reason_parts.append("温度进入关注区间")
+    if voltage_trigger:
+        reason_parts.append("母线电压波动异常")
+    if not reason_parts:
+        reason_parts.append("当前样本未达到自动建单条件")
+    reason = "；".join(reason_parts)
+
+    title = _workorder_title(equipment_object, code_text if primary_code else "", workorder_type)
+    assignee_role = "电气维护人员"
+    completion_window = _workorder_completion_window(risk_level)
+
+    return WorkOrderSuggestion(
+        need_workorder=need_workorder,
+        reason=reason,
+        workorder_type=workorder_type,
+        priority="P1" if need_workorder else "P2",
+        priority_label=_workorder_priority_label(risk_level if need_workorder else "低"),
+        risk_level=risk_level,
+        assignee_role=assignee_role,
+        suggested_completion_window=completion_window,
+        diagnosis_conclusion=diagnosis_conclusion,
+        key_evidence=_dedupe_items(key_evidence)[:5],
+        processing_steps=processing_steps[:5],
+        acceptance_criteria=acceptance_criteria[:4],
+        equipment_object=equipment_object,
+        fault_code=primary_code or None,
+        title=title,
+        trigger_source="故障诊断 Agent",
+        status="待派单",
+    )
+
+
 def extract_report_url(save_result: str) -> str | None:
     matched = _REPORT_URL_RE.search(save_result or "")
     return matched.group(1) if matched else None
@@ -1680,7 +1957,8 @@ def build_report_payload(
     analysis_artifact: AnalysisStepArtifact,
     current_time: str,
     report_filename: str,
-) -> dict[str, str]:
+    workorder_suggestion: WorkOrderSuggestion | None = None,
+) -> dict[str, Any]:
     title, diagnosis_type = _report_title_and_type(request)
     sql_report = _build_sql_report_summary(
         sql_artifact,
@@ -1709,6 +1987,34 @@ def build_report_payload(
             f"{sql_report.maintenance}\n\n"
             f"### 报告能力边界\n{build_capability_boundary_markdown(REAL_DATA_LATEST_TABLE)}"
         )
+    base_recommendations = build_sop_recommendations_markdown(
+        generated_recommendations,
+        analysis_artifact.recommendations,
+    )
+    workorder_section = ""
+    if workorder_suggestion and workorder_suggestion.need_workorder:
+        evidence_lines = "\n".join(f"- {item}" for item in workorder_suggestion.key_evidence[:5]) or "- 暂无"
+        step_lines = "\n".join(f"- {item}" for item in workorder_suggestion.processing_steps[:5]) or "- 暂无"
+        criteria_lines = "\n".join(f"- {item}" for item in workorder_suggestion.acceptance_criteria[:5]) or "- 暂无"
+        workorder_lines = [
+            "### 待处理事项",
+            "- 建议动作：生成维修工单",
+            f"- 工单标题：{workorder_suggestion.title or '-'}",
+            f"- 工单类型：{workorder_suggestion.workorder_type or '-'}",
+            f"- 风险等级：{workorder_suggestion.risk_level or '-'}",
+            f"- 优先级：{workorder_suggestion.priority or '-'} {workorder_suggestion.priority_label or ''}".rstrip(),
+            f"- 建议负责人：{workorder_suggestion.assignee_role or '-'}",
+            f"- 建议完成时间：{workorder_suggestion.suggested_completion_window or '-'}",
+            "- 关键证据：",
+            evidence_lines,
+            "- 处理步骤：",
+            step_lines,
+            "- 验收标准：",
+            criteria_lines,
+        ]
+        workorder_section = "\n".join(workorder_lines)
+    workorder_suffix = f"\n\n{workorder_section}" if workorder_section else ""
+    repair_recommendations = f"{base_recommendations}{workorder_suffix}"
 
     return {
         "title": title,
@@ -1726,10 +2032,7 @@ def build_report_payload(
             f"{details_block('展开查看：知识库原文与长片段', _knowledge_report_section(knowledge_artifact))}"
         ),
         "fault_inference": f"{analysis_artifact.conclusion}\n\n{sql_report.fault_inference}",
-        "repair_recommendations": build_sop_recommendations_markdown(
-            generated_recommendations,
-            analysis_artifact.recommendations,
-        ),
+        "repair_recommendations": repair_recommendations,
         "preventive_maintenance": preventive_maintenance,
         "diagnosis_basis": (
             f"SQL 摘要：{sql_artifact.summary}\n"
@@ -1740,4 +2043,5 @@ def build_report_payload(
         ),
         "report_filename": report_filename,
         "chart_payload": sql_report.chart_payload,
+        "workorder_suggestion": workorder_suggestion.model_dump(exclude_none=True) if workorder_suggestion else None,
     }

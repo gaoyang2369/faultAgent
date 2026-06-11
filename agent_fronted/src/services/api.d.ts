@@ -19,6 +19,10 @@ export interface ChatMessage {
   timestamp?: string
   thread_id?: string
   threadId?: string
+  trace_id?: string | null
+  traceId?: string | null
+  request_id?: string | null
+  requestId?: string | null
   isMarkdown?: boolean
   hasChart?: boolean
   chartData?: any
@@ -36,6 +40,8 @@ export interface ChatMessage {
   reportFilename?: string | null
   reportUrl?: string | null
   reportArtifact?: any
+  workorderDecision?: any
+  workorder_decision?: any
   qualityGateNotice?: string | null
   rawFinalContent?: string
   toolLifecycleLedger?: any[]
@@ -51,6 +57,10 @@ export interface StreamCallbacks {
     raw_final_content?: string
     rawFinalContent?: string
     thread_id: string
+    trace_id?: string | null
+    traceId?: string | null
+    request_id?: string | null
+    requestId?: string | null
     stream_id?: string
     event_count: number
     todos: any[]
@@ -79,6 +89,8 @@ export interface StreamCallbacks {
     reportUrl?: string | null
     report_artifact?: any
     reportArtifact?: any
+    workorder_decision?: any
+    workorderDecision?: any
     quality_gate_notice?: string | null
     qualityGateNotice?: string | null
     release_ready?: boolean | null
@@ -285,6 +297,9 @@ export interface ChatAPI {
     priority?: string | null
     tags?: string[]
   }): Promise<any>
+  createWorkOrder(payload: Record<string, any>): Promise<any>
+  listWorkOrders(threadId?: string | null, limit?: number, filters?: { traceId?: string; status?: string }): Promise<any>
+  updateWorkOrder(payload: Record<string, any>): Promise<any>
 }
 
 export interface AdminAuthAPI {

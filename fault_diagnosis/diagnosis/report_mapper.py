@@ -13,6 +13,31 @@ def _build_report_filename(prefix: str, thread_id: str) -> str:
     return f"{prefix}_{timestamp}_{thread_id[-6:]}"
 
 
+def _workorder_section(workorder_decision: dict[str, Any]) -> str:
+    if not workorder_decision or not workorder_decision.get("need_workorder"):
+        return ""
+    evidence = "\n".join(f"- {item}" for item in (workorder_decision.get("key_evidence") or [])[:5]) or "- 暂无"
+    steps = "\n".join(f"- {item}" for item in (workorder_decision.get("processing_steps") or [])[:5]) or "- 暂无"
+    criteria = "\n".join(f"- {item}" for item in (workorder_decision.get("acceptance_criteria") or [])[:5]) or "- 暂无"
+    lines = [
+        "### 待处理事项",
+        "- 建议动作：生成维修工单",
+        f"- 工单标题：{workorder_decision.get('title') or '-'}",
+        f"- 工单类型：{workorder_decision.get('workorder_type') or '-'}",
+        f"- 风险等级：{workorder_decision.get('risk_level') or '-'}",
+        f"- 优先级：{workorder_decision.get('priority') or '-'} {workorder_decision.get('priority_label') or ''}".rstrip(),
+        f"- 建议负责人：{workorder_decision.get('assignee_role') or '-'}",
+        f"- 建议完成时间：{workorder_decision.get('suggested_completion_window') or '-'}",
+        "- 关键证据：",
+        evidence,
+        "- 处理步骤：",
+        steps,
+        "- 验收标准：",
+        criteria,
+    ]
+    return "\n\n" + "\n".join(lines)
+
+
 def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[str, Any]:
     """将结构化产物映射为 `save_report` 所需字段。"""
 
@@ -25,7 +50,11 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
         sql_artifact = payload.get("sql_artifact") or {}
         knowledge_artifact = payload.get("knowledge_artifact") or {}
         analysis_artifact = payload.get("analysis_artifact") or {}
+        workorder_decision = payload.get("workorder_decision") or {}
         report_filename = _build_report_filename("dcma_report_generation_fault", envelope.thread_id)
+        repair_recommendations = "\n".join(
+            f"- {item}" for item in (analysis_artifact.get("recommendations") or [])
+        ) or "- 暂无具体处置建议"
         return {
             "title": "DCMA 故障诊断报告",
             "report_time": report_time,
@@ -38,9 +67,7 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
                 f"【知识检索摘要】\n{knowledge_artifact.get('raw_output') or '无'}"
             ),
             "fault_inference": analysis_artifact.get("conclusion") or envelope.final_answer,
-            "repair_recommendations": "\n".join(
-                f"- {item}" for item in (analysis_artifact.get("recommendations") or [])
-            ) or "- 暂无具体处置建议",
+            "repair_recommendations": f"{repair_recommendations}{_workorder_section(workorder_decision)}",
             "preventive_maintenance": "建议结合本次诊断结果持续跟踪关键指标，并复核相关部件状态。",
             "diagnosis_basis": (
                 f"请求摘要：{envelope.request_summary}\n"

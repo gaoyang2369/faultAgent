@@ -40,6 +40,64 @@
       </ol>
     </div>
 
+    <div v-if="workOrderVisible" class="diagnosis-card__workorder">
+      <div class="diagnosis-card__section-title">工单建议</div>
+      <div class="diagnosis-card__workorder-box" :class="{ 'is-muted': !workOrderNeed }">
+        <div class="diagnosis-card__workorder-head">
+          <div>
+            <div class="diagnosis-card__workorder-status">
+              系统判断：{{ workOrderNeed ? '建议生成维修工单' : '暂不建议自动建单' }}
+            </div>
+            <div v-if="workOrderReason" class="diagnosis-card__workorder-reason">{{ workOrderReason }}</div>
+          </div>
+          <button
+            v-if="workOrderNeed"
+            type="button"
+            class="diagnosis-card__workorder-button"
+            :disabled="isCreatingWorkOrder || Boolean(createdWorkOrder)"
+            @click="createWorkOrder"
+          >
+            <WrenchScrewdriverIcon class="diagnosis-card__workorder-icon" />
+            <span>{{ createdWorkOrder ? '已生成' : isCreatingWorkOrder ? '生成中' : '生成工单' }}</span>
+          </button>
+        </div>
+        <div class="diagnosis-card__workorder-grid">
+          <div>
+            <span>工单类型</span>
+            <strong>{{ workOrderType }}</strong>
+          </div>
+          <div>
+            <span>优先级</span>
+            <strong>{{ workOrderPriority }}</strong>
+          </div>
+          <div>
+            <span>建议负责人</span>
+            <strong>{{ workOrderAssignee }}</strong>
+          </div>
+          <div>
+            <span>建议完成时间</span>
+            <strong>{{ workOrderWindow }}</strong>
+          </div>
+        </div>
+        <div v-if="workOrderEvidenceItems.length" class="diagnosis-card__workorder-evidence">
+          <span>关键证据</span>
+          <p>{{ workOrderEvidenceItems.join('；') }}</p>
+        </div>
+        <div v-if="createdWorkOrder" class="diagnosis-card__workorder-result">
+          <div class="diagnosis-card__workorder-created">
+            工单 {{ createdWorkOrder.work_order_id || createdWorkOrder.workOrderId }} 已生成
+          </div>
+          <div class="diagnosis-card__workorder-result-grid">
+            <span>标题：{{ createdWorkOrder.title || workOrderTitle }}</span>
+            <span>状态：{{ createdWorkOrder.status || '待派单' }}</span>
+            <span>优先级：{{ createdWorkOrder.priority || workOrderPriority }}</span>
+            <span>关联诊断记录：{{ traceIdLabel }}</span>
+          </div>
+        </div>
+        <div v-if="workOrderError" class="diagnosis-card__workorder-error">{{ workOrderError }}</div>
+      </div>
+    </div>
+
     <div class="diagnosis-card__details">
       <details v-if="basisItems.length" class="diagnosis-card__details-group">
         <summary>
@@ -87,7 +145,9 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { WrenchScrewdriverIcon } from '@heroicons/vue/24/outline'
+import { chatAPI } from '@/services/api.js'
 
 const props = defineProps({
   message: {
@@ -142,6 +202,16 @@ const knowledgeArtifact = computed(() => pickObject(
   props.message?.scenario_result?.payload?.knowledge_artifact
 ))
 
+const workOrderDecision = computed(() => pickObject(
+  props.message?.workorderDecision,
+  props.message?.workorder_decision,
+  props.message?.artifact?.payload?.workorder_decision,
+  props.message?.workflowResult?.payload?.workorder_decision,
+  props.message?.workflow_result?.payload?.workorder_decision,
+  props.message?.scenarioResult?.payload?.workorder_decision,
+  props.message?.scenario_result?.payload?.workorder_decision
+))
+
 const basisItems = computed(() => toList(analysisArtifact.value?.basis))
 const causeItems = computed(() => toList(analysisArtifact.value?.probable_causes))
 const verificationItems = computed(() => toList([
@@ -150,6 +220,9 @@ const verificationItems = computed(() => toList([
 ]))
 const recommendations = computed(() => toList(analysisArtifact.value?.recommendations))
 const conclusion = computed(() => cleanText(analysisArtifact.value?.conclusion || props.message?.content))
+const createdWorkOrder = ref(null)
+const isCreatingWorkOrder = ref(false)
+const workOrderError = ref('')
 
 const evidenceText = computed(() => [
   conclusion.value,
@@ -277,6 +350,100 @@ const actionItems = computed(() => recommendations.value.slice(0, 5).map((item, 
     text: matched?.[2] || item
   }
 }))
+
+const workOrderVisible = computed(() => Boolean(workOrderDecision.value))
+const workOrderNeed = computed(() => Boolean(workOrderDecision.value?.need_workorder ?? workOrderDecision.value?.needWorkorder))
+const workOrderReason = computed(() => cleanText(workOrderDecision.value?.reason))
+const workOrderType = computed(() => cleanText(workOrderDecision.value?.workorder_type || workOrderDecision.value?.workorderType || '运行异常排查'))
+const workOrderPriority = computed(() => {
+  const priority = cleanText(workOrderDecision.value?.priority || 'P2')
+  const label = cleanText(workOrderDecision.value?.priority_label || workOrderDecision.value?.priorityLabel)
+  return label ? `${priority} ${label}` : priority
+})
+const workOrderAssignee = computed(() => cleanText(workOrderDecision.value?.assignee_role || workOrderDecision.value?.assigneeRole || '电气维护人员'))
+const workOrderWindow = computed(() => cleanText(workOrderDecision.value?.suggested_completion_window || workOrderDecision.value?.suggestedCompletionWindow || '24小时内'))
+const workOrderTitle = computed(() => cleanText(workOrderDecision.value?.title || `${deviceLabel.value} ${faultCodeLabel.value || '运行异常'} 排查`))
+const workOrderEquipment = computed(() => cleanText(workOrderDecision.value?.equipment_object || workOrderDecision.value?.equipmentObject || deviceLabel.value || 'DCMA 系统'))
+const workOrderFaultCode = computed(() => cleanText(workOrderDecision.value?.fault_code || workOrderDecision.value?.faultCode || faultCodes.value[0] || ''))
+const workOrderEvidenceItems = computed(() => toList(workOrderDecision.value?.key_evidence || workOrderDecision.value?.keyEvidence).slice(0, 5))
+const workOrderStepItems = computed(() => toList(workOrderDecision.value?.processing_steps || workOrderDecision.value?.processingSteps).slice(0, 6))
+const workOrderAcceptanceItems = computed(() => toList(workOrderDecision.value?.acceptance_criteria || workOrderDecision.value?.acceptanceCriteria).slice(0, 5))
+const traceId = computed(() => cleanText(
+  props.message?.traceId ||
+  props.message?.trace_id ||
+  props.message?.trace?.trace_id ||
+  props.message?.artifact?.payload?.trace?.trace_id ||
+  props.message?.workflowResult?.payload?.trace?.trace_id ||
+  props.message?.workflow_result?.payload?.trace?.trace_id
+))
+const traceIdLabel = computed(() => traceId.value || '未绑定')
+const requestId = computed(() => cleanText(
+  props.message?.requestId ||
+  props.message?.request_id ||
+  props.message?.trace?.request_id ||
+  props.message?.artifact?.payload?.trace?.request_id ||
+  props.message?.workflowResult?.payload?.trace?.request_id ||
+  props.message?.workflow_result?.payload?.trace?.request_id
+))
+const threadId = computed(() => cleanText(
+  props.message?.threadId ||
+  props.message?.thread_id ||
+  props.message?.artifact?.thread_id ||
+  props.message?.artifact?.payload?.trace?.thread_id ||
+  props.message?.workflowResult?.metadata?.thread_id ||
+  props.message?.workflow_result?.metadata?.thread_id ||
+  props.message?.scenarioResult?.metadata?.thread_id ||
+  props.message?.scenario_result?.metadata?.thread_id
+))
+
+const createWorkOrderPayload = () => ({
+  title: workOrderTitle.value,
+  equipment_object: workOrderEquipment.value,
+  fault_code: workOrderFaultCode.value || null,
+  workorder_type: workOrderType.value,
+  priority: cleanText(workOrderDecision.value?.priority || 'P2'),
+  risk_level: cleanText(workOrderDecision.value?.risk_level || workOrderDecision.value?.riskLevel || '低'),
+  trigger_source: cleanText(workOrderDecision.value?.trigger_source || workOrderDecision.value?.triggerSource || '故障诊断 Agent'),
+  diagnosis_conclusion: cleanText(workOrderDecision.value?.diagnosis_conclusion || workOrderDecision.value?.diagnosisConclusion || conclusion.value),
+  key_evidence: workOrderEvidenceItems.value,
+  processing_steps: workOrderStepItems.value,
+  acceptance_criteria: workOrderAcceptanceItems.value,
+  assignee_role: workOrderAssignee.value,
+  suggested_completion_window: workOrderWindow.value,
+  status: cleanText(workOrderDecision.value?.status || '待派单'),
+  thread_id: threadId.value,
+  trace_id: traceId.value,
+  request_id: requestId.value || null,
+  source: {
+    trace_id: traceId.value,
+    request_id: requestId.value || null,
+    thread_id: threadId.value,
+    report_url: props.message?.reportUrl || props.message?.report_url || null,
+    analysis_artifact: analysisArtifact.value,
+    sql_summary: sqlArtifact.value?.summary || ''
+  }
+})
+
+const createWorkOrder = async () => {
+  if (createdWorkOrder.value || isCreatingWorkOrder.value) return
+  workOrderError.value = ''
+  if (!threadId.value || !traceId.value) {
+    workOrderError.value = '缺少 trace_id 或 thread_id，无法绑定诊断依据。'
+    return
+  }
+  isCreatingWorkOrder.value = true
+  try {
+    const response = await chatAPI.createWorkOrder(createWorkOrderPayload())
+    createdWorkOrder.value = response?.work_order || response?.workOrder || null
+    if (!createdWorkOrder.value) {
+      workOrderError.value = '工单已提交，但未返回工单详情。'
+    }
+  } catch (error) {
+    workOrderError.value = error?.message || '工单生成失败，请稍后重试。'
+  } finally {
+    isCreatingWorkOrder.value = false
+  }
+}
 
 const knowledgeSourceItems = computed(() => {
   const rawText = String(knowledgeArtifact.value?.raw_output || '')
@@ -505,6 +672,145 @@ function firstMatchFrom(text, patterns) {
   line-height: 1.5;
 }
 
+.diagnosis-card__workorder {
+  padding: 0.95rem 1rem 0;
+}
+
+.diagnosis-card__workorder-box {
+  padding: 0.75rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.diagnosis-card__workorder-box.is-muted {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
+.diagnosis-card__workorder-head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.diagnosis-card__workorder-status {
+  color: #0f172a;
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.diagnosis-card__workorder-reason {
+  margin-top: 0.22rem;
+  color: #475569;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.diagnosis-card__workorder-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.32rem;
+  flex-shrink: 0;
+  min-height: 2rem;
+  padding: 0.38rem 0.62rem;
+  border: 0;
+  border-radius: 8px;
+  background: #1d4ed8;
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.diagnosis-card__workorder-button:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+}
+
+.diagnosis-card__workorder-icon {
+  width: 0.92rem;
+  height: 0.92rem;
+}
+
+.diagnosis-card__workorder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.68rem;
+}
+
+.diagnosis-card__workorder-grid > div {
+  min-height: 3.3rem;
+  padding: 0.5rem 0.56rem;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.diagnosis-card__workorder-grid span,
+.diagnosis-card__workorder-evidence span {
+  display: block;
+  color: #64748b;
+  font-size: 0.7rem;
+}
+
+.diagnosis-card__workorder-grid strong {
+  display: block;
+  margin-top: 0.18rem;
+  color: #0f172a;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.diagnosis-card__workorder-evidence {
+  margin-top: 0.6rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.diagnosis-card__workorder-evidence p {
+  margin: 0.18rem 0 0;
+  color: #1e293b;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.diagnosis-card__workorder-result {
+  margin-top: 0.68rem;
+  padding: 0.62rem 0.68rem;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: #f0fdf4;
+}
+
+.diagnosis-card__workorder-created {
+  color: #166534;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.diagnosis-card__workorder-result-grid {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+  color: #14532d;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.diagnosis-card__workorder-error {
+  margin-top: 0.58rem;
+  color: #b91c1c;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
 .diagnosis-card__details {
   display: grid;
   gap: 0.5rem;
@@ -604,6 +910,28 @@ function firstMatchFrom(text, patterns) {
   background: rgba(15, 23, 42, 0.82);
 }
 
+:global(.dark) .diagnosis-card__workorder-box {
+  border-color: rgba(96, 165, 250, 0.35);
+  background: rgba(30, 41, 59, 0.82);
+}
+
+:global(.dark) .diagnosis-card__workorder-status,
+:global(.dark) .diagnosis-card__workorder-grid strong,
+:global(.dark) .diagnosis-card__workorder-evidence p {
+  color: #f8fafc;
+}
+
+:global(.dark) .diagnosis-card__workorder-reason,
+:global(.dark) .diagnosis-card__workorder-grid span,
+:global(.dark) .diagnosis-card__workorder-evidence span {
+  color: #cbd5e1;
+}
+
+:global(.dark) .diagnosis-card__workorder-grid > div,
+:global(.dark) .diagnosis-card__workorder-evidence {
+  background: rgba(15, 23, 42, 0.72);
+}
+
 @media (max-width: 640px) {
   .diagnosis-card__header,
   .diagnosis-card__action {
@@ -616,6 +944,14 @@ function firstMatchFrom(text, patterns) {
 
   .diagnosis-card__action {
     gap: 0.28rem;
+  }
+
+  .diagnosis-card__workorder-head {
+    flex-direction: column;
+  }
+
+  .diagnosis-card__workorder-button {
+    width: 100%;
   }
 }
 </style>

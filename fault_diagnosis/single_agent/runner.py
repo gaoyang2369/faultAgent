@@ -300,6 +300,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             "type": "chat_complete",
             "thread_id": self.thread_id,
             "trace_id": self.trace_id,
+            "request_id": self.request_id,
             "cancelled": True,
             "cancel_reason": self._cancel_reason(),
             "final_content": "",

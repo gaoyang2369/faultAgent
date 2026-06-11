@@ -374,6 +374,9 @@ export const normalizeChatMessage = (message = {}) => {
   const knowledgeArtifact = message.knowledgeArtifact || message.knowledge_artifact || null
   const analysisArtifact = message.analysisArtifact || message.analysis_artifact || null
   const reportArtifact = message.reportArtifact || message.report_artifact || null
+  const workorderDecision = message.workorderDecision || message.workorder_decision || null
+  const traceId = message.traceId || message.trace_id || message.trace?.trace_id || null
+  const requestId = message.requestId || message.request_id || message.trace?.request_id || null
 
   return {
     ...message,
@@ -389,6 +392,12 @@ export const normalizeChatMessage = (message = {}) => {
     knowledgeArtifact,
     analysisArtifact,
     reportArtifact,
+    workorderDecision,
+    workorder_decision: workorderDecision,
+    traceId,
+    trace_id: traceId,
+    requestId,
+    request_id: requestId,
     taskSnapshot: normalizeTerminalTaskSnapshot(message.taskSnapshot, streamState, statusText)
   }
 }
@@ -416,6 +425,10 @@ export const isRenderableChatMessage = (message = {}) => {
   }
 
   if (normalized.analysisArtifact || normalized.sqlArtifact || normalized.knowledgeArtifact) {
+    return true
+  }
+
+  if (normalized.workorderDecision) {
     return true
   }
 
@@ -479,7 +492,8 @@ export const mergeMessagesWithLocalCache = (serverMessages = [], cachedMessages 
       const shouldRestoreArtifacts = (
         (!message.analysisArtifact && cached.analysisArtifact) ||
         (!message.sqlArtifact && cached.sqlArtifact) ||
-        (!message.knowledgeArtifact && cached.knowledgeArtifact)
+        (!message.knowledgeArtifact && cached.knowledgeArtifact) ||
+        (!message.workorderDecision && cached.workorderDecision)
       )
 
       if (!shouldRestoreToolEvents && !shouldRestoreTaskSnapshot && !shouldRestoreToolLifecycleLedger && !shouldRestoreArtifacts) {
@@ -493,7 +507,10 @@ export const mergeMessagesWithLocalCache = (serverMessages = [], cachedMessages 
         ...(shouldRestoreToolLifecycleLedger ? { toolLifecycleLedger: cached.toolLifecycleLedger } : {}),
         ...(!message.analysisArtifact && cached.analysisArtifact ? { analysisArtifact: cached.analysisArtifact } : {}),
         ...(!message.sqlArtifact && cached.sqlArtifact ? { sqlArtifact: cached.sqlArtifact } : {}),
-        ...(!message.knowledgeArtifact && cached.knowledgeArtifact ? { knowledgeArtifact: cached.knowledgeArtifact } : {})
+        ...(!message.knowledgeArtifact && cached.knowledgeArtifact ? { knowledgeArtifact: cached.knowledgeArtifact } : {}),
+        ...(!message.workorderDecision && cached.workorderDecision ? { workorderDecision: cached.workorderDecision } : {}),
+        ...(!message.traceId && cached.traceId ? { traceId: cached.traceId, trace_id: cached.traceId } : {}),
+        ...(!message.requestId && cached.requestId ? { requestId: cached.requestId, request_id: cached.requestId } : {})
       }
     }
 
@@ -509,7 +526,12 @@ export const mergeMessagesWithLocalCache = (serverMessages = [], cachedMessages 
         : cached.toolLifecycleLedger,
       analysisArtifact: message.analysisArtifact || cached.analysisArtifact || null,
       sqlArtifact: message.sqlArtifact || cached.sqlArtifact || null,
-      knowledgeArtifact: message.knowledgeArtifact || cached.knowledgeArtifact || null
+      knowledgeArtifact: message.knowledgeArtifact || cached.knowledgeArtifact || null,
+      workorderDecision: message.workorderDecision || cached.workorderDecision || null,
+      traceId: message.traceId || cached.traceId || null,
+      trace_id: message.traceId || cached.traceId || null,
+      requestId: message.requestId || cached.requestId || null,
+      request_id: message.requestId || cached.requestId || null
     }
   })
 

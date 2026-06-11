@@ -17,6 +17,7 @@ from ..diagnosis.contracts import (
     KnowledgeStepArtifact,
     ReportStepArtifact,
     SqlStepArtifact,
+    WorkOrderSuggestion,
 )
 from ..diagnosis.report_mapper import map_artifact_to_report_payload
 from ..diagnosis.steps import (
@@ -46,6 +47,7 @@ from .reporting import (
     build_analysis_evidence_summary,
     build_structured_analysis_artifact,
     build_report_payload,
+    build_workorder_suggestion,
     extract_report_filename,
     extract_report_url,
 )
@@ -257,6 +259,22 @@ class SingleAgentStagesMixin:
         self._record_artifact("analysis", artifact, stage="analysis")
         return artifact
 
+    async def decide_workorder(
+        self,
+        request: DiagnosisRequest,
+        sql_artifact: SqlStepArtifact,
+        knowledge_artifact: KnowledgeStepArtifact,
+        analysis_artifact: AnalysisStepArtifact,
+    ) -> WorkOrderSuggestion:
+        suggestion = build_workorder_suggestion(
+            request=request,
+            sql_artifact=sql_artifact,
+            knowledge_artifact=knowledge_artifact,
+            analysis_artifact=analysis_artifact,
+        )
+        self._record_artifact("workorder_decision", suggestion, stage="workorder_decision")
+        return suggestion
+
     def _build_analysis_artifact_from_payload(
         self,
         payload: dict[str, Any],
@@ -400,6 +418,7 @@ class SingleAgentStagesMixin:
         sql_artifact: SqlStepArtifact,
         knowledge_artifact: KnowledgeStepArtifact,
         analysis_artifact: AnalysisStepArtifact,
+        workorder_suggestion: WorkOrderSuggestion | None,
         current_time: str,
     ) -> AsyncGenerator[str, None]:
         report_filename = f"dcma_single_agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{self.thread_id[-6:]}"
@@ -410,6 +429,7 @@ class SingleAgentStagesMixin:
             analysis_artifact=analysis_artifact,
             current_time=current_time,
             report_filename=report_filename,
+            workorder_suggestion=workorder_suggestion,
         )
         async for chunk in self._invoke_restricted_tool(
             tool_name="save_report",
@@ -512,6 +532,7 @@ class SingleAgentStagesMixin:
         sql_artifact: SqlStepArtifact,
         knowledge_artifact: KnowledgeStepArtifact,
         analysis_artifact: AnalysisStepArtifact,
+        workorder_suggestion: WorkOrderSuggestion,
         report_artifact: ReportStepArtifact,
         final_answer: str,
         decision: SingleAgentDecision,
@@ -529,6 +550,7 @@ class SingleAgentStagesMixin:
             sql_artifact=sql_artifact,
             knowledge_artifact=knowledge_artifact,
             analysis_artifact=analysis_artifact,
+            workorder_suggestion=workorder_suggestion,
             report_artifact=report_artifact,
             final_answer=final_answer,
             decision=decision,

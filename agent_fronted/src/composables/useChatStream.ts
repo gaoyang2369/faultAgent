@@ -779,6 +779,8 @@ export const useChatStream = ({
     )
     const patch: Record<string, any> = {
       content: finalContent,
+      thread_id: threadId,
+      threadId,
       isStreaming: false,
       streamState: 'completed',
       statusText: '回复完成',
@@ -787,6 +789,10 @@ export const useChatStream = ({
 
     patch.evidences = payload.evidences || []
     patch.normalizedEvidences = payload.normalizedEvidences || payload.normalized_evidences || []
+    patch.traceId = payload.traceId || payload.trace_id || null
+    patch.trace_id = payload.trace_id || payload.traceId || null
+    patch.requestId = payload.requestId || payload.request_id || null
+    patch.request_id = payload.request_id || payload.requestId || null
     patch.findings = payload.findings || []
     patch.findingLinks = payload.findingLinks || payload.finding_links || []
     patch.workflowResult = payload.workflowResult || payload.workflow_result || null
@@ -801,6 +807,8 @@ export const useChatStream = ({
     patch.sqlArtifact = payload.sqlArtifact || payload.sql_artifact || null
     patch.knowledgeArtifact = payload.knowledgeArtifact || payload.knowledge_artifact || null
     patch.analysisArtifact = payload.analysisArtifact || payload.analysis_artifact || null
+    patch.workorderDecision = payload.workorderDecision || payload.workorder_decision || null
+    patch.workorder_decision = payload.workorder_decision || payload.workorderDecision || null
     patch.artifact = payload.artifact || null
     patch.workflowStages = payload.workflowStages || payload.workflow_stages || []
     patch.currentWorkflowStage = payload.currentWorkflowStage || payload.current_stage || null
@@ -1083,6 +1091,8 @@ export const useChatStream = ({
             ensureChatHistoryItem(completeData.thread_id, 'server')
             const patch: Record<string, any> = {
               content: completeData.grounded_final_content || completeData.content,
+              thread_id: completeData.thread_id,
+              threadId: completeData.thread_id,
               rawFinalContent: completeData.rawFinalContent || completeData.raw_final_content || completeData.content,
               isStreaming: false,
               streamState: 'completed',
@@ -1092,6 +1102,10 @@ export const useChatStream = ({
             patch.statusText = gateStatusTextMap[reportGate] || '回复完成'
             patch.evidences = completeData.evidences || []
             patch.normalizedEvidences = completeData.normalizedEvidences || completeData.normalized_evidences || []
+            patch.traceId = completeData.traceId || completeData.trace_id || null
+            patch.trace_id = completeData.trace_id || completeData.traceId || null
+            patch.requestId = completeData.requestId || completeData.request_id || null
+            patch.request_id = completeData.request_id || completeData.requestId || null
             patch.findings = completeData.findings || []
             patch.findingLinks = completeData.finding_links || []
             patch.workflowResult = completeData.workflowResult || completeData.workflow_result || null
@@ -1109,6 +1123,8 @@ export const useChatStream = ({
             patch.sqlArtifact = completeData.sqlArtifact || completeData.sql_artifact || null
             patch.knowledgeArtifact = completeData.knowledgeArtifact || completeData.knowledge_artifact || null
             patch.analysisArtifact = completeData.analysisArtifact || completeData.analysis_artifact || null
+            patch.workorderDecision = completeData.workorderDecision || completeData.workorder_decision || null
+            patch.workorder_decision = completeData.workorder_decision || completeData.workorderDecision || null
             patch.artifact = completeData.artifact || null
             patch.qualityGateNotice = completeData.qualityGateNotice || completeData.quality_gate_notice || null
             patch.releaseReady = completeData.releaseReady ?? completeData.release_ready ?? null

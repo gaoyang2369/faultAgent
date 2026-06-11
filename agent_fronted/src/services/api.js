@@ -410,6 +410,10 @@ export const chatAPI = {
           groundedFinalContent: data.grounded_final_content || fullContent,
           thread_id: activeThreadId,
           threadId: activeThreadId,
+          trace_id: data.trace_id || null,
+          traceId: data.trace_id || null,
+          request_id: data.request_id || null,
+          requestId: data.request_id || null,
           stream_id: data.stream_id || streamId,
           streamId: data.stream_id || streamId,
           event_count: data.event_count,
@@ -449,6 +453,8 @@ export const chatAPI = {
           knowledgeArtifact: data.knowledge_artifact || null,
           analysis_artifact: data.analysis_artifact || null,
           analysisArtifact: data.analysis_artifact || null,
+          workorder_decision: data.workorder_decision || null,
+          workorderDecision: data.workorder_decision || null,
           artifact: data.artifact || null,
           quality_gate_notice: data.quality_gate_notice || null,
           qualityGateNotice: data.quality_gate_notice || null,
@@ -626,6 +632,41 @@ export const chatAPI = {
       throw new Error(`HTTP error! status: ${response.status}`)
     }
     return response.json()
+  },
+
+  async createWorkOrder(payload) {
+    return fetchJsonWithSession(`${BASE_URL}/api/workorders`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    })
+  },
+
+  async listWorkOrders(threadId, limit = 10, filters = {}) {
+    const params = new URLSearchParams()
+    if (threadId) {
+      params.set('thread_id', threadId)
+    }
+    if (filters.traceId) {
+      params.set('trace_id', filters.traceId)
+    }
+    if (filters.status) {
+      params.set('status', filters.status)
+    }
+    params.set('limit', String(limit))
+    return fetchJsonWithSession(`${BASE_URL}/api/workorders?${params.toString()}`)
+  },
+
+  async updateWorkOrder(payload) {
+    return fetchJsonWithSession(`${BASE_URL}/api/workorders/update`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    })
   }
 }
 

@@ -13,6 +13,7 @@ from ..diagnosis.contracts import (
     KnowledgeStepArtifact,
     ReportStepArtifact,
     SqlStepArtifact,
+    WorkOrderSuggestion,
 )
 from .contracts import AgentTrace, SingleAgentDecision
 
@@ -24,6 +25,7 @@ def build_diagnosis_artifact_envelope(
     sql_artifact: SqlStepArtifact,
     knowledge_artifact: KnowledgeStepArtifact,
     analysis_artifact: AnalysisStepArtifact,
+    workorder_suggestion: WorkOrderSuggestion,
     report_artifact: ReportStepArtifact,
     final_answer: str,
     decision: SingleAgentDecision,
@@ -63,6 +65,7 @@ def build_diagnosis_artifact_envelope(
             "sql_artifact": sql_artifact.model_dump(exclude_none=True),
             "knowledge_artifact": knowledge_artifact.model_dump(exclude_none=True),
             "analysis_artifact": analysis_artifact.model_dump(exclude_none=True),
+            "workorder_decision": workorder_suggestion.model_dump(exclude_none=True),
             "report_artifact": report_artifact.model_dump(exclude_none=True),
             "trace": trace.model_dump(exclude_none=True),
         },

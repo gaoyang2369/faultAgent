@@ -104,6 +104,7 @@ class SingleAgentFlowMixin:
                         "type": "chat_complete",
                         "thread_id": self.thread_id,
                         "trace_id": self.trace_id,
+                        "request_id": self.request_id,
                         "runtime": "restricted_single_agent",
                         "final_content": direct_answer,
                         "report_filename": None,
@@ -165,6 +166,7 @@ class SingleAgentFlowMixin:
                         "type": "chat_complete",
                         "thread_id": self.thread_id,
                         "trace_id": self.trace_id,
+                        "request_id": self.request_id,
                         "runtime": "restricted_single_agent",
                         "final_content": final_answer,
                         "report_filename": report_artifact.report_filename,
@@ -239,6 +241,22 @@ class SingleAgentFlowMixin:
                 yield self._build_cancel_complete_frame()
                 return
 
+            stage_started = self._start_stage("workorder_decision", "判断是否建议生成维修工单")
+            async for ping in self._drive_step(
+                self.decide_workorder(request, sql_artifact, knowledge_artifact, analysis_artifact),
+                stage="workorder_decision",
+            ):
+                yield ping
+            workorder_suggestion = self._last_step_result
+            self._finish_stage(
+                "workorder_decision",
+                stage_started,
+                message=workorder_suggestion.reason,
+            )
+            if self._is_cancelled():
+                yield self._build_cancel_complete_frame()
+                return
+
             if decision.needs_report:
                 stage_started = self._start_stage("report", "生成可视化 HTML 报告")
                 async for chunk in self.stream_report_step(
@@ -246,6 +264,7 @@ class SingleAgentFlowMixin:
                     sql_artifact,
                     knowledge_artifact,
                     analysis_artifact,
+                    workorder_suggestion,
                     current_time,
                 ):
                     yield chunk
@@ -274,6 +293,7 @@ class SingleAgentFlowMixin:
                 sql_artifact,
                 knowledge_artifact,
                 analysis_artifact,
+                workorder_suggestion,
                 report_artifact,
                 final_answer,
                 decision,
@@ -301,6 +321,7 @@ class SingleAgentFlowMixin:
                 "type": "chat_complete",
                 "thread_id": self.thread_id,
                 "trace_id": self.trace_id,
+                "request_id": self.request_id,
                 "runtime": "restricted_single_agent",
                 "final_content": final_answer,
                 "report_filename": report_artifact.report_filename,
@@ -309,6 +330,7 @@ class SingleAgentFlowMixin:
                 "sql_artifact": sql_artifact.model_dump(exclude_none=True),
                 "knowledge_artifact": knowledge_artifact.model_dump(exclude_none=True),
                 "analysis_artifact": analysis_artifact.model_dump(exclude_none=True),
+                "workorder_decision": workorder_suggestion.model_dump(exclude_none=True),
                 "report_artifact": report_artifact.model_dump(exclude_none=True),
                 "artifact": saved_envelope.model_dump(exclude_none=True),
                 "trace": self.trace.model_dump(exclude_none=True),
