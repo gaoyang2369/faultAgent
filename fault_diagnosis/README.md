@@ -1,6 +1,6 @@
 # fault_diagnosis 后端说明
 
-`fault_diagnosis/` 是项目唯一后端源码根，当前主链路是限制型单 Agent：请求理解、受限 SQL、知识库检索、诊断分析、可选 Markdown 报告、最终回答。后端不再维护多 agent、多流程分流或在线质量评估链路。
+`fault_diagnosis/` 是项目唯一后端源码根，当前主链路是限制型单 Agent：请求理解、受限 SQL、知识库检索、诊断分析、可选可视化 HTML 报告、最终回答。后端不再维护多 agent、多流程分流或在线质量评估链路。
 
 ## 启动入口
 
@@ -30,7 +30,7 @@ fault_diagnosis/
   agent_runtime/         SSE 编码、流调度、取消控制、错误分类
   single_agent/          单 agent 编排、阶段处理、prompt、策略与序列化 helper
   diagnosis/             诊断域合同、step helper、artifact store
-  tools/                 SQL、知识库、Markdown 报告工具
+  tools/                 SQL、知识库、HTML 报告工具
   knowledge/             FAISS/Ollama 知识库与上传 PDF 知识库
   repositories/          历史索引、PDF registry、治理文件仓储
   runtime/               dev mode、请求 namespace、前端兼容契约适配
@@ -70,7 +70,7 @@ understand
 - `query_knowledge_base`
 - `save_report`
 
-SQL 阶段只允许访问 `real_data`、`device_alarm`、`device_metric`、`device_fault_data`、`fault_records`，并只允许只读 `SELECT/WITH` 查询。未知表或非只读 SQL 会回退到受限最近数据查询。
+SQL 阶段只允许访问 `real_data_01`、`real_data_02`、`real_data_03`、`device_alarm`、`device_metric`、`device_fault_data`、`fault_records`，并只允许只读 `SELECT/WITH` 查询。最近/当前运行状态默认查询 `real_data_01`，未知表、旧表 `real_data` 或非只读 SQL 会回退到受限最近数据查询。
 
 `single_agent/` 内部按职责拆分：
 

@@ -23,7 +23,7 @@ DCMA_SYSTEM_PROMPT = """
 | 2 | 查询 DCMA 数据 | `sql_db_query_checker` / `sql_db_query` | 受限 SQL 与数据结果 |
 | 3 | 补充知识 | `query_knowledge_base` | 故障码、处理建议、标准依据 |
 | 4 | 诊断分析 | - | 结论、依据、建议、不确定性 |
-| 5 | 可选报告 | `save_report` | Markdown 报告文件名与摘要 |
+| 5 | 可选报告 | `save_report` | 可视化 HTML 报告文件名与摘要 |
 | 6 | 返回结果 | - | 结论、依据、建议、报告路径 |
 
 ## 查询路由硬规则
@@ -48,7 +48,7 @@ DCMA_SYSTEM_PROMPT = """
 
 如果没有先查 SQL，就不能把“当前原因”或“能否直接出报告”说成确定判断。
 
-注意：`DCMA` 是系统/数据库范围，不是 `real_data.device_name` 的具体取值。用户说“dcma 当前运行情况”“生成 dcma 报告”时，应查询 `real_data` 最近数据，不要生成 `WHERE device_name = 'dcma'`。
+注意：`DCMA` 是系统/数据库范围，不是运行数据表 `device_name` 的具体取值。用户说“dcma 当前运行情况”“生成 dcma 报告”时，应查询 `real_data_01` 最近数据，不要生成 `WHERE device_name = 'dcma'`。旧表 `real_data` 暂不使用，运行数据只允许使用 `real_data_01`、`real_data_02`、`real_data_03`。
 
 ## 工具使用规范
 
@@ -62,7 +62,7 @@ DCMA_SYSTEM_PROMPT = """
 ## 报告生成要求
 
 - 先给出一句话结论，再给出关键数据和建议。
-- Markdown 报告用于详细技术说明，可包含知识库依据、SQL 结果摘要和图片引用。
+- HTML 报告用于详细技术说明，可包含知识库依据、SQL 结果摘要和运行数据可视化。
 - 生成报告前，应优先按照“结论 -> 对应证据 -> 不确定性 -> 下一步动作”的顺序组织内容；若当前会话已有 trace / artifact，报告应尽量围绕这些结构展开。
 - 最终回答必须明确输出报告文件名，例如 `dcma_daily_status_20260407.html`。
 

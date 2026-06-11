@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fault_diagnosis.diagnosis.contracts import (
     AnalysisStepArtifact,
     DiagnosisRequest,
@@ -7,7 +9,8 @@ from fault_diagnosis.diagnosis.contracts import (
     SqlStepArtifact,
 )
 from fault_diagnosis.single_agent.reporting import build_report_payload, build_structured_analysis_artifact
-from fault_diagnosis.single_agent.sql_safety import REAL_DATA_FALLBACK_COLUMNS
+from fault_diagnosis.single_agent.sql_safety import REAL_DATA_FALLBACK_COLUMNS, REAL_DATA_LATEST_TABLE
+from fault_diagnosis.tools.report_tools import _build_report_html
 
 
 def test_report_payload_renders_real_data_rows_as_tables() -> None:
@@ -22,10 +25,13 @@ def test_report_payload_renders_real_data_rows_as_tables() -> None:
         report_format="markdown",
         analysis_goal="生成运行状态报告",
     )
-    sql = f"SELECT {REAL_DATA_FALLBACK_COLUMNS} FROM real_data WHERE 1=1 ORDER BY real_data.create_time DESC, id DESC LIMIT 50"
+    sql = (
+        f"SELECT {REAL_DATA_FALLBACK_COLUMNS} FROM {REAL_DATA_LATEST_TABLE} "
+        f"WHERE 1=1 ORDER BY {REAL_DATA_LATEST_TABLE}.create_time DESC, id DESC LIMIT 50"
+    )
     sql_artifact = SqlStepArtifact(
         success=True,
-        summary="查询 real_data 最近 50 条运行状态、异常码和关键运行指标。",
+        summary=f"查询 {REAL_DATA_LATEST_TABLE} 最近 50 条运行状态、异常码和关键运行指标。",
         sql_used=[sql],
         raw_output=str(
             [
@@ -68,7 +74,7 @@ def test_report_payload_renders_real_data_rows_as_tables() -> None:
     analysis_artifact = AnalysisStepArtifact(
         success=True,
         conclusion="最近记录显示设备存在故障码，需要现场复核。",
-        basis=["SQL 返回最新 real_data 行"],
+        basis=[f"SQL 返回最新 {REAL_DATA_LATEST_TABLE} 行"],
         recommendations=["核对 F1030 对应手册含义"],
         confidence="medium",
     )
@@ -81,9 +87,12 @@ def test_report_payload_renders_real_data_rows_as_tables() -> None:
         report_filename="test-report",
     )
 
-    assert "已获取 1 条 DCMA 运行数据" in payload["executive_summary"]
+    assert f"已从 {REAL_DATA_LATEST_TABLE} 获取 1 条 DCMA 运行数据" in payload["executive_summary"]
     assert "不能等同于当前实时状态" not in payload["executive_summary"]
     assert "数据时间戳" not in payload["executive_summary"]
+    assert "real_data_01" in payload["executive_summary"]
+    assert "### 运行健康判定" in payload["diagnosis_details"]
+    assert "### 异常特征解读" in payload["diagnosis_details"]
     assert "### 指标趋势可视化" in payload["diagnosis_details"]
     assert "### 最新运行快照" in payload["diagnosis_details"]
     assert "### 状态分布" in payload["diagnosis_details"]
@@ -91,6 +100,43 @@ def test_report_payload_renders_real_data_rows_as_tables() -> None:
     assert "| 时间 | 设备 | 状态 | 故障码 | 告警码" in payload["diagnosis_details"]
     assert "G120电机1" in payload["diagnosis_details"]
     assert "F1030-0/0/0" in payload["fault_inference"]
+    chart_payload = json.loads(payload["chart_payload"])
+    assert chart_payload["source_table"] == REAL_DATA_LATEST_TABLE
+    assert chart_payload["trend_metrics"]
+    assert chart_payload["fault_counts"] == [{"name": "F1030-0/0/0", "value": 1}]
+
+
+def test_report_html_embeds_echarts_visualization() -> None:
+    chart_payload = json.dumps(
+        {
+            "timestamps": ["2026-06-10 12:12:59"],
+            "trend_metrics": [{"key": "dc_voltage", "name": "母线电压(V)", "values": [555.2]}],
+            "status_counts": [{"name": "42", "value": 1}],
+            "fault_counts": [{"name": "A07089", "value": 1}],
+            "latest_metrics": [{"name": "实际转速", "value": 442.2}],
+        },
+        ensure_ascii=False,
+    )
+
+    html = _build_report_html(
+        title="DCMA 故障诊断报告",
+        report_time="2026-06-11 20:00:00",
+        diagnosis_object="DCMA 系统",
+        diagnosis_type="故障诊断",
+        executive_summary="摘要",
+        diagnosis_overview="概述",
+        diagnosis_details="详情",
+        fault_inference="推断",
+        repair_recommendations="- 建议",
+        preventive_maintenance="- 维护",
+        diagnosis_basis="依据",
+        chart_payload=chart_payload,
+    )
+
+    assert "运行数据可视化" in html
+    assert "dcma-trend-chart" in html
+    assert "cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js" in html
+    assert "A07089" in html
 
 
 def test_structured_analysis_avoids_stale_timestamp_language() -> None:

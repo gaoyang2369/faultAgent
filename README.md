@@ -1,6 +1,6 @@
 # 工业设备故障诊断专家系统
 
-这是一个面向 DCMA 工业设备的故障诊断 Agent 项目。当前后端已经收敛为限制型单 Agent 主链路：受控地查询设备数据、检索 PDF 知识库、形成诊断结论，并按需生成 Markdown 报告。
+这是一个面向 DCMA 工业设备的故障诊断 Agent 项目。当前后端已经收敛为限制型单 Agent 主链路：受控地查询设备数据、检索 PDF 知识库、形成诊断结论，并按需生成可视化 HTML 报告。
 
 ## 当前架构
 
@@ -20,7 +20,7 @@ Vue 3 frontend
 - 单 Agent 故障诊断：请求理解、受限 SQL、知识库检索、诊断分析、最终回答。
 - 受限 SQL：只允许白名单表和只读查询，异常 SQL 自动回退到安全查询。
 - PDF 知识库：基于 FAISS/Ollama embeddings 查询设备手册和故障码资料。
-- Markdown 报告：通过 `save_report` 保存到前端可访问的 `/reports` 静态目录。
+- 可视化 HTML 报告：通过 `save_report` 保存到前端可访问的 `/reports` 静态目录。
 - 会话隔离：服务端 session cookie 管理 thread 归属，忽略不可信的前端身份参数。
 - 管理员 PDF：支持上传 PDF、OCR/解析、校正、归档到上传知识库。
 
@@ -36,7 +36,7 @@ Vue 3 frontend
 │   ├── single_agent/       # 限制型单 Agent
 │   ├── agent_runtime/      # SSE、流控、错误分类
 │   ├── diagnosis/          # 诊断合同、step、artifact store
-│   ├── tools/              # SQL、知识库、Markdown 报告工具
+│   ├── tools/              # SQL、知识库、HTML 报告工具
 │   ├── knowledge/          # FAISS/Ollama 知识库
 │   ├── repositories/       # 文件/索引仓储
 │   └── infrastructure/     # lifespan、CORS、模型、数据库池

@@ -1,11 +1,11 @@
-﻿"""Markdown report generation tool for the single-agent diagnosis path."""
+﻿"""HTML report generation tool for the single-agent diagnosis path."""
 
 from __future__ import annotations
 
 import os
+import json
 import re
 from html import escape
-from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -187,6 +187,214 @@ def _markdown_to_html(markdown: str) -> str:
     return "\n".join(html_parts)
 
 
+def _load_chart_payload(chart_payload: str | None) -> dict | None:
+    if not chart_payload:
+        return None
+    try:
+        payload = json.loads(chart_payload)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    has_data = any(
+        isinstance(payload.get(key), list) and payload.get(key)
+        for key in ("trend_metrics", "status_counts", "fault_counts", "latest_metrics")
+    )
+    return payload if has_data else None
+
+
+def _json_for_script(payload: dict) -> str:
+    return (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def _build_chart_section(chart_payload: dict | None) -> str:
+    if not chart_payload:
+        return ""
+    data_json = _json_for_script(chart_payload)
+    return f"""
+    <section class="report-section chart-section" aria-label="运行数据可视化">
+      <div class="section-kicker">VIS</div>
+      <h2>运行数据可视化</h2>
+      <div class="chart-grid">
+        <article class="chart-panel chart-panel-wide">
+          <h3>关键指标趋势</h3>
+          <div id="dcma-trend-chart" class="chart-box"></div>
+        </article>
+        <article class="chart-panel">
+          <h3>状态字分布</h3>
+          <div id="dcma-status-chart" class="chart-box chart-box-small"></div>
+        </article>
+        <article class="chart-panel">
+          <h3>异常码分布</h3>
+          <div id="dcma-fault-chart" class="chart-box chart-box-small"></div>
+        </article>
+        <article class="chart-panel chart-panel-wide">
+          <h3>最新关键指标</h3>
+          <div id="dcma-latest-chart" class="chart-box chart-box-small"></div>
+        </article>
+      </div>
+      <p class="chart-status" data-chart-status>图表加载中；若网络受限，请参考下方数据表。</p>
+      <script type="application/json" id="dcma-chart-data">{data_json}</script>
+    </section>
+    """
+
+
+def _build_chart_assets(chart_payload: dict | None) -> str:
+    if not chart_payload:
+        return ""
+    return """
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <script>
+    (function () {
+      var palette = ["#0f766e", "#2563eb", "#d97706", "#dc2626", "#7c3aed", "#0891b2", "#65a30d", "#be185d"];
+
+      function ready(callback) {
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", callback);
+        } else {
+          callback();
+        }
+      }
+
+      function readChartData() {
+        var node = document.getElementById("dcma-chart-data");
+        if (!node) return null;
+        try {
+          return JSON.parse(node.textContent || "{}");
+        } catch (error) {
+          return null;
+        }
+      }
+
+      function initChart(id) {
+        var element = document.getElementById(id);
+        if (!element || !window.echarts) return null;
+        return window.echarts.init(element, null, { renderer: "canvas" });
+      }
+
+      function setEmpty(id, text) {
+        var element = document.getElementById(id);
+        if (element) {
+          element.innerHTML = '<div class="chart-empty">' + text + '</div>';
+        }
+      }
+
+      function renderPie(chart, title, data) {
+        if (!chart || !Array.isArray(data) || data.length === 0) return false;
+        chart.setOption({
+          color: palette,
+          tooltip: { trigger: "item" },
+          legend: { type: "scroll", bottom: 0, textStyle: { color: "#4b5563" } },
+          series: [{
+            name: title,
+            type: "pie",
+            radius: ["42%", "68%"],
+            center: ["50%", "43%"],
+            avoidLabelOverlap: true,
+            label: { formatter: "{b}: {c}", color: "#243047" },
+            labelLine: { length: 10, length2: 8 },
+            data: data
+          }]
+        });
+        return true;
+      }
+
+      ready(function () {
+        var data = readChartData();
+        var status = document.querySelector("[data-chart-status]");
+        if (!data || !window.echarts) {
+          if (status) status.textContent = "图表资源未加载，已保留下方表格数据用于审阅。";
+          return;
+        }
+
+        var charts = [];
+        var trendChart = initChart("dcma-trend-chart");
+        if (trendChart && Array.isArray(data.trend_metrics) && data.trend_metrics.length) {
+          var hasZoom = Array.isArray(data.timestamps) && data.timestamps.length > 16;
+          trendChart.setOption({
+            color: palette,
+            tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+            legend: { type: "scroll", top: 0, textStyle: { color: "#4b5563" } },
+            grid: { left: 48, right: 28, top: 56, bottom: hasZoom ? 54 : 28, containLabel: true },
+            xAxis: {
+              type: "category",
+              boundaryGap: false,
+              data: data.timestamps || [],
+              axisLabel: { color: "#64748b", hideOverlap: true }
+            },
+            yAxis: { type: "value", scale: true, axisLabel: { color: "#64748b" }, splitLine: { lineStyle: { color: "#e5e7eb" } } },
+            dataZoom: hasZoom ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 12, borderColor: "#d8dee8" }] : [],
+            series: data.trend_metrics.map(function (metric, index) {
+              return {
+                name: metric.name,
+                type: "line",
+                smooth: true,
+                showSymbol: false,
+                connectNulls: true,
+                lineStyle: { width: 2 },
+                areaStyle: index === 0 ? { opacity: 0.08 } : undefined,
+                emphasis: { focus: "series" },
+                data: metric.values || []
+              };
+            })
+          });
+          charts.push(trendChart);
+        } else {
+          setEmpty("dcma-trend-chart", "暂无趋势数据");
+        }
+
+        var statusChart = initChart("dcma-status-chart");
+        if (renderPie(statusChart, "状态字", data.status_counts || [])) charts.push(statusChart);
+        else setEmpty("dcma-status-chart", "暂无状态分布");
+
+        var faultChart = initChart("dcma-fault-chart");
+        if (renderPie(faultChart, "异常码", data.fault_counts || [])) charts.push(faultChart);
+        else setEmpty("dcma-fault-chart", "未见有效异常码");
+
+        var latestChart = initChart("dcma-latest-chart");
+        if (latestChart && Array.isArray(data.latest_metrics) && data.latest_metrics.length) {
+          latestChart.setOption({
+            color: ["#0f766e"],
+            tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+            grid: { left: 112, right: 28, top: 18, bottom: 24 },
+            xAxis: { type: "value", axisLabel: { color: "#64748b" }, splitLine: { lineStyle: { color: "#e5e7eb" } } },
+            yAxis: {
+              type: "category",
+              inverse: true,
+              data: data.latest_metrics.map(function (item) { return item.name; }),
+              axisLabel: { color: "#334155" }
+            },
+            series: [{
+              name: "最新值",
+              type: "bar",
+              barWidth: 14,
+              itemStyle: { borderRadius: [0, 6, 6, 0] },
+              label: { show: true, position: "right", color: "#243047" },
+              data: data.latest_metrics.map(function (item) { return item.value; })
+            }]
+          });
+          charts.push(latestChart);
+        } else {
+          setEmpty("dcma-latest-chart", "暂无关键指标");
+        }
+
+        if (status) status.textContent = "图表已生成；下方保留完整数据表、诊断依据和处置建议。";
+        window.addEventListener("resize", function () {
+          charts.forEach(function (chart) { chart.resize(); });
+        });
+      });
+    })();
+  </script>
+    """
+
+
 def _build_report_html(
     *,
     title: str,
@@ -200,7 +408,11 @@ def _build_report_html(
     repair_recommendations: str,
     preventive_maintenance: str,
     diagnosis_basis: str,
+    chart_payload: str | None = None,
 ) -> str:
+    chart_data = _load_chart_payload(chart_payload)
+    chart_section = _build_chart_section(chart_data)
+    chart_assets = _build_chart_assets(chart_data)
     sections = [
         ("01", "执行摘要", executive_summary),
         ("02", "诊断过程概述", diagnosis_overview),
@@ -294,6 +506,35 @@ def _build_report_html(
     h2 {{ margin: 10px 0 14px; font-size: 22px; letter-spacing: 0; }}
     h3 {{ margin: 18px 0 10px; font-size: 18px; letter-spacing: 0; }}
     h4 {{ margin: 14px 0 8px; font-size: 15px; letter-spacing: 0; color: var(--muted); }}
+    .chart-section {{ background: #fbfdff; }}
+    .chart-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      align-items: stretch;
+    }}
+    .chart-panel {{
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+    }}
+    .chart-panel-wide {{ grid-column: 1 / -1; }}
+    .chart-panel h3 {{ margin: 0 0 10px; font-size: 16px; }}
+    .chart-box {{ width: 100%; height: 340px; }}
+    .chart-box-small {{ height: 260px; }}
+    .chart-status {{ margin: 12px 0 0; color: var(--muted); font-size: 13px; }}
+    .chart-empty {{
+      height: 100%;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      background: #f8fafc;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      font-size: 14px;
+    }}
     p {{ margin: 0 0 12px; }}
     ul {{ margin: 0 0 12px 20px; padding: 0; }}
     li {{ margin: 4px 0; }}
@@ -318,6 +559,9 @@ def _build_report_html(
       h1 {{ font-size: 27px; }}
       .meta-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .report-section {{ padding: 18px; }}
+      .chart-grid {{ grid-template-columns: 1fr; }}
+      .chart-box {{ height: 300px; }}
+      .chart-box-small {{ height: 240px; }}
     }}
   </style>
 </head>
@@ -333,9 +577,11 @@ def _build_report_html(
         <div class="meta-item"><div class="meta-label">生成系统</div><div class="meta-value">工业设备故障诊断专家系统</div></div>
       </div>
     </header>
+    {chart_section}
     {section_html}
     <blockquote>报告生成时间：{escape(report_time)}<br />诊断系统版本：工业设备故障诊断专家系统</blockquote>
   </main>
+{chart_assets}
 </body>
 </html>
 """
@@ -354,6 +600,7 @@ class SaveReportSchema(BaseModel):
     preventive_maintenance: str = Field(description="Preventive maintenance suggestions")
     diagnosis_basis: str = Field(description="Diagnosis basis")
     report_filename: str = Field(description="Output filename without extension")
+    chart_payload: str | None = Field(default=None, description="Optional JSON payload for ECharts visualizations")
 
 
 @tool(args_schema=SaveReportSchema)
@@ -370,6 +617,7 @@ def save_report(
     preventive_maintenance: str,
     diagnosis_basis: str,
     report_filename: str,
+    chart_payload: str | None = None,
 ) -> str:
     """Save a visual HTML report."""
     try:
@@ -389,6 +637,7 @@ def save_report(
             repair_recommendations=repair_recommendations,
             preventive_maintenance=preventive_maintenance,
             diagnosis_basis=merged_basis,
+            chart_payload=chart_payload,
         )
 
         final_filename = f"{safe_report_name}.html"
