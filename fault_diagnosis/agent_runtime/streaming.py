@@ -7,94 +7,28 @@ from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI
 
-from .legacy_react_engine import LegacyReactStreamEngine, classify_stream_error
 from .sse_adapter import (
     adapt_sse_chunk,
     build_server_error_payload,
     build_trace_id,
     encode_sse_event,
-    enrich_complete_payload,
-    enrich_workflow_sse_chunk,
-    event_payload_with_type,
 )
-from .workflow_engine import WorkflowStreamEngine
-from ..config import ENABLE_WORKFLOW_V1
 from ..runtime.dev_mode import stream_dev_chat_events
+from .error_classification import classify_model_gateway_error
 from .error_classification import model_error_code
 from ..common.logger import bind_request_id, get_logger, new_request_id
-from ..runtime import build_diagnosis_runtime_payload
 from ..runtime.session_store import clear_namespace, set_namespace
 from .stream_control import StreamCancellationHandle, clear_stream_handle
 from ..common.utils import summarize_identifier_for_log
-from ..workflows.artifact_store import get_thread_artifact
-from ..workflows.contracts import WorkflowType
-from ..workflows.router import route_workflow_request
-from ..workflows.runner import stream_workflow_events
+from ..single_agent import RestrictedSingleAgentRunner
 
 _log = get_logger("streaming")
-
-_REPORT_HANDOFF_CONTEXT_HINTS = (
-    "刚才",
-    "刚刚",
-    "上一轮",
-    "上一条",
-    "上一次",
-    "前面的结果",
-    "刚才结果",
-    "诊断结果",
-    "巡检结果",
-)
-
-
-def _should_use_workflow_report_generation(message: str, thread_id: str, user_identity: str) -> bool:
-    normalized_message = (message or "").strip()
-    if not any(hint in normalized_message for hint in _REPORT_HANDOFF_CONTEXT_HINTS):
-        return False
-    route_result = route_workflow_request(message, user_identity)
-    workflow_type = str(route_result.workflow_type)
-    if workflow_type != WorkflowType.REPORT_GENERATION.value:
-        return False
-    envelope = get_thread_artifact(thread_id)
-    if envelope is None:
-        return False
-    return str(envelope.workflow_type) in {
-        WorkflowType.FAULT_DIAGNOSIS.value,
-        WorkflowType.STATUS_INSPECTION.value,
-    }
-
-
-def _should_use_workflow_mainline(app: FastAPI, *, replace_history: bool) -> bool:
-    """判断普通聊天请求是否应进入 Workflow V1 主链路。"""
-
-    if replace_history:
-        return False
-    if getattr(app.state, "dev_mode", False):
-        return False
-    return bool(ENABLE_WORKFLOW_V1)
-
-
-def _merge_phase4_contract_payload(data: dict[str, Any], thread_id: str) -> dict[str, Any]:
-    """为 Workflow V1 complete 事件补充第四阶段结构化字段。"""
-
-    return enrich_complete_payload(data, thread_id)
-
-
-def _enrich_workflow_sse_chunk(chunk: str, thread_id: str) -> str:
-    """兼容增强 Workflow SSE 帧，不改变既有事件外壳。"""
-
-    return enrich_workflow_sse_chunk(chunk, thread_id)
 
 
 def _build_trace_id(request_id: str) -> str:
     """为 SSE 会话构造稳定 trace 标识。"""
 
     return build_trace_id(request_id)
-
-
-def _event_payload_with_type(payload: dict[str, Any], event_type_key: str = "event_type") -> dict[str, Any]:
-    """补齐前端事件通用的 type 字段。"""
-
-    return event_payload_with_type(payload, event_type_key)
 
 
 def _build_server_error_payload(
@@ -121,9 +55,24 @@ def _build_server_error_payload(
 
 
 def _inject_trace_into_sse_chunk(chunk: str, trace_id: str, *, thread_id: str) -> str:
-    """为 Workflow / Dev 路径的既有 SSE 帧补充 trace_id。"""
+    """为 Dev 路径的既有 SSE 帧补充 trace_id。"""
 
     return adapt_sse_chunk(chunk, trace_id, thread_id=thread_id)
+
+
+def classify_stream_error(error: Exception) -> tuple[str, str]:
+    """Classify scheduler-level errors without importing removed runtime paths."""
+
+    error_text = str(error)
+    lowered = error_text.lower()
+    model_gateway_error = classify_model_gateway_error(error)
+    if model_gateway_error:
+        return model_gateway_error
+    if "知识库" in error_text or "faiss" in lowered or "ollama" in lowered or "embedding" in lowered:
+        return "knowledge_base", "知识库当前不可用，请先确认已完成预构建或稍后重试"
+    if "tool" in lowered or "工具" in error_text:
+        return "tool_execution", "工具执行失败，请稍后重试"
+    return "internal", "请求处理失败，请稍后重试"
 
 
 async def token_stream_events(
@@ -137,75 +86,38 @@ async def token_stream_events(
     history_messages: list[Any] | None = None,
     replace_history: bool = False,
 ) -> AsyncGenerator[str, None]:
-    """聊天 SSE 兼容入口，按运行路径委派给对应 engine。"""
+    """聊天 SSE 兼容入口：dev mock 或限制型单 Agent。"""
 
     request_id = bind_request_id(request_id or new_request_id())
     trace_id = _build_trace_id(request_id)
     stream_id = (stream_id or "").strip()
     set_namespace({"__builtins__": __builtins__})
-
-    workflow_engine = WorkflowStreamEngine(
-        workflow_streamer=stream_workflow_events,
-        dev_streamer=stream_dev_chat_events,
-    )
-    legacy_engine = LegacyReactStreamEngine(
-        diagnosis_payload_builder=build_diagnosis_runtime_payload,
-        logger=_log,
-    )
+    del history_messages, replace_history
 
     try:
-        if not replace_history and _should_use_workflow_report_generation(message, thread_id, user_identity):
-            async for chunk in workflow_engine.stream_workflow(
-                app,
-                message,
-                thread_id,
-                user_identity,
-                request_id=request_id,
-                stream_id=stream_id,
-                trace_id=trace_id,
-                cancel_handle=cancel_handle,
-            ):
-                yield chunk
-            return
-
-        if _should_use_workflow_mainline(app, replace_history=replace_history):
-            async for chunk in workflow_engine.stream_workflow(
-                app,
-                message,
-                thread_id,
-                user_identity,
-                request_id=request_id,
-                stream_id=stream_id,
-                trace_id=trace_id,
-                cancel_handle=cancel_handle,
-            ):
-                yield chunk
-            return
-
         if getattr(app.state, "dev_mode", False):
             cancel_event = cancel_handle.cancel_event if cancel_handle else None
-            async for chunk in workflow_engine.stream_dev(
+            async for chunk in stream_dev_chat_events(
                 app,
                 message,
                 thread_id,
                 user_identity,
-                trace_id=trace_id,
                 cancel_event=cancel_event,
             ):
-                yield chunk
+                yield _inject_trace_into_sse_chunk(chunk, trace_id, thread_id=thread_id)
             return
 
-        async for chunk in legacy_engine.stream(
-            app,
-            message,
-            thread_id,
-            user_identity,
+        single_agent = RestrictedSingleAgentRunner(
+            message=message,
+            thread_id=thread_id,
+            user_identity=user_identity,
             request_id=request_id,
             stream_id=stream_id,
             trace_id=trace_id,
+        )
+        async for chunk in single_agent.stream_events(
+            app,
             cancel_handle=cancel_handle,
-            history_messages=history_messages,
-            replace_history=replace_history,
         ):
             yield chunk
     except asyncio.CancelledError:

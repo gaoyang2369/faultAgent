@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-import inspect
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from langchain.agents import create_agent
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from psycopg_pool import AsyncConnectionPool
 
-from ..agent_runtime.middleware import build_middleware
 from ..common.logger import get_logger
 from ..config import (
     APP_ENV,
@@ -24,9 +18,6 @@ from ..config import (
 from .db_pool import close_pool, init_pool
 from ..knowledge.base import get_knowledge_base_status, get_knowledge_retriever, has_knowledge_base_index
 from ..runtime.dev_mode import init_dev_state
-from ..tools import get_runtime_tools
-from ..tools.sql_tools import get_sqltools
-from ..prompts.dynamic_prompt import Context
 
 _log = get_logger("app.lifespan")
 
@@ -77,8 +68,6 @@ async def app_lifespan(app: FastAPI):
         _log.info("本地开发模式已关闭")
         return
 
-    db_uri = f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}@{os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
-
     try:
         _log.info("真实模式启动：开始初始化应用", app_env=APP_ENV, local_dev_mode=False)
         await init_pool()
@@ -100,36 +89,16 @@ async def app_lifespan(app: FastAPI):
         except Exception as kb_error:
             _log.warning("知识库预加载失败", error=str(kb_error))
 
-        async with AsyncConnectionPool(conninfo=db_uri, min_size=2, max_size=10, kwargs={"autocommit": True, "prepare_threshold": 0}) as pool:
-            checkpointer = AsyncPostgresSaver(pool)
-            setup_result = checkpointer.setup()
-            if inspect.isawaitable(setup_result):
-                await setup_result
-            _log.info("PostgreSQL schema setup completed")
-
-            middleware_list = build_middleware(app.state.summary_model)
-            runtime_tools = get_runtime_tools()
-            runtime_tools.extend(get_sqltools())
-
-            agent = create_agent(
-                model=app.state.chat_model,
-                tools=runtime_tools,
-                checkpointer=checkpointer,
-                middleware=middleware_list,
-                context_schema=Context,
-            )
-            _log.info("Agent initialized successfully")
-
-            app.state.checkpointer = checkpointer
-            app.state.agent = agent
-            app.state.pool = pool
-
-            _log.info("服务完成初始化并启动")
-            yield
+        app.state.checkpointer = None
+        app.state.agent = None
+        app.state.pool = None
+        _log.info("限制型单 Agent 已启用，旧 LangGraph agent 不再初始化")
+        _log.info("服务完成初始化并启动")
+        yield
 
     except Exception as exc:
         _log.error("Application initialization failed", error=str(exc))
-        raise RuntimeError(f"初始化检查点保存器失败: {str(exc)}") from exc
+        raise RuntimeError(f"应用初始化失败: {str(exc)}") from exc
     finally:
         await close_pool()
         _log.info("服务已关闭，资源清理完成")

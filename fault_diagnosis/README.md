@@ -7,9 +7,9 @@
 `fault_diagnosis/` 是项目唯一的后端源码根。它承担四类职责：
 
 1. 对前端和语音网关提供 FastAPI HTTP/SSE 接口。
-2. 初始化并运行 LangChain/LangGraph Agent、Workflow V1 场景流和 legacy ReAct 兼容流。
+2. 初始化并运行限制型单 Agent 主链路。
 3. 连接 MySQL、PostgreSQL、FAISS/Ollama、本地报告目录、管理员上传 PDF 知识库等外部资源。
-4. 保存对话状态、Workflow 结构化产物、报告文件和运行日志。
+4. 保存对话状态、线程级结构化产物、报告文件和运行日志。
 
 启动入口：
 
@@ -38,14 +38,14 @@ FastAPI app
         +-- auth/                session、管理员身份和 thread 归属
         +-- infrastructure/      CORS、静态目录、模型、lifespan、数据库池
         |
-        +-- agent_runtime/       SSE 适配、流控制、Workflow/legacy 执行引擎
-        +-- workflows/           Workflow V1 场景、步骤、产物和 planner
-        +-- runtime/             工具运行时、证据桥接、阶段追踪、开发模式
-        +-- tools/               LangChain 工具：SQL、知识库、报告、搜索、工单、时间
+        +-- agent_runtime/       SSE 适配、流控制和主链路调度
+        +-- single_agent/        限制型单 Agent、trace schema、受限工具编排
+        +-- workflows/           复用步骤、产物合同和 artifact store
+        +-- runtime/             请求级命名空间、开发模式和合同适配
+        +-- tools/               LangChain 工具：SQL、知识库、报告等
         |
         +-- knowledge/           基础 PDF FAISS 知识库和上传 PDF 知识库
         +-- repositories/        文件型仓储和历史索引
-        +-- mcp/                 MCP tool/resource 封装
 ```
 
 真实模式启动时，`app_lifespan` 会依次做这些初始化：
@@ -53,9 +53,7 @@ FastAPI app
 1. 校验 `SESSION_SECRET`、`FRONTEND_ORIGINS` 等部署安全配置。
 2. 初始化 MySQL 异步连接池。
 3. 预加载本地 FAISS 知识库索引，索引缺失时只告警，不在线重建全量知识库。
-4. 创建 PostgreSQL `AsyncPostgresSaver`，用于 LangGraph 对话状态持久化。
-5. 创建 `chat_model`、`summary_model`、middleware 和 LangChain tools。
-6. 通过 `create_agent` 创建 legacy LangGraph ReAct agent，并挂到 `app.state.agent`。
+4. 设置 `app.state.checkpointer`、`app.state.agent`、`app.state.pool` 为 `None`；主链路不再初始化旧 LangGraph checkpointer/agent。
 
 `LOCAL_DEV_MODE=true` 时会跳过外部依赖初始化，改用 `runtime/dev_mode.py` 中的本地模拟状态。
 
@@ -74,7 +72,7 @@ FastAPI app
 | 模块 | 职责 |
 | --- | --- |
 | `app_bootstrap.py` | 进程启动前的编码、日志和运行目录准备。 |
-| `app_lifespan.py` | 应用生命周期初始化和资源清理，负责真实模式下的 DB、知识库、checkpointer、agent 初始化。 |
+| `app_lifespan.py` | 应用生命周期初始化和资源清理，负责真实模式下的 MySQL、知识库预加载和运行状态初始化。 |
 | `app_models.py` | 创建 OpenAI 兼容 `ChatOpenAI` 模型实例。 |
 | `app_setup.py` | 创建 `SessionScopeManager`，配置 CORS。 |
 | `app_static.py` | 挂载前端构建产物、`/reports`、`/images` 等静态资源。 |
@@ -123,7 +121,7 @@ FastAPI app
 | `report_tools.py` | `save_report`、`save_html_report`，生成 Markdown/HTML 报告。 |
 | `work_order_tools.py` | 创建本地工单 JSON 产物。 |
 | `utility_tools.py` | 当前时间和搜索工具。 |
-| `__init__.py` | 汇总运行时工具，真实 agent 会追加 SQL toolkit 工具。 |
+| `__init__.py` | 工具包导出辅助；单 Agent 主链路直接按白名单调用所需工具。 |
 
 ### knowledge
 
@@ -136,30 +134,29 @@ FastAPI app
 
 | 模块 | 职责 |
 | --- | --- |
-| `streaming.py` | `/chat/stream` 的统一 SSE 入口，根据配置和场景选择 Workflow V1、报告续写、dev stream 或 legacy ReAct。 |
-| `workflow_engine.py` | 将 Workflow runner 输出的 SSE chunk 适配成统一 trace/thread 外壳。 |
-| `legacy_react_engine.py` | LangGraph ReAct 兼容链路，消费 agent `astream_events`，过滤内部工具文本，输出 token/tool/complete 事件。 |
+| `streaming.py` | `/chat/stream` 的统一 SSE 入口；dev mode 走模拟流，真实模式调度限制型单 Agent。 |
 | `sse_adapter.py` | 统一 SSE 编码、trace 注入、complete payload 增强和错误 payload。 |
 | `stream_control.py` | stream_id 注册、取消和清理，支持 `/chat/stop`。 |
 | `event_contracts.py` | SSE 结构化事件模型。 |
 | `error_classification.py` | 模型网关、知识库、工具、内部错误分类。 |
-| `middleware.py` | legacy ReAct agent 的 middleware 组装。 |
+
+### single_agent
+
+| 模块 | 职责 |
+| --- | --- |
+| `contracts.py` | `AgentTrace`、`TraceEvent`、`SingleAgentDecision`、`SingleAgentLimits` 等 trace 与限制合同。 |
+| `prompts.py` | 限制型单 Agent 的请求理解与分析 prompt。 |
+| `runner.py` | 固定主流程编排：请求理解、受限 SQL、知识库检索、分析、可选报告、最终回答，并输出兼容 SSE。 |
 
 ### workflows
 
 | 模块 | 职责 |
 | --- | --- |
-| `router.py` | 根据关键词、故障码、设备、时间范围等选择 workflow。 |
-| `runner.py` | 构建对应场景 runner，统一输出 Workflow V1 SSE。 |
-| `contracts.py` | Pydantic 合同：请求、路由、各步骤 artifact、planner artifact、线程级 artifact envelope。 |
-| `boundary_specs.py` | 各 workflow 需要的能力边界，如 SQL、知识库、报告、上游 artifact。 |
-| `prompts.py` | 请求理解、SQL 生成、分析、最终回答、复核等 prompt 构造。 |
-| `agents/planner.py` | planner 子 Agent，生成执行目标、证据需求、约束、风险和成功标准；失败时规则 fallback。 |
+| `contracts.py` | Pydantic 合同：请求、各步骤 artifact、线程级 artifact envelope。 |
 | `steps/` | 请求解析、SQL 执行、知识检索、报告构建等可复用步骤。 |
-| `scenarios/` | 具体场景 runner：故障诊断、状态巡检、手册问答、报告生成、澄清。 |
 | `artifact_store.py` | 线程级结构化产物存储 facade，默认文件后端，也支持 memory/postgres。 |
 | `artifact_backends/` | artifact store 的 file、memory、postgres 实现。 |
-| `adapters.py` | Workflow 对现有 tools 和 legacy 输出的薄适配层。 |
+| `adapters.py` | 单 Agent 使用的工具薄适配层。 |
 | `report_mapper.py` | 将上游 artifact 映射为报告输入。 |
 
 ### runtime
@@ -167,11 +164,7 @@ FastAPI app
 | 模块 | 职责 |
 | --- | --- |
 | `session_store.py` | 基于 contextvars 的请求级 namespace。 |
-| `diagnosis_runtime.py` | legacy 最终答案封装，当前只保留原始回答和最终回答字段。 |
-| `execution_runtime.py` | legacy 流式执行中的工具生命周期和阶段追踪。 |
-| `tool_runtime.py` | 构造标准 `tool_start`/`tool_end` payload。 |
-| `workflow_runtime.py` | 工具名到 workflow stage 的映射，以及阶段开始/完成统计。 |
-| `workflow_contract_adapter.py` | 工作流合同兼容适配。 |
+| `workflow_contract_adapter.py` | 线程级诊断产物到前端合同的兼容适配。 |
 | `dev_mode.py` | 本地开发模式的模拟消息、Todo 和 SSE 输出。 |
 
 ### repositories
@@ -182,10 +175,6 @@ FastAPI app
 | `admin_pdf_repository.py` | 管理员 PDF 文件记录、状态和元数据。 |
 | `admin_pdf_registry_storage.py` | PDF registry 文件存储辅助。 |
 | `governance_repository.py` | 治理快照、治理台账的文件存储。 |
-
-### mcp
-
-`mcp/` 提供面向外部工具协议的封装。`server.py` 维护 tool/resource 注册、请求校验、trace/run id、错误协议化；`tools/handlers.py` 中的 MCP 工具复用 Workflow runner、MySQL 查询、知识库检索、报告生成和证据质量评估能力。
 
 ## 当前 Agent 流程
 
@@ -213,16 +202,14 @@ api/chat.py
 
 ### 2. 统一流式调度
 
-`agent_runtime/streaming.py` 中的 `token_stream_events` 是分流核心。
+`agent_runtime/streaming.py` 中的 `token_stream_events` 是流式调度入口。
 
 当前优先级：
 
-1. 如果用户是在上一轮诊断或巡检结果基础上要求“生成报告”，并且当前 thread 有上游 artifact，则直接走 Workflow V1 报告生成流。
-2. 如果 `ENABLE_WORKFLOW_V1=true`，并且不是编辑重生成、不是本地 dev mode，则进入 Workflow V1 主链路。
-3. 如果是 dev mode，则进入模拟流。
-4. 其他情况进入 legacy LangGraph ReAct 兼容链路。
+1. 如果是 `LOCAL_DEV_MODE=true`，进入模拟流。
+2. 其他请求进入 `RestrictedSingleAgentRunner`。
 
-所有链路最后都会通过 SSE adapter 注入 `trace_id`、`thread_id`，并输出兼容前端的事件：
+单 Agent 输出前端已支持的 SSE 事件：
 
 ```text
 start -> ping* -> tool_start/tool_end* -> token* -> complete
@@ -230,106 +217,61 @@ start -> ping* -> tool_start/tool_end* -> token* -> complete
 
 异常会转成 `server_error`，并按模型、知识库、工具、内部错误等类别给出可重试标记。
 
-### 3. Workflow V1 路由
+### 3. 限制型单 Agent 主链路
 
-Workflow V1 使用 `workflows/router.py` 做规则路由。它会识别这些场景：
+`RestrictedSingleAgentRunner` 是当前主链路。它不做多 agent 协作，不做规划子流程，不做可靠性评分或报告门禁。
 
-| workflow_type | 场景 |
-| --- | --- |
-| `fault_diagnosis` | 故障诊断、异常分析、告警/报警原因判断、可否出报告判断。 |
-| `status_inspection` | 当前状态、健康概览、巡检、趋势、风险摘要。 |
-| `manual_qa` | 手册问答、操作说明、安全注意事项、故障码含义。 |
-| `report_generation` | 基于上一轮诊断/巡检 artifact 生成报告。 |
-| `clarification` | 请求太泛、槽位缺失或候选 workflow 歧义较大，需要先追问。 |
-
-路由结果是 `WorkflowRouteResult`，包含：
-
-- `workflow_type`
-- `confidence`
-- `reason`
-- `needs_sql`
-- `needs_knowledge`
-- `needs_report`
-- `candidate_workflows`
-- `missing_slots`
-- `disambiguation_needed`
-- `review_needed`
-- `upstream_artifact_required`
-
-`workflows/runner.py` 根据路由结果创建对应 `BaseScenarioRunner` 子类。
-
-### 4. 故障诊断 Workflow V1 主链路
-
-`FaultDiagnosisRunner` 是当前最核心的场景。同步执行和 SSE 执行的业务步骤一致：
+固定流程：
 
 ```text
-parse_request
-  -> planning
-  -> sql
-  -> knowledge
+understand
+  -> sql（按 decision 可跳过）
+  -> knowledge（按 decision 可跳过）
   -> analysis
-  -> report
+  -> report（按 decision 可跳过）
   -> final_answer
   -> save_artifact
 ```
 
-详细说明：
+受限工具白名单：
 
-1. `parse_request`
-   - 使用 `build_understanding_prompt` 让模型把用户问题转成 `DiagnosisRequest`。
-   - 提取设备、指标、故障码、时间范围、报告需求和分析目标。
-   - JSON 解析失败时会走 JSON repair prompt。
+- `sql_db_query_checker`
+- `sql_db_query`
+- `query_knowledge_base`
+- `save_report`
 
-2. `planning`
-   - `create_planning_artifact` 调用 planner 子 Agent。
-   - 输出任务摘要、诊断目标、所需证据、执行约束、风险标记、成功标准。
-   - planner 异常时使用 `build_default_plan` 规则计划兜底。
+默认限制：
 
-3. `sql`
-   - 使用 `build_sql_generation_prompt` 生成 SQL。
-   - 故障诊断场景限制可用表：`real_data`、`device_alarm`、`device_metric`、`device_fault_data`、`fault_records`。
-   - 若生成了未知表，会回退到 `real_data` 最近数据查询。
-   - 执行前优先经过 `sql_db_query_checker`，再调用 `sql_db_query`。
-   - 输出 `SqlStepArtifact`，包含 SQL、摘要、结果预览、原始输出。
+- `max_rounds=6`
+- `max_tool_calls=4`
 
-4. `knowledge`
-   - 基于设备、故障码和分析目标构造知识库查询。
-   - 调用 `query_knowledge_base`。
-   - 同时检索基础 PDF FAISS 知识库和管理员上传 PDF 知识库。
-   - 输出 `KnowledgeStepArtifact`。
+SQL 阶段只允许访问 `real_data`、`device_alarm`、`device_metric`、`device_fault_data`、`fault_records`，并且只允许只读 `SELECT/WITH` 查询；未知表或非只读 SQL 会回退到受限的最近数据查询。
 
-5. `analysis`
-   - 将结构化请求、SQL artifact、知识 artifact、当前时间、planner artifact 一起送入分析 prompt。
-   - 输出 `AnalysisStepArtifact`，包括结论、依据、建议、风险提示、缺失信息和置信度。
+如果用户要求“基于刚才/上一轮结果生成报告”，并且当前 thread 有结构化 artifact，单 Agent 会在同一 runner 内读取 artifact 并调用 `save_report`，不再分流到旧 report workflow。
 
-6. `report`
-   - 如果 `request.needs_report=true`，调用 `save_report` 生成 Markdown 报告。
-   - 调用 `save_report` 生成普通 Markdown 报告产物。
+### 4. Trace 合同
 
-7. `final_answer`
-   - 使用最终回答 prompt 整理面向用户的文本。
-   - 模型整理失败时回退模板输出。
+每次单 Agent 运行都会生成 `AgentTrace`，并在 `complete` payload 与保存的 `WorkflowArtifactEnvelope.payload.trace` 中携带。
 
-8. `save_artifact`
-   - 将本轮结构化结果保存为 `WorkflowArtifactEnvelope`。
-   - artifact 中保存 request、SQL、知识、分析、报告、planner、route_result、governance、证据快照、finding 快照。
-   - 后续“生成报告”会读取这个 artifact。
+trace 事件类型：
 
-### 5. Legacy ReAct 兼容链路
+- `stage`：阶段开始、完成、跳过或失败。
+- `decision`：请求理解后的能力决策，如是否需要 SQL、知识库、报告。
+- `tool_call`：受限工具调用开始，包含工具名、run_id、输入摘要。
+- `tool_result`：受限工具调用结果，包含结果预览和耗时。
+- `artifact`：结构化产物，如 request、SQL artifact、knowledge artifact、analysis artifact、report artifact。
+- `final_answer`：最终回答或错误终态。
 
-legacy 链路在 `LegacyReactStreamEngine` 中执行，保留 LangGraph ReAct Agent 的动态工具调用能力。
+当前 trace 不计算可靠性分数；后续可靠性分析应离线消费 trace 做后处理。
 
-核心过程：
+### 5. 共享产物层
 
-1. 构造 `HumanMessage`，必要时用 `RemoveMessage` 覆盖历史。
-2. 调用 `app.state.agent.astream_events`。
-3. 过滤模型流中泄露的内部工具 JSON、SQL 草稿和非用户可见文本。
-4. 将工具开始、结束事件转成 `tool_start`、`tool_end`、`tool_progress`、`tool_stream`。
-5. 工具结束时记录工具生命周期和阶段耗时。
-6. 模型无首事件或首阶段失败时，尝试非流式 fallback。
-7. 生成完成后调用 `build_diagnosis_runtime_payload` 封装原始回答和最终回答。
-8. 最终输出 `complete`，其中包含最终文本、阶段详情和 lifecycle ledger。
-9. 同时把 legacy 输出桥接保存成 `WorkflowArtifactEnvelope`，供后续报告生成使用。
+`workflows/` 不再包含多流程调度器，只保留单 Agent 仍复用的结构：
+
+1. `WorkflowArtifactEnvelope`、步骤 artifact 和报告 artifact 等历史命名的产物合同。
+2. artifact store 及 file/memory/postgres 后端。
+3. 请求解析、SQL 执行、知识检索、报告构建等可复用 step。
+4. 报告续写所需的 artifact-to-report mapper。
 
 ## 可靠性评估状态
 
@@ -341,13 +283,12 @@ legacy 链路在 `LegacyReactStreamEngine` 中执行，保留 LangGraph ReAct Ag
 - 报告和工单按普通产物保存，不再因为证据门禁自动降级为草稿或阻止输出。
 - `evidence_review` workflow 已移除，后续可靠性评估将基于重构后的 trace 重新实现。
 
-下一步重构重点是统一 Agent 流程和 trace 合同；可靠性评估应消费 trace，而不是插入主运行链路。
+可靠性评估应消费 `AgentTrace` 做后处理，而不是插入主运行链路。
 
 ## 运行时持久化
 
 | 数据 | 默认位置或后端 |
 | --- | --- |
-| LangGraph 对话状态 | PostgreSQL `AsyncPostgresSaver` |
 | session/thread 归属 | 签名 cookie 加本地历史索引 |
 | Workflow artifact | 默认 `trash/run/workflow_artifacts/*.jsonl`，可通过 `WORKFLOW_ARTIFACT_BACKEND` 切换 |
 | 基础知识库 | `faiss_db/` |
@@ -359,7 +300,7 @@ legacy 链路在 `LegacyReactStreamEngine` 中执行，保留 LangGraph ReAct Ag
 ## 常见扩展点
 
 1. 新增 HTTP 能力：在 `api/` 新增 router，在 `services/` 放业务编排，在 `api/app_routes.py` 注册。
-2. 新增 Agent 工具：在 `tools/` 实现 LangChain tool，并在 `tools/__init__.py` 的 `get_runtime_tools` 中加入。
-3. 新增 Workflow 场景：补充 `WorkflowType`、`boundary_specs`、`router` 规则、`scenarios/` runner，并在 `runner.py` 映射。
-4. 重建可靠性评估：先完成统一 trace，再基于 trace 新增独立评估模块。
+2. 新增单 Agent 工具：在工具模块实现 LangChain tool，再在 `single_agent/runner.py` 的白名单和对应阶段中显式接入。
+3. 调整诊断流程：优先修改 `single_agent/runner.py`；只有产物合同或可复用 step 需要变化时才改 `workflows/`。
+4. 重建可靠性评估：基于 `AgentTrace` 新增独立后处理模块。
 5. 更换 artifact 存储：设置 `WORKFLOW_ARTIFACT_BACKEND=file|memory|postgres`，必要时配置 `WORKFLOW_ARTIFACT_TABLE` 或 `WORKFLOW_ARTIFACT_POSTGRES_DSN`。

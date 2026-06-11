@@ -1,4 +1,4 @@
-"""Workflow V1 产物到第四阶段结构化契约的消费侧适配器。"""
+"""线程级诊断产物到前端结构化契约的消费侧适配器。"""
 
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ def _build_standard_evidence(envelope: WorkflowArtifactEnvelope) -> list[dict[st
                 "summary": _compact_text(data.get("content") or data.get("title"), limit=220),
                 "metadata": {
                     "importance": data.get("importance") or "medium",
-                    "workflow_id": _workflow_key(envelope),
+                    "artifact_workflow_type": _workflow_key(envelope),
                     "thread_id": envelope.thread_id,
                 },
                 "artifact_id": None,

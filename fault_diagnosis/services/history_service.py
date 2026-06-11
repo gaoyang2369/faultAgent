@@ -277,9 +277,8 @@ class HistoryService:
 
         try:
             checkpointer = getattr(self.app.state, "checkpointer", None)
-            if not checkpointer or not hasattr(checkpointer, "adelete_thread"):
-                raise RuntimeError("当前检查点保存器不支持删除 thread")
-            await checkpointer.adelete_thread(resolved_chat_id)
+            if checkpointer and hasattr(checkpointer, "adelete_thread"):
+                await checkpointer.adelete_thread(resolved_chat_id)
             self._remove_history_thread(resolved_chat_id)
             self._clear_thread_artifact(history_type, resolved_chat_id)
             self._log.info(

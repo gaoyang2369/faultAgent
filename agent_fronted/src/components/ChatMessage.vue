@@ -187,7 +187,7 @@
         <div class="phase4-panel__header">
           <div>
             <div class="phase4-panel__title">结构化诊断结果</div>
-            <div class="phase4-panel__subtitle">来自 Workflow 契约字段，供证据链、报告和后续 MCP 复用</div>
+            <div class="phase4-panel__subtitle">来自结构化诊断产物，供证据链、报告和后续分析复用</div>
           </div>
           <span v-if="phase4GateBadge" class="phase4-panel__badge" :class="`phase4-panel__badge--${phase4GateBadge.tone}`">
             {{ phase4GateBadge.label }}
