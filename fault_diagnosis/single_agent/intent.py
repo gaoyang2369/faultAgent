@@ -8,7 +8,7 @@ from typing import Any
 from ..diagnosis.contracts import DiagnosisRequest
 from .contracts import SingleAgentDecision
 
-_FAULT_CODE_RE = re.compile(r"\b([A-Z]\d{4,})\b", re.IGNORECASE)
+_FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{4,})(?![A-Z0-9])", re.IGNORECASE)
 _DEVICE_RE = re.compile(r"\b([A-Z]{2,}(?:-\d{1,})+|J\d+|\d+号机)\b", re.IGNORECASE)
 
 REPORT_KEYWORDS = ("报告", "出报告", "生成报告", "导出报告", "整理成报告", "形成报告")

@@ -6,10 +6,18 @@ import os
 import re
 from datetime import datetime
 
-from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from ..common.paths import REPORTS_DIR
+
+try:
+    from langchain_core.tools import tool
+except ImportError:  # pragma: no cover - local unit tests may not install LangChain
+    def tool(*_args, **_kwargs):
+        def decorator(func):
+            return func
+
+        return decorator
 
 _SAFE_REPORT_STEM_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _WINDOWS_RESERVED_NAMES = {

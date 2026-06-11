@@ -7,6 +7,7 @@ from fault_diagnosis.agent_runtime.sse_adapter import parse_sse_chunk
 from fault_diagnosis.observability.tracing import NoopTraceRun
 from fault_diagnosis.single_agent.intent import (
     build_lightweight_conversation_reply,
+    fallback_understanding_payload,
     normalize_lightweight_message,
 )
 
@@ -34,6 +35,13 @@ def test_diagnostic_message_with_greeting_is_not_short_circuited() -> None:
 
 def test_lightweight_normalization_handles_common_punctuation() -> None:
     assert normalize_lightweight_message(" Hello？！ ") == "hello"
+
+
+def test_fallback_understanding_extracts_fault_code_before_chinese_text() -> None:
+    payload = fallback_understanding_payload("查询故障代码F01002的触发原因", "游客")
+
+    assert payload["fault_code_hint"] == "F01002"
+    assert payload["needs_knowledge"] is True
 
 
 def test_stream_events_short_circuits_greeting_without_model(monkeypatch) -> None:

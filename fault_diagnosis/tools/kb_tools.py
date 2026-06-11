@@ -1,7 +1,30 @@
 """知识库检索工具。"""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+from functools import lru_cache
+
 from pydantic import BaseModel, Field
-from langchain_core.tools import tool
+
+try:
+    from langchain_core.tools import tool
+except ImportError:  # pragma: no cover - local unit tests may not install LangChain
+    def tool(*_args, **_kwargs):
+        def decorator(func):
+            return func
+
+        return decorator
+
+from ..common.paths import PDFS_DIR
 from ..config import KB_QUERY_TIMEOUT_SECONDS
+
+_FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{4,})(?![A-Z0-9])", re.IGNORECASE)
+_FAULT_CODE_LINE_RE = re.compile(r"^\s*([A-Z]\d{4,})(?:\s*\([A-Z]\))?\s+(.+?)\s*$", re.IGNORECASE)
+_PDF_TEXT_TIMEOUT_SECONDS = 10
 
 
 def _invoke_retriever_with_timeout(db_retriever, query: str, timeout_seconds: int):
@@ -25,6 +48,125 @@ def _invoke_retriever_with_timeout(db_retriever, query: str, timeout_seconds: in
     if status == "error":
         raise payload
     return payload
+
+
+def _extract_fault_code(query: str) -> str:
+    matched = _FAULT_CODE_RE.search(query or "")
+    return matched.group(1).upper() if matched else ""
+
+
+def _iter_pdf_paths(pdf_dir: str = PDFS_DIR) -> list[str]:
+    if not os.path.isdir(pdf_dir):
+        return []
+    pdf_paths = []
+    for root, _, files in os.walk(pdf_dir):
+        for file_name in files:
+            if file_name.lower().endswith(".pdf"):
+                pdf_paths.append(os.path.join(root, file_name))
+    return sorted(pdf_paths)
+
+
+def _extract_text_with_pypdf(pdf_path: str) -> list[tuple[int, str]]:
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return []
+    reader = PdfReader(pdf_path)
+    pages = []
+    for index, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        if text.strip():
+            pages.append((index, text))
+    return pages
+
+
+def _extract_text_with_pdftotext(pdf_path: str) -> list[tuple[int, str]]:
+    executable = shutil.which("pdftotext")
+    if not executable:
+        return []
+    completed = subprocess.run(
+        [executable, "-layout", pdf_path, "-"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=_PDF_TEXT_TIMEOUT_SECONDS,
+    )
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return []
+    return [
+        (index, page_text)
+        for index, page_text in enumerate(completed.stdout.split("\f"), start=1)
+        if page_text.strip()
+    ]
+
+
+@lru_cache(maxsize=32)
+def _extract_pdf_pages_cached(pdf_path: str, modified_at: float) -> tuple[tuple[int, str], ...]:
+    del modified_at
+    pages = _extract_text_with_pypdf(pdf_path)
+    if not pages:
+        pages = _extract_text_with_pdftotext(pdf_path)
+    return tuple(pages)
+
+
+def _extract_pdf_pages(pdf_path: str) -> tuple[tuple[int, str], ...]:
+    try:
+        modified_at = os.path.getmtime(pdf_path)
+    except OSError:
+        return ()
+    return _extract_pdf_pages_cached(pdf_path, modified_at)
+
+
+def _line_matches_fault_code(line: str, fault_code: str) -> bool:
+    matched = _FAULT_CODE_LINE_RE.match(line)
+    return bool(matched and matched.group(1).upper() == fault_code)
+
+
+def _extract_fault_code_block(text: str, fault_code: str) -> str:
+    lines = text.splitlines()
+    start_index = None
+    for index, line in enumerate(lines):
+        if _line_matches_fault_code(line, fault_code):
+            start_index = index
+            break
+    if start_index is None:
+        return ""
+
+    block_lines = [lines[start_index].rstrip()]
+    for line in lines[start_index + 1:]:
+        if _FAULT_CODE_LINE_RE.match(line):
+            break
+        stripped = line.rstrip()
+        if stripped or block_lines[-1]:
+            block_lines.append(stripped)
+    return "\n".join(block_lines).strip()
+
+
+def query_fault_code_from_local_pdfs(query: str, *, pdf_dir: str = PDFS_DIR) -> str:
+    """Search local PDFs exactly by fault code before using vector retrieval."""
+
+    fault_code = _extract_fault_code(query)
+    if not fault_code:
+        return ""
+
+    rendered = []
+    for pdf_path in _iter_pdf_paths(pdf_dir):
+        for page_number, page_text in _extract_pdf_pages(pdf_path):
+            if fault_code not in page_text.upper():
+                continue
+            block = _extract_fault_code_block(page_text, fault_code)
+            if not block:
+                continue
+            rendered.append(
+                "来源：基础PDF知识库\n"
+                f"来源文件：{os.path.basename(pdf_path)}\n"
+                "source_type：knowledge_base\n"
+                "检索方式：故障码精确匹配\n"
+                f"来源页码：{page_number}\n"
+                f"文档片段：{block}"
+            )
+            break
+    return "\n\n".join(rendered[:3])
 
 
 class KnowledgeBaseQuerySchema(BaseModel):
@@ -68,6 +210,10 @@ def query_knowledge_base(query: str) -> str:
     注意：知识库仅包含元信息，不包含实际数据。
     """
     try:
+        direct_fault_code_result = query_fault_code_from_local_pdfs(query)
+        if direct_fault_code_result:
+            return direct_fault_code_result
+
         from ..knowledge.base import get_knowledge_retriever, has_knowledge_base_index
 
         base_docs = []

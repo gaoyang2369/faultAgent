@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+from fault_diagnosis.diagnosis.steps.knowledge_lookup import build_knowledge_artifact
+from fault_diagnosis.tools.kb_tools import query_fault_code_from_local_pdfs
+
+
+def test_fault_code_query_uses_exact_local_pdf_lookup() -> None:
+    result = query_fault_code_from_local_pdfs("查询故障代码F01002的触发原因，以及如何维修")
+
+    assert "来源文件：S120_故障手册.pdf" in result
+    assert "检索方式：故障码精确匹配" in result
+    assert "F01002" in result
+    assert "原因：" in result
+    assert "出现了一个内部软件错误" in result
+    assert "处理：" in result
+    assert "重新为所有组件上电" in result
+
+
+def test_timeout_knowledge_output_is_not_successful() -> None:
+    artifact = build_knowledge_artifact(
+        "F01002",
+        "超时：知识库检索超过 15s 未返回，请稍后重试或缩小查询范围。",
+        fallback_error_message="知识检索未命中",
+    )
+
+    assert artifact.success is False
+    assert artifact.error == "超时：知识库检索超过 15s 未返回，请稍后重试或缩小查询范围。"

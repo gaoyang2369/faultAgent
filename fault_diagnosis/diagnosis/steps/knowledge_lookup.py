@@ -30,7 +30,15 @@ def build_knowledge_artifact(
     """将知识检索文本统一归一化为 artifact。"""
 
     snippets = [item.strip() for item in raw_output.split("\n\n") if item.strip()][:snippets_limit]
-    success = bool(raw_output.strip()) and "失败" not in raw_output and "错误" not in raw_output
+    failure_markers = (
+        "失败",
+        "错误",
+        "超时",
+        "未检索到",
+        "尚未预构建",
+        "索引存在但加载失败",
+    )
+    success = bool(raw_output.strip()) and not any(marker in raw_output for marker in failure_markers)
     return KnowledgeStepArtifact(
         success=success,
         query=query,
