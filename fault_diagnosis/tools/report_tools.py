@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import re
 from html import escape
 
@@ -198,7 +198,14 @@ def _load_chart_payload(chart_payload: str | None) -> dict | None:
         return None
     has_data = any(
         isinstance(payload.get(key), list) and payload.get(key)
-        for key in ("trend_metrics", "status_counts", "fault_counts", "latest_metrics")
+        for key in (
+            "trend_groups",
+            "trend_metrics",
+            "status_counts",
+            "fault_counts",
+            "latest_metric_groups",
+            "latest_metrics",
+        )
     )
     return payload if has_data else None
 
@@ -214,19 +221,178 @@ def _json_for_script(payload: dict) -> str:
     )
 
 
+def _chart_trend_groups(chart_payload: dict) -> list[dict]:
+    groups = chart_payload.get("trend_groups")
+    if isinstance(groups, list) and groups:
+        return [group for group in groups if isinstance(group, dict)]
+    metrics = chart_payload.get("trend_metrics")
+    if isinstance(metrics, list) and metrics:
+        return [{"key": "legacy", "name": "关键指标趋势", "metrics": metrics, "thresholds": []}]
+    return []
+
+
+def _chart_trend_id(index: int) -> str:
+    return "dcma-trend-chart" if index == 0 else f"dcma-trend-chart-{index}"
+
+
+def _build_quality_summary(chart_payload: dict) -> str:
+    quality = chart_payload.get("data_quality")
+    if not isinstance(quality, dict):
+        return ""
+    items = [
+        ("最新采样", quality.get("latest_sample_time") or "-"),
+        ("样本量", f"{quality.get('sample_count', 0)} 条"),
+        ("数据时效", quality.get("freshness_label") or "未知"),
+        ("指标完整率", quality.get("metric_availability") or "未评估"),
+    ]
+    cards = "".join(
+        f"""
+        <div class="quality-item">
+          <div class="quality-label">{escape(str(label))}</div>
+          <div class="quality-value">{escape(str(value))}</div>
+        </div>
+        """
+        for label, value in items
+    )
+    currentness = quality.get("currentness")
+    note = f"<p class=\"quality-note\">{escape(str(currentness))}</p>" if currentness else ""
+    return f"""
+      <div class="quality-summary" aria-label="数据质量摘要">
+        <div class="quality-grid">{cards}</div>
+        {note}
+      </div>
+    """
+
+
+def _build_status_summary_section(chart_payload: dict | None) -> str:
+    if not chart_payload:
+        return ""
+    summary = chart_payload.get("status_summary")
+    if not isinstance(summary, dict):
+        return ""
+    items = [
+        ("状态等级", summary.get("status_level") or "未知"),
+        ("数据源", summary.get("source_table") or "-"),
+        ("设备对象", summary.get("device") or "-"),
+        ("最新采样", summary.get("latest_sample_time") or "-"),
+        ("样本窗口", summary.get("sample_window") or "-"),
+        ("当前事件", summary.get("current_event") or "无"),
+        ("关键现象", summary.get("key_phenomenon") or "-"),
+        ("处置优先级", summary.get("priority") or "未知"),
+    ]
+    cards = "".join(
+        f"""
+        <div class="status-card-item">
+          <div class="status-card-label">{escape(str(label))}</div>
+          <div class="status-card-value">{escape(str(value))}</div>
+        </div>
+        """
+        for label, value in items
+    )
+    initial_assessment = escape(str(summary.get("initial_assessment") or "-"))
+    next_action = escape(str(summary.get("next_action") or "-"))
+    return f"""
+    <section class="status-summary-card" aria-label="当前运行状态摘要">
+      <div class="status-card-head">
+        <div>
+          <div class="section-kicker">STATUS</div>
+          <h2>当前运行状态摘要</h2>
+        </div>
+        <strong>{escape(str(summary.get("status_level") or "未知"))}</strong>
+      </div>
+      <div class="status-card-grid">{cards}</div>
+      <div class="status-card-notes">
+        <p><strong>初步判断：</strong>{initial_assessment}</p>
+        <p><strong>下一步动作：</strong>{next_action}</p>
+      </div>
+    </section>
+    """
+
+
+def _format_chart_metric_value(value: object, unit: object = "") -> str:
+    if value is None:
+        return "-"
+    try:
+        number = float(value)
+        text = f"{number:.2f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        text = str(value)
+    unit_text = str(unit or "").strip()
+    return f"{text} {unit_text}".strip()
+
+
+def _latest_metric_groups(chart_payload: dict) -> list[dict]:
+    groups = chart_payload.get("latest_metric_groups")
+    if isinstance(groups, list) and groups:
+        return [group for group in groups if isinstance(group, dict)]
+    metrics = chart_payload.get("latest_metrics")
+    if isinstance(metrics, list) and metrics:
+        return [{"key": "legacy", "name": "关键指标", "metrics": metrics}]
+    return []
+
+
+def _build_latest_snapshot(chart_payload: dict) -> str:
+    groups = _latest_metric_groups(chart_payload)
+    if not groups:
+        return """
+        <article class="chart-panel chart-panel-wide metric-panel">
+          <h3>最新关键指标</h3>
+          <div class="chart-empty chart-empty-inline">暂无关键指标</div>
+        </article>
+        """
+    group_html = []
+    for group in groups:
+        metrics = group.get("metrics")
+        if not isinstance(metrics, list) or not metrics:
+            continue
+        metric_rows = "".join(
+            f"""
+            <div class="metric-row">
+              <span class="metric-name">{escape(str(metric.get("name") or "-"))}</span>
+              <strong>{escape(_format_chart_metric_value(metric.get("value"), metric.get("unit")))}</strong>
+            </div>
+            """
+            for metric in metrics
+            if isinstance(metric, dict)
+        )
+        if metric_rows:
+            group_html.append(
+                f"""
+                <div class="metric-group">
+                  <div class="metric-group-title">{escape(str(group.get("name") or "关键指标"))}</div>
+                  <div class="metric-list">{metric_rows}</div>
+                </div>
+                """
+            )
+    return f"""
+      <article class="chart-panel chart-panel-wide metric-panel">
+        <h3>最新关键指标</h3>
+        <div class="metric-groups">{''.join(group_html) or '<div class="chart-empty chart-empty-inline">暂无关键指标</div>'}</div>
+      </article>
+    """
+
+
 def _build_chart_section(chart_payload: dict | None) -> str:
     if not chart_payload:
         return ""
     data_json = _json_for_script(chart_payload)
+    trend_groups = _chart_trend_groups(chart_payload)
+    trend_panels = "".join(
+        f"""
+        <article class="chart-panel chart-panel-wide">
+          <h3>{escape(str(group.get("name") or "关键指标趋势"))}</h3>
+          <div id="{_chart_trend_id(index)}" class="chart-box"></div>
+        </article>
+        """
+        for index, group in enumerate(trend_groups)
+    )
     return f"""
     <section class="report-section chart-section" aria-label="运行数据可视化">
       <div class="section-kicker">VIS</div>
       <h2>运行数据可视化</h2>
+      {_build_quality_summary(chart_payload)}
       <div class="chart-grid">
-        <article class="chart-panel chart-panel-wide">
-          <h3>关键指标趋势</h3>
-          <div id="dcma-trend-chart" class="chart-box"></div>
-        </article>
+        {trend_panels}
         <article class="chart-panel">
           <h3>状态字分布</h3>
           <div id="dcma-status-chart" class="chart-box chart-box-small"></div>
@@ -235,10 +401,7 @@ def _build_chart_section(chart_payload: dict | None) -> str:
           <h3>异常码分布</h3>
           <div id="dcma-fault-chart" class="chart-box chart-box-small"></div>
         </article>
-        <article class="chart-panel chart-panel-wide">
-          <h3>最新关键指标</h3>
-          <div id="dcma-latest-chart" class="chart-box chart-box-small"></div>
-        </article>
+        {_build_latest_snapshot(chart_payload)}
       </div>
       <p class="chart-status" data-chart-status>图表加载中；若网络受限，请参考下方数据表。</p>
       <script type="application/json" id="dcma-chart-data">{data_json}</script>
@@ -306,6 +469,106 @@ def _build_chart_assets(chart_payload: dict | None) -> str:
         return true;
       }
 
+      function trendChartId(index) {
+        return index === 0 ? "dcma-trend-chart" : "dcma-trend-chart-" + index;
+      }
+
+      function trendGroups(data) {
+        if (Array.isArray(data.trend_groups) && data.trend_groups.length) {
+          return data.trend_groups;
+        }
+        if (Array.isArray(data.trend_metrics) && data.trend_metrics.length) {
+          return [{ key: "legacy", name: "关键指标趋势", metrics: data.trend_metrics, thresholds: [] }];
+        }
+        return [];
+      }
+
+      function uniqueUnits(metrics) {
+        var units = [];
+        (metrics || []).forEach(function (metric) {
+          var unit = metric.unit || "数值";
+          if (units.indexOf(unit) === -1) units.push(unit);
+        });
+        return units.length ? units : ["数值"];
+      }
+
+      function buildMarkLine(group, unit) {
+        var thresholds = Array.isArray(group.thresholds) ? group.thresholds : [];
+        var data = thresholds
+          .filter(function (item) { return (item.unit || "数值") === unit && typeof item.value === "number"; })
+          .map(function (item) { return { name: item.name, yAxis: item.value }; });
+        if (!data.length) return undefined;
+        return {
+          silent: true,
+          symbol: "none",
+          label: { formatter: "{b}", color: "#64748b" },
+          lineStyle: { type: "dashed", color: "#d97706", width: 1 },
+          data: data
+        };
+      }
+
+      function renderTrendGroup(chart, group, timestamps) {
+        var metrics = Array.isArray(group.metrics) ? group.metrics : [];
+        if (!chart || !metrics.length) return false;
+        var units = uniqueUnits(metrics);
+        var unitIndex = {};
+        units.forEach(function (unit, index) { unitIndex[unit] = index; });
+        var hasZoom = Array.isArray(timestamps) && timestamps.length > 16;
+        chart.setOption({
+          color: palette,
+          tooltip: {
+            trigger: "axis",
+            axisPointer: { type: "cross" },
+            valueFormatter: function (value) {
+              return typeof value === "number" ? String(Math.round(value * 100) / 100) : String(value);
+            }
+          },
+          legend: { type: "scroll", top: 0, textStyle: { color: "#4b5563" } },
+          grid: {
+            left: 52,
+            right: units.length > 1 ? 64 + Math.max(0, units.length - 2) * 42 : 28,
+            top: 56,
+            bottom: hasZoom ? 54 : 28,
+            containLabel: true
+          },
+          xAxis: {
+            type: "category",
+            boundaryGap: false,
+            data: timestamps || [],
+            axisLabel: { color: "#64748b", hideOverlap: true }
+          },
+          yAxis: units.map(function (unit, index) {
+            return {
+              type: "value",
+              name: unit,
+              scale: true,
+              position: index % 2 === 0 ? "left" : "right",
+              offset: Math.floor(index / 2) * 42,
+              axisLabel: { color: "#64748b" },
+              splitLine: { show: index === 0, lineStyle: { color: "#e5e7eb" } }
+            };
+          }),
+          dataZoom: hasZoom ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 12, borderColor: "#d8dee8" }] : [],
+          series: metrics.map(function (metric, index) {
+            var unit = metric.unit || "数值";
+            return {
+              name: metric.unit ? metric.name + " (" + metric.unit + ")" : metric.name,
+              type: "line",
+              smooth: true,
+              showSymbol: false,
+              connectNulls: true,
+              yAxisIndex: unitIndex[unit] || 0,
+              lineStyle: { width: 2 },
+              areaStyle: index === 0 ? { opacity: 0.08 } : undefined,
+              emphasis: { focus: "series" },
+              markLine: buildMarkLine(group, unit),
+              data: metric.values || []
+            };
+          })
+        });
+        return true;
+      }
+
       ready(function () {
         var data = readChartData();
         var status = document.querySelector("[data-chart-status]");
@@ -315,39 +578,13 @@ def _build_chart_assets(chart_payload: dict | None) -> str:
         }
 
         var charts = [];
-        var trendChart = initChart("dcma-trend-chart");
-        if (trendChart && Array.isArray(data.trend_metrics) && data.trend_metrics.length) {
-          var hasZoom = Array.isArray(data.timestamps) && data.timestamps.length > 16;
-          trendChart.setOption({
-            color: palette,
-            tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-            legend: { type: "scroll", top: 0, textStyle: { color: "#4b5563" } },
-            grid: { left: 48, right: 28, top: 56, bottom: hasZoom ? 54 : 28, containLabel: true },
-            xAxis: {
-              type: "category",
-              boundaryGap: false,
-              data: data.timestamps || [],
-              axisLabel: { color: "#64748b", hideOverlap: true }
-            },
-            yAxis: { type: "value", scale: true, axisLabel: { color: "#64748b" }, splitLine: { lineStyle: { color: "#e5e7eb" } } },
-            dataZoom: hasZoom ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 12, borderColor: "#d8dee8" }] : [],
-            series: data.trend_metrics.map(function (metric, index) {
-              return {
-                name: metric.name,
-                type: "line",
-                smooth: true,
-                showSymbol: false,
-                connectNulls: true,
-                lineStyle: { width: 2 },
-                areaStyle: index === 0 ? { opacity: 0.08 } : undefined,
-                emphasis: { focus: "series" },
-                data: metric.values || []
-              };
-            })
+        var groups = trendGroups(data);
+        if (groups.length) {
+          groups.forEach(function (group, index) {
+            var trendChart = initChart(trendChartId(index));
+            if (renderTrendGroup(trendChart, group, data.timestamps || [])) charts.push(trendChart);
+            else setEmpty(trendChartId(index), "暂无趋势数据");
           });
-          charts.push(trendChart);
-        } else {
-          setEmpty("dcma-trend-chart", "暂无趋势数据");
         }
 
         var statusChart = initChart("dcma-status-chart");
@@ -357,33 +594,6 @@ def _build_chart_assets(chart_payload: dict | None) -> str:
         var faultChart = initChart("dcma-fault-chart");
         if (renderPie(faultChart, "异常码", data.fault_counts || [])) charts.push(faultChart);
         else setEmpty("dcma-fault-chart", "未见有效异常码");
-
-        var latestChart = initChart("dcma-latest-chart");
-        if (latestChart && Array.isArray(data.latest_metrics) && data.latest_metrics.length) {
-          latestChart.setOption({
-            color: ["#0f766e"],
-            tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-            grid: { left: 112, right: 28, top: 18, bottom: 24 },
-            xAxis: { type: "value", axisLabel: { color: "#64748b" }, splitLine: { lineStyle: { color: "#e5e7eb" } } },
-            yAxis: {
-              type: "category",
-              inverse: true,
-              data: data.latest_metrics.map(function (item) { return item.name; }),
-              axisLabel: { color: "#334155" }
-            },
-            series: [{
-              name: "最新值",
-              type: "bar",
-              barWidth: 14,
-              itemStyle: { borderRadius: [0, 6, 6, 0] },
-              label: { show: true, position: "right", color: "#243047" },
-              data: data.latest_metrics.map(function (item) { return item.value; })
-            }]
-          });
-          charts.push(latestChart);
-        } else {
-          setEmpty("dcma-latest-chart", "暂无关键指标");
-        }
 
         if (status) status.textContent = "图表已生成；下方保留完整数据表、诊断依据和处置建议。";
         window.addEventListener("resize", function () {
@@ -411,16 +621,17 @@ def _build_report_html(
     chart_payload: str | None = None,
 ) -> str:
     chart_data = _load_chart_payload(chart_payload)
+    status_summary_section = _build_status_summary_section(chart_data)
     chart_section = _build_chart_section(chart_data)
     chart_assets = _build_chart_assets(chart_data)
     sections = [
-        ("01", "执行摘要", executive_summary),
-        ("02", "诊断过程概述", diagnosis_overview),
-        ("03", "运行数据与可视化", diagnosis_details),
-        ("04", "故障原因推断", fault_inference),
-        ("05", "检查与维修建议", repair_recommendations),
-        ("06", "预防性维护建议", preventive_maintenance),
-        ("07", "诊断依据", diagnosis_basis),
+        ("01", "状态摘要", executive_summary),
+        ("02", "数据来源与采样窗口", diagnosis_overview),
+        ("03", "运行数据与证据链", diagnosis_details),
+        ("04", "诊断判断与不确定性", fault_inference),
+        ("05", "分级处置建议", repair_recommendations),
+        ("06", "后续运行验证", preventive_maintenance),
+        ("07", "附录：SQL 与知识来源", diagnosis_basis),
     ]
     section_html = "\n".join(
         f"""
@@ -483,6 +694,54 @@ def _build_report_html(
     }}
     .meta-label {{ color: var(--muted); font-size: 12px; margin-bottom: 4px; }}
     .meta-value {{ font-weight: 700; overflow-wrap: anywhere; }}
+    .status-summary-card {{
+      margin-top: 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+      box-shadow: 0 8px 22px rgba(22, 32, 51, 0.05);
+    }}
+    .status-card-head {{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }}
+    .status-card-head h2 {{ margin-bottom: 0; }}
+    .status-card-head strong {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 5px 10px;
+      border-radius: 6px;
+      background: #fff7ed;
+      color: #9a3412;
+      font-size: 15px;
+      white-space: nowrap;
+    }}
+    .status-card-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }}
+    .status-card-item {{
+      min-width: 0;
+      border: 1px solid #edf1f6;
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #fbfcfe;
+    }}
+    .status-card-label {{ color: var(--muted); font-size: 12px; margin-bottom: 3px; }}
+    .status-card-value {{ font-weight: 800; overflow-wrap: anywhere; }}
+    .status-card-notes {{
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      color: #304057;
+    }}
+    .status-card-notes p:last-child {{ margin-bottom: 0; }}
     .report-section {{
       margin-top: 18px;
       background: var(--panel);
@@ -507,6 +766,22 @@ def _build_report_html(
     h3 {{ margin: 18px 0 10px; font-size: 18px; letter-spacing: 0; }}
     h4 {{ margin: 14px 0 8px; font-size: 15px; letter-spacing: 0; color: var(--muted); }}
     .chart-section {{ background: #fbfdff; }}
+    .quality-summary {{
+      margin: 0 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px 14px;
+    }}
+    .quality-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }}
+    .quality-item {{ min-width: 0; }}
+    .quality-label {{ color: var(--muted); font-size: 12px; margin-bottom: 3px; }}
+    .quality-value {{ font-weight: 800; overflow-wrap: anywhere; }}
+    .quality-note {{ margin: 8px 0 0; color: var(--muted); font-size: 13px; }}
     .chart-grid {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -535,6 +810,32 @@ def _build_report_html(
       border-radius: 8px;
       font-size: 14px;
     }}
+    .chart-empty-inline {{ min-height: 88px; height: auto; }}
+    .metric-panel h3 {{ margin-bottom: 4px; }}
+    .metric-groups {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px 18px;
+      margin-top: 10px;
+    }}
+    .metric-group {{ min-width: 0; }}
+    .metric-group-title {{
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      margin-bottom: 6px;
+    }}
+    .metric-list {{ border-top: 1px solid var(--line); }}
+    .metric-row {{
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 0;
+      border-bottom: 1px solid #edf1f6;
+    }}
+    .metric-name {{ color: #334155; font-size: 13px; }}
+    .metric-row strong {{ font-size: 15px; white-space: nowrap; }}
     p {{ margin: 0 0 12px; }}
     ul {{ margin: 0 0 12px 20px; padding: 0; }}
     li {{ margin: 4px 0; }}
@@ -558,10 +859,15 @@ def _build_report_html(
       .report-hero {{ padding: 20px; }}
       h1 {{ font-size: 27px; }}
       .meta-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .status-card-head {{ display: block; }}
+      .status-card-head strong {{ margin-top: 10px; }}
+      .status-card-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .report-section {{ padding: 18px; }}
+      .quality-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .chart-grid {{ grid-template-columns: 1fr; }}
       .chart-box {{ height: 300px; }}
       .chart-box-small {{ height: 240px; }}
+      .metric-groups {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
@@ -573,10 +879,11 @@ def _build_report_html(
       <div class="meta-grid">
         <div class="meta-item"><div class="meta-label">报告时间</div><div class="meta-value">{escape(report_time)}</div></div>
         <div class="meta-item"><div class="meta-label">诊断对象</div><div class="meta-value">{escape(diagnosis_object)}</div></div>
-        <div class="meta-item"><div class="meta-label">诊断类型</div><div class="meta-value">{escape(diagnosis_type)}</div></div>
+        <div class="meta-item"><div class="meta-label">报告类型</div><div class="meta-value">{escape(diagnosis_type)}</div></div>
         <div class="meta-item"><div class="meta-label">生成系统</div><div class="meta-value">工业设备故障诊断专家系统</div></div>
       </div>
     </header>
+    {status_summary_section}
     {chart_section}
     {section_html}
     <blockquote>报告生成时间：{escape(report_time)}<br />诊断系统版本：工业设备故障诊断专家系统</blockquote>

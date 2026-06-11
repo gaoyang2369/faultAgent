@@ -93,22 +93,44 @@ def test_report_payload_renders_real_data_rows_as_tables() -> None:
         report_filename="test-report",
     )
 
+    assert payload["title"] == "DCMA 当前运行状态报告"
+    assert payload["diagnosis_type"] == "运行状态报告"
+    assert "状态等级" in payload["executive_summary"]
+    assert "设备映射" in payload["executive_summary"]
     assert f"已从 {REAL_DATA_LATEST_TABLE} 获取 1 条 DCMA 运行数据" in payload["executive_summary"]
     assert "不能等同于当前实时状态" not in payload["executive_summary"]
     assert "数据时间戳" not in payload["executive_summary"]
     assert "real_data_01" in payload["executive_summary"]
+    assert "数据时效提示" in payload["executive_summary"]
+    assert "### 状态摘要" in payload["diagnosis_details"]
+    assert "### 数据质量与实时性" in payload["diagnosis_details"]
     assert "### 运行健康判定" in payload["diagnosis_details"]
+    assert "### 事件码时间线" in payload["diagnosis_details"]
     assert "### 异常特征解读" in payload["diagnosis_details"]
+    assert "### 关键指标工程判定" in payload["diagnosis_details"]
+    assert "### 控制字/状态字解析" in payload["diagnosis_details"]
+    assert "### 结论分层" in payload["diagnosis_details"]
     assert "### 指标趋势可视化" in payload["diagnosis_details"]
     assert "### 最新运行快照" in payload["diagnosis_details"]
     assert "### 状态分布" in payload["diagnosis_details"]
-    assert "### 故障码分布" in payload["diagnosis_details"]
-    assert "| 时间 | 设备 | 状态 | 故障码 | 告警码" in payload["diagnosis_details"]
+    assert "### 异常码分布" in payload["diagnosis_details"]
+    assert "| 时间 | 设备 | 状态 | 故障/事件码 | 告警码" in payload["diagnosis_details"]
     assert "G120电机1" in payload["diagnosis_details"]
     assert "F1030-0/0/0" in payload["fault_inference"]
     chart_payload = json.loads(payload["chart_payload"])
     assert chart_payload["source_table"] == REAL_DATA_LATEST_TABLE
+    assert chart_payload["status_summary"]["status_level"] == "故障 / 需处理"
+    assert chart_payload["status_summary"]["current_event"] == "F1030-0/0/0"
     assert chart_payload["trend_metrics"]
+    assert chart_payload["data_quality"]["freshness_label"] == "已滞后"
+    assert chart_payload["data_quality"]["metric_availability"] == "100%"
+    assert {group["key"] for group in chart_payload["trend_groups"]} >= {"speed", "power_supply", "temperature", "load"}
+    speed_group = next(group for group in chart_payload["trend_groups"] if group["key"] == "speed")
+    assert {metric["key"] for metric in speed_group["metrics"]} == {"speed_setpoint", "speed_actual"}
+    assert {metric["unit"] for metric in speed_group["metrics"]} == {"rpm"}
+    load_group = next(group for group in chart_payload["trend_groups"] if group["key"] == "load")
+    assert {"name": "关注", "value": 75, "unit": "%"} in load_group["thresholds"]
+    assert chart_payload["latest_metric_groups"]
     assert chart_payload["fault_counts"] == [{"name": "F1030-0/0/0", "value": 1}]
 
 
@@ -143,6 +165,176 @@ def test_report_html_embeds_echarts_visualization() -> None:
     assert "dcma-trend-chart" in html
     assert "cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js" in html
     assert "A07089" in html
+
+
+def test_report_html_renders_grouped_trends_and_metric_snapshot() -> None:
+    chart_payload = json.dumps(
+        {
+            "timestamps": ["2026-06-10 12:12:56", "2026-06-10 12:12:59"],
+            "trend_groups": [
+                {
+                    "key": "speed",
+                    "name": "速度跟随",
+                    "metrics": [
+                        {"key": "speed_setpoint", "name": "给定转速", "unit": "rpm", "values": [820, 823]},
+                        {"key": "speed_actual", "name": "实际转速", "unit": "rpm", "values": [450, 442]},
+                    ],
+                    "thresholds": [],
+                },
+                {
+                    "key": "load",
+                    "name": "负载率",
+                    "metrics": [
+                        {"key": "motor_load_rate", "name": "电机负载率", "unit": "%", "values": [76, 78]},
+                    ],
+                    "thresholds": [{"name": "关注", "value": 75, "unit": "%"}],
+                },
+            ],
+            "status_counts": [{"name": "42", "value": 2}],
+            "fault_counts": [{"name": "A07089", "value": 2}],
+            "latest_metric_groups": [
+                {
+                    "key": "speed",
+                    "name": "速度跟随",
+                    "metrics": [
+                        {"name": "给定转速", "value": 823.41, "unit": "rpm"},
+                        {"name": "实际转速", "value": 442.21, "unit": "rpm"},
+                    ],
+                }
+            ],
+            "status_summary": {
+                "status_level": "告警 / 需确认",
+                "source_table": "real_data_01",
+                "device": "G120电机1",
+                "latest_sample_time": "2026-06-10 12:12:59",
+                "sample_window": "2026-06-10 12:12:56 至 2026-06-10 12:12:59，2 条记录",
+                "current_event": "A07089",
+                "key_phenomenon": "速度给定与实际速度偏差 46.3%",
+                "priority": "中",
+                "initial_assessment": "存在参数/配置/调试相关事件迹象。",
+                "next_action": "先确认运行模式和参数变更。",
+            },
+            "data_quality": {
+                "latest_sample_time": "2026-06-10 12:12:59",
+                "sample_count": 2,
+                "freshness_label": "实时性良好",
+                "metric_availability": "100%",
+                "currentness": "可作为当前状态的强参考",
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    html = _build_report_html(
+        title="DCMA 故障诊断报告",
+        report_time="2026-06-11 20:00:00",
+        diagnosis_object="DCMA 系统",
+        diagnosis_type="故障诊断",
+        executive_summary="摘要",
+        diagnosis_overview="概述",
+        diagnosis_details="详情",
+        fault_inference="推断",
+        repair_recommendations="- 建议",
+        preventive_maintenance="- 维护",
+        diagnosis_basis="依据",
+        chart_payload=chart_payload,
+    )
+
+    assert "速度跟随" in html
+    assert "负载率" in html
+    assert "dcma-trend-chart-1" in html
+    assert "数据质量摘要" in html
+    assert "当前运行状态摘要" in html
+    assert "报告类型" in html
+    assert "metric-groups" in html
+    assert "823.41 rpm" in html
+    assert "renderTrendGroup" in html
+
+
+def test_status_report_downgrades_a_code_to_warning_event() -> None:
+    request = DiagnosisRequest(
+        user_message="生成 DCMA 当前运行状态报告",
+        user_identity="游客",
+        equipment_hint=None,
+        metric_hint=None,
+        fault_code_hint=None,
+        time_range_hint="当前",
+        needs_report=True,
+        report_format="markdown",
+        analysis_goal="生成运行状态报告",
+    )
+    row = (
+        566,
+        "2026/06/10 12:12:59",
+        "G120电机1",
+        "G120电机1",
+        "2026/06/10",
+        "12:12:59 000ms",
+        "42",
+        "A07089",
+        "0",
+        "5246",
+        "10679",
+        555.228,
+        823.412,
+        442.209,
+        0.775,
+        0,
+        0,
+        25.2,
+        46.811,
+        31.123,
+        0.018,
+        0.12,
+        0.18,
+        "24.7",
+        31.123,
+        12.0,
+        18.0,
+        2,
+        0.44,
+        0,
+        "2026-06-10 12:12:59",
+    )
+    knowledge = KnowledgeStepArtifact(
+        success=True,
+        query="A07089 原因 处理",
+        raw_output=(
+            "来源：S120_故障手册.pdf\n"
+            "页码：232\n"
+            "A07089 单位转换：转换单位后不能激活功能块\n"
+            "反应：无\n"
+            "应答：无"
+        ),
+    )
+    sql_artifact = SqlStepArtifact(success=True, summary="ok", raw_output=str([row] * 3))
+    artifact = build_structured_analysis_artifact(
+        request=request,
+        sql_artifact=sql_artifact,
+        knowledge_artifact=knowledge,
+    )
+    assert artifact is not None
+    assert "告警 / 需确认" in artifact.conclusion
+    assert "事件码/告警码" in artifact.conclusion
+    assert not any("立即停机" in item or "严重故障" in item for item in artifact.recommendations)
+    assert any("参数/配置检查" in item for item in artifact.recommendations)
+
+    payload = build_report_payload(
+        request=request,
+        sql_artifact=sql_artifact,
+        knowledge_artifact=knowledge,
+        analysis_artifact=artifact,
+        current_time="2026-06-10 12:13:00",
+        report_filename="dcma-status",
+    )
+    chart_payload = json.loads(payload["chart_payload"])
+    speed_group = next(group for group in chart_payload["trend_groups"] if group["key"] == "speed")
+    assert chart_payload["status_summary"]["status_level"] == "告警 / 需确认"
+    assert chart_payload["status_summary"]["current_event"] == "A07089"
+    assert "A07089" in payload["diagnosis_details"]
+    assert "不能仅凭事件码证明速度偏差" in payload["diagnosis_details"]
+    assert "speed_error_rate" in {metric["key"] for metric in speed_group["metrics"]}
+    assert {"name": "关注", "value": 20.0, "unit": "%"} in speed_group["thresholds"]
 
 
 def test_structured_analysis_avoids_stale_timestamp_language() -> None:
@@ -274,9 +466,9 @@ def test_structured_analysis_uses_rag_fault_code_actions() -> None:
     assert any("故障码处置：按 RAG 手册片段核对触发条件和处理项" in item for item in artifact.recommendations)
     assert any("重新为所有组件上电" in item for item in artifact.recommendations)
     assert any("RAG 处置要点" in item for item in artifact.basis)
-    assert any("异常码主因优先按 RAG 手册核对" in item for item in artifact.probable_causes)
+    assert any("故障码主因优先按 RAG 手册核对" in item for item in artifact.probable_causes)
     assert any("状态字、控制字" in item for item in artifact.verification_items)
-    assert any("异常码识别：high" in item for item in artifact.confidence_details)
+    assert any("事件码识别：high" in item for item in artifact.confidence_details)
     assert not any("演示后建议" in item for item in artifact.recommendations)
     assert "RAG知识要点" in evidence_summary
     assert "F01002" in evidence_summary
