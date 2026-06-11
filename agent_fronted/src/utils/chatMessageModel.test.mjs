@@ -119,4 +119,24 @@ assert.equal(failedMessage.taskSnapshot.todos[1].status, 'interrupted')
 assert.equal(failedMessage.taskSnapshot.summary.in_progress, 0)
 assert.equal(failedMessage.taskSnapshot.summary.interrupted, 1)
 
+const artifactOnlyMessage = normalizeChatMessage({
+  role: 'assistant',
+  content: '',
+  analysis_artifact: {
+    conclusion: 'G120电机1存在故障码A07089',
+    recommendations: ['立即处置：确认现场安全条件']
+  },
+  sql_artifact: {
+    summary: 'SQL 返回 50 条'
+  },
+  knowledge_artifact: {
+    query: 'A07089'
+  }
+})
+
+assert.equal(artifactOnlyMessage.analysisArtifact.conclusion, 'G120电机1存在故障码A07089')
+assert.equal(artifactOnlyMessage.sqlArtifact.summary, 'SQL 返回 50 条')
+assert.equal(artifactOnlyMessage.knowledgeArtifact.query, 'A07089')
+assert.equal(isRenderableChatMessage(artifactOnlyMessage), true)
+
 console.log('chatMessageModel checks passed')

@@ -10,10 +10,10 @@ from fault_diagnosis.diagnosis.contracts import (
 )
 from fault_diagnosis.single_agent.reporting import (
     build_analysis_evidence_summary,
-    build_final_answer_fallback,
     build_report_payload,
     build_structured_analysis_artifact,
 )
+from fault_diagnosis.single_agent.final_answer import build_final_answer_fallback
 from fault_diagnosis.single_agent.sql_safety import REAL_DATA_FALLBACK_COLUMNS, REAL_DATA_LATEST_TABLE
 from fault_diagnosis.tools.kb_tools import query_fault_code_from_local_pdfs
 from fault_diagnosis.tools.report_tools import _build_report_html
@@ -202,7 +202,7 @@ def test_structured_analysis_avoids_stale_timestamp_language() -> None:
 
     assert artifact is not None
     assert "F1030" in artifact.conclusion
-    assert "自动补充知识库检索结果" in artifact.conclusion
+    assert "自动补充知识库检索结果用于诊断说明" in artifact.conclusion
     assert "无法确认当前实时状态" not in artifact.conclusion
     assert "数据时间戳" not in artifact.conclusion
     assert artifact.confidence == "high"
@@ -271,9 +271,13 @@ def test_structured_analysis_uses_rag_fault_code_actions() -> None:
     )
 
     assert artifact is not None
-    assert any("依据 RAG 手册片段执行故障码处置" in item for item in artifact.recommendations)
+    assert any("故障码处置：按 RAG 手册片段核对触发条件和处理项" in item for item in artifact.recommendations)
     assert any("重新为所有组件上电" in item for item in artifact.recommendations)
     assert any("RAG 处置要点" in item for item in artifact.basis)
+    assert any("异常码主因优先按 RAG 手册核对" in item for item in artifact.probable_causes)
+    assert any("状态字、控制字" in item for item in artifact.verification_items)
+    assert any("异常码识别：high" in item for item in artifact.confidence_details)
+    assert not any("演示后建议" in item for item in artifact.recommendations)
     assert "RAG知识要点" in evidence_summary
     assert "F01002" in evidence_summary
 
@@ -283,9 +287,12 @@ def test_final_answer_omits_report_section_when_report_not_generated() -> None:
         success=True,
         conclusion="设备存在异常码，需结合数据和 RAG 处理。",
         basis=["SQL 返回最新运行数据", "RAG 命中故障码处理步骤"],
+        probable_causes=["RAG 指向参数配置问题"],
+        verification_items=["确认复位后是否复现"],
         recommendations=["立即处置：按现场规程确认安全状态后处理"],
         risk_notice="处置前确认现场安全状态。",
         missing_information=["现场是否已复位"],
+        confidence_details=["异常码识别：high", "处置闭环：medium"],
         confidence="medium",
     )
 
@@ -293,6 +300,10 @@ def test_final_answer_omits_report_section_when_report_not_generated() -> None:
 
     assert "【报告文件】" not in answer
     assert "未生成" not in answer
-    assert "【已确认事实】" in answer
-    assert "【可能原因与待验证】" in answer
-    assert "【建议处置与验证】" in answer
+    assert "【优先动作】" in answer
+    assert "【关键依据】" in answer
+    assert "SQL 返回最新运行数据" in answer
+    assert "RAG 指向参数配置问题" not in answer
+    assert "【可能原因与待验证】" not in answer
+    assert "【建议处置与验证】" not in answer
+    assert "异常码识别 high" in answer

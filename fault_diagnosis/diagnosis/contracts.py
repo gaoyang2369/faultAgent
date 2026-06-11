@@ -71,9 +71,12 @@ class AnalysisStepArtifact(BaseModel):
     success: bool
     conclusion: str
     basis: list[str] = Field(default_factory=list)
+    probable_causes: list[str] = Field(default_factory=list)
+    verification_items: list[str] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
     risk_notice: str | None = None
     missing_information: list[str] = Field(default_factory=list)
+    confidence_details: list[str] = Field(default_factory=list)
     confidence: str = "low"
     error: str | None = None
 

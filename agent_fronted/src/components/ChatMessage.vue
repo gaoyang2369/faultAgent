@@ -1123,7 +1123,7 @@
         </div>
       </details>
 
-      <div v-if="!isUser && toolEvents.length" class="tool-details" :class="{ 'tool-details--active': hasRunningTool }">
+      <div v-if="!isUser && toolEvents.length && shouldShowToolDetails" class="tool-details" :class="{ 'tool-details--active': hasRunningTool }">
         <button class="tool-details__toggle" @click="toolDetailsExpanded = !toolDetailsExpanded">
           <div class="tool-details__copy">
             <span class="tool-details__title">{{ toolDetailsExpanded ? '收起执行明细' : '查看执行明细' }}</span>
@@ -1156,9 +1156,14 @@
       </div>
       </div>
 
-      <section v-if="!isUser && hasFinalAnswerContent" class="final-answer-section">
+      <DiagnosisResultCard
+        v-if="!isUser && hasDiagnosisResultCard"
+        :message="props.message"
+      />
+
+      <section v-if="!isUser && hasFinalAnswerSectionContent" class="final-answer-section">
         <div class="final-answer-section__header">最终回答</div>
-        <div v-if="processedContent" class="text-container final-answer-section__body">
+        <div v-if="shouldShowFinalAnswerMarkdown" class="text-container final-answer-section__body">
           <div class="text markdown-content" ref="contentRef" v-html="processedContent"></div>
         </div>
 
@@ -1272,6 +1277,7 @@ import {
   ClockIcon
 } from '@heroicons/vue/24/outline';
 import TaskPanel from './TaskPanel.vue'
+import DiagnosisResultCard from './DiagnosisResultCard.vue'
 import hljs from 'highlight.js';
 import 'highlight.js/styles/github-dark.css';
 import { ElMessage } from 'element-plus';
@@ -3851,12 +3857,38 @@ const hasReportMentionButNoLinks = computed(() => {
   const hasMention = /报告文件|报告已保存至|HTML 报告已保存至|报告已生成|诊断报告已生成|\/reports\//i.test(raw);
   return hasMention && reportLinks.value.length === 0;
 });
-const hasFinalAnswerContent = computed(() => (
-  Boolean(processedContent.value) ||
+const diagnosisAnalysisArtifact = computed(() => {
+  const raw = props.message?.analysisArtifact ||
+    props.message?.analysis_artifact ||
+    props.message?.artifact?.payload?.analysis_artifact ||
+    props.message?.workflowResult?.payload?.analysis_artifact ||
+    props.message?.workflow_result?.payload?.analysis_artifact ||
+    props.message?.scenarioResult?.payload?.analysis_artifact ||
+    props.message?.scenario_result?.payload?.analysis_artifact ||
+    null;
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+});
+const hasDiagnosisResultCard = computed(() => Boolean(
+  diagnosisAnalysisArtifact.value &&
+  (
+    diagnosisAnalysisArtifact.value.conclusion ||
+    diagnosisAnalysisArtifact.value.basis?.length ||
+    diagnosisAnalysisArtifact.value.recommendations?.length
+  )
+));
+const shouldShowFinalAnswerMarkdown = computed(() => (
+  Boolean(processedContent.value) && !hasDiagnosisResultCard.value
+));
+const hasFinalAnswerSectionContent = computed(() => (
+  shouldShowFinalAnswerMarkdown.value ||
   Boolean(showChart.value) ||
   Boolean(props.message?.imageUrl) ||
   reportLinks.value.length > 0 ||
   hasReportMentionButNoLinks.value
+));
+const hasFinalAnswerContent = computed(() => (
+  hasDiagnosisResultCard.value ||
+  hasFinalAnswerSectionContent.value
 ));
 const hasAssistantProcessDetails = computed(() => (
   hasTaskSnapshot.value ||
@@ -3869,10 +3901,13 @@ const shouldShowProcessDetails = computed(() => (
   !hasFinalAnswerContent.value || assistantDetailsExpanded.value
 ));
 const shouldShowFinalProcessToggle = computed(() => (
-  !isUser.value && hasFinalAnswerContent.value && hasAssistantProcessDetails.value
+  !isUser.value && !hasDiagnosisResultCard.value && hasFinalAnswerContent.value && hasAssistantProcessDetails.value
 ));
 const shouldShowInlineAssistantDetailsToggle = computed(() => (
-  hasAssistantDetails.value && !hasFinalAnswerContent.value
+  !hasDiagnosisResultCard.value && hasAssistantDetails.value && !hasFinalAnswerContent.value
+));
+const shouldShowToolDetails = computed(() => (
+  !hasDiagnosisResultCard.value
 ));
 const finalProcessToggleHint = computed(() => {
   const sections = [];

@@ -785,6 +785,32 @@ export const useChatStream = ({
       voiceSessionActive: false
     }
 
+    patch.evidences = payload.evidences || []
+    patch.normalizedEvidences = payload.normalizedEvidences || payload.normalized_evidences || []
+    patch.findings = payload.findings || []
+    patch.findingLinks = payload.findingLinks || payload.finding_links || []
+    patch.workflowResult = payload.workflowResult || payload.workflow_result || null
+    patch.scenarioResult = payload.scenarioResult || payload.scenario_result || null
+    patch.artifacts = payload.artifacts || []
+    patch.timeline = payload.timeline || []
+    patch.governance = payload.governance || null
+    patch.reportGate = payload.reportGate || payload.report_gate || 'pass'
+    patch.reportFilename = payload.reportFilename || payload.report_filename || null
+    patch.reportUrl = payload.reportUrl || payload.report_url || null
+    patch.reportArtifact = payload.reportArtifact || payload.report_artifact || null
+    patch.sqlArtifact = payload.sqlArtifact || payload.sql_artifact || null
+    patch.knowledgeArtifact = payload.knowledgeArtifact || payload.knowledge_artifact || null
+    patch.analysisArtifact = payload.analysisArtifact || payload.analysis_artifact || null
+    patch.artifact = payload.artifact || null
+    patch.workflowStages = payload.workflowStages || payload.workflow_stages || []
+    patch.currentWorkflowStage = payload.currentWorkflowStage || payload.current_stage || null
+    patch.workflowStageDetails = payload.workflowStageDetails || payload.workflow_stage_details || []
+    patch.toolLifecycleLedger = payload.toolLifecycleLedger || payload.tool_lifecycle_ledger || []
+    patch.evidenceQuality = payload.evidenceQuality || payload.evidence_quality || null
+    patch.evidenceCoverage = payload.evidenceCoverage || payload.evidence_coverage || null
+    patch.qualityGateNotice = payload.qualityGateNotice || payload.quality_gate_notice || null
+    patch.releaseReady = payload.releaseReady ?? payload.release_ready ?? null
+
     if (Array.isArray(payload.todos) && payload.todos.length) {
       patch.taskSnapshot = assignTodosState(payload.todos)
     }
@@ -1080,6 +1106,10 @@ export const useChatStream = ({
             patch.reportFilename = completeData.reportFilename || completeData.report_filename || null
             patch.reportUrl = completeData.reportUrl || completeData.report_url || null
             patch.reportArtifact = completeData.reportArtifact || completeData.report_artifact || null
+            patch.sqlArtifact = completeData.sqlArtifact || completeData.sql_artifact || null
+            patch.knowledgeArtifact = completeData.knowledgeArtifact || completeData.knowledge_artifact || null
+            patch.analysisArtifact = completeData.analysisArtifact || completeData.analysis_artifact || null
+            patch.artifact = completeData.artifact || null
             patch.qualityGateNotice = completeData.qualityGateNotice || completeData.quality_gate_notice || null
             patch.releaseReady = completeData.releaseReady ?? completeData.release_ready ?? null
             patch.workflowStages = completeData.workflow_stages || []

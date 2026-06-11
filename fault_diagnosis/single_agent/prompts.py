@@ -99,10 +99,13 @@ def build_single_agent_evidence_synthesis_prompt(
 你是 DCMA 故障诊断专家，请基于“结构化证据摘要”进行诊断合成。
 请只输出 JSON，字段必须完整：
 - conclusion: 一句话结论，必须同时体现数据侧异常和 RAG/手册侧证据是否支持
-- basis: 数组，列出 4-8 条支撑结论的关键证据；必须覆盖 SQL 数据特征和 RAG 知识
+- basis: 数组，列出 4-8 条支撑结论的已确认事实；必须覆盖 SQL 数据特征和 RAG 知识，不能写处置建议
+- probable_causes: 数组，只列“可能原因/主因假设”；不能混入待补充信息
+- verification_items: 数组，只列需要现场确认或复位前后验证的信息
 - recommendations: 数组，给出可执行建议；必须包含“立即处置”、“验证步骤”、“根因排查”三类动作，不要只说“查询手册”
 - risk_notice: 字符串或 null
 - missing_information: 数组，列出影响置信度的缺失信息
+- confidence_details: 数组，分别说明故障码识别、RAG匹配、数据关联、处置闭环的置信度
 - confidence: 只能取 high / medium / low
 
 约束：
@@ -112,7 +115,9 @@ def build_single_agent_evidence_synthesis_prompt(
 4. 建议要具体到检查对象，例如状态字/控制字、复位前后异常码、母线电压、速度给定与反馈、负载率、温度、散热、运行使能、反馈链路。
 5. 禁止给出证据中没有出现的精确阈值、比例或时间要求，例如“降载至 50% 以下”；如需临时控制风险，只能表述为“按现场规程降载/停机确认”。
 6. 必须区分“已确认事实”和“可能关联/待验证假设”，不要把速度偏差、负载偏高与故障码原因强行判定为同一根因。
-7. 不要因为采集时间早于当前时间而否定演示数据，直接按给定样本做诊断。
+7. recommendations 的顺序应为：立即处置 -> RAG故障码处置 -> 验证步骤 -> 数据关联排查。
+8. basis 中禁止出现“需检查/建议/应当/优先”等处置动作词；这些内容放入 recommendations 或 verification_items。
+9. 不要因为采集时间早于当前时间而否定演示数据，直接按给定样本做诊断。
 
 当前时间：{current_time}
 用户问题：{request.user_message}

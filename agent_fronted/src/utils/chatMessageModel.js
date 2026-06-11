@@ -370,6 +370,10 @@ export const normalizeChatMessage = (message = {}) => {
     : Array.isArray(message.tool_lifecycle_ledger)
       ? message.tool_lifecycle_ledger
       : []
+  const sqlArtifact = message.sqlArtifact || message.sql_artifact || null
+  const knowledgeArtifact = message.knowledgeArtifact || message.knowledge_artifact || null
+  const analysisArtifact = message.analysisArtifact || message.analysis_artifact || null
+  const reportArtifact = message.reportArtifact || message.report_artifact || null
 
   return {
     ...message,
@@ -381,6 +385,10 @@ export const normalizeChatMessage = (message = {}) => {
     statusText,
     toolEvents: normalizedToolEvents,
     toolLifecycleLedger: normalizedToolLifecycleLedger,
+    sqlArtifact,
+    knowledgeArtifact,
+    analysisArtifact,
+    reportArtifact,
     taskSnapshot: normalizeTerminalTaskSnapshot(message.taskSnapshot, streamState, statusText)
   }
 }
@@ -404,6 +412,10 @@ export const isRenderableChatMessage = (message = {}) => {
   }
 
   if (normalized.chartData || normalized.imageUrl) {
+    return true
+  }
+
+  if (normalized.analysisArtifact || normalized.sqlArtifact || normalized.knowledgeArtifact) {
     return true
   }
 
@@ -464,8 +476,13 @@ export const mergeMessagesWithLocalCache = (serverMessages = [], cachedMessages 
         Array.isArray(cached.toolLifecycleLedger) &&
         cached.toolLifecycleLedger.length > 0
       )
+      const shouldRestoreArtifacts = (
+        (!message.analysisArtifact && cached.analysisArtifact) ||
+        (!message.sqlArtifact && cached.sqlArtifact) ||
+        (!message.knowledgeArtifact && cached.knowledgeArtifact)
+      )
 
-      if (!shouldRestoreToolEvents && !shouldRestoreTaskSnapshot && !shouldRestoreToolLifecycleLedger) {
+      if (!shouldRestoreToolEvents && !shouldRestoreTaskSnapshot && !shouldRestoreToolLifecycleLedger && !shouldRestoreArtifacts) {
         return message
       }
 
@@ -473,7 +490,10 @@ export const mergeMessagesWithLocalCache = (serverMessages = [], cachedMessages 
         ...message,
         ...(shouldRestoreToolEvents ? { toolEvents: cached.toolEvents } : {}),
         ...(shouldRestoreTaskSnapshot ? { taskSnapshot: cached.taskSnapshot } : {}),
-        ...(shouldRestoreToolLifecycleLedger ? { toolLifecycleLedger: cached.toolLifecycleLedger } : {})
+        ...(shouldRestoreToolLifecycleLedger ? { toolLifecycleLedger: cached.toolLifecycleLedger } : {}),
+        ...(!message.analysisArtifact && cached.analysisArtifact ? { analysisArtifact: cached.analysisArtifact } : {}),
+        ...(!message.sqlArtifact && cached.sqlArtifact ? { sqlArtifact: cached.sqlArtifact } : {}),
+        ...(!message.knowledgeArtifact && cached.knowledgeArtifact ? { knowledgeArtifact: cached.knowledgeArtifact } : {})
       }
     }
 
@@ -486,7 +506,10 @@ export const mergeMessagesWithLocalCache = (serverMessages = [], cachedMessages 
       taskSnapshot: message.taskSnapshot || cached.taskSnapshot,
       toolLifecycleLedger: Array.isArray(message.toolLifecycleLedger) && message.toolLifecycleLedger.length > 0
         ? message.toolLifecycleLedger
-        : cached.toolLifecycleLedger
+        : cached.toolLifecycleLedger,
+      analysisArtifact: message.analysisArtifact || cached.analysisArtifact || null,
+      sqlArtifact: message.sqlArtifact || cached.sqlArtifact || null,
+      knowledgeArtifact: message.knowledgeArtifact || cached.knowledgeArtifact || null
     }
   })
 

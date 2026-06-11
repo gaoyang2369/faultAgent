@@ -411,6 +411,119 @@ def _knowledge_action_summaries(
     return summaries
 
 
+def _dedupe_items(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(item.strip() for item in items if item.strip()))
+
+
+def _build_probable_cause_items(
+    rows: list[dict[str, object]],
+    fault_codes: list[str],
+    alarm_codes: list[str],
+    *,
+    knowledge_artifact: KnowledgeStepArtifact,
+) -> list[str]:
+    items: list[str] = []
+    code_summaries = _knowledge_action_summaries(knowledge_artifact, fault_codes + alarm_codes)
+    if code_summaries:
+        items.extend(f"异常码主因优先按 RAG 手册核对：{summary}" for summary in code_summaries[:3])
+    elif fault_codes or alarm_codes:
+        items.append("数据库已检出有效异常码，但知识库未命中明确释义；主因需结合厂家手册、参数记录和现场现象确认。")
+
+    if not rows:
+        return _dedupe_items(items)
+
+    latest = rows[0]
+    speed_deviation = _speed_deviation(latest)
+    max_load = _metric_max(rows, "inverter_load_rate", "motor_load_rate") or 0
+    max_motor_temp = _metric_max(rows, "motor_temp") or 0
+    max_inverter_temp = _metric_max(rows, "inverter_temp", "inverter_radiator_temp") or 0
+
+    if speed_deviation is not None and speed_deviation >= 0.2:
+        items.append("速度给定与反馈偏差较大，可能关联运行使能、给定源、反馈链路或负载扰动；该项需作为并发问题验证，不能直接等同于异常码根因。")
+    if max_load >= 75:
+        items.append("负载率进入关注区间，可能关联机械传动、工艺负载、制动状态或参数限幅；需结合现场负载变化验证。")
+    if max_motor_temp >= 60 or max_inverter_temp >= 50:
+        items.append("温度进入关注区间，可能关联散热条件、连续负载或环境温度；需结合风道、柜内温度和负载历史验证。")
+    return _dedupe_items(items)
+
+
+def _build_verification_items(
+    rows: list[dict[str, object]],
+    fault_codes: list[str],
+    alarm_codes: list[str],
+    *,
+    knowledge_artifact: KnowledgeStepArtifact,
+) -> list[str]:
+    items: list[str] = []
+    if fault_codes or alarm_codes:
+        items.extend(
+            [
+                "当前设备是否仍保持该异常码，以及是否已经执行过复位、停机或降载。",
+                "异常码出现前后的参数修改记录、单位设置变更记录和功能块激活时间点。",
+                "复位或参数恢复前后的状态字、控制字、运行命令和异常码变化。",
+            ]
+        )
+        if not knowledge_artifact.success:
+            items.append("知识库缺少该异常码的可靠释义、触发条件和处置步骤。")
+
+    if rows:
+        latest = rows[0]
+        speed_deviation = _speed_deviation(latest)
+        max_load = _metric_max(rows, "inverter_load_rate", "motor_load_rate") or 0
+        if speed_deviation is not None and speed_deviation >= 0.2:
+            items.append("速度给定来源、运行使能、编码器或反馈链路是否与实际转速一致。")
+        if max_load >= 75:
+            items.append("机械传动、工艺负载、制动状态和限幅参数是否存在变化。")
+    return _dedupe_items(items)
+
+
+def _build_confidence_details(
+    rows: list[dict[str, object]],
+    fault_codes: list[str],
+    alarm_codes: list[str],
+    *,
+    knowledge_artifact: KnowledgeStepArtifact,
+) -> list[str]:
+    items: list[str] = []
+    if fault_codes or alarm_codes:
+        items.append("异常码识别：high，SQL 最近样本中存在有效异常码。")
+        if knowledge_artifact.success:
+            items.append("RAG 释义匹配：high，知识库已返回异常码原因或处理片段。")
+        else:
+            items.append("RAG 释义匹配：low，知识库未命中明确故障码条目。")
+    else:
+        items.append("异常码识别：medium，当前样本未见有效异常码，但仍需结合采样覆盖范围判断。")
+
+    latest = rows[0] if rows else {}
+    speed_deviation = _speed_deviation(latest) if latest else None
+    max_load = _metric_max(rows, "inverter_load_rate", "motor_load_rate") or 0
+    if speed_deviation is not None and speed_deviation >= 0.2:
+        items.append("速度偏差关联判断：medium，数据能证明偏差存在，但不能单独确认其根因。")
+    if max_load >= 75:
+        items.append("负载关联判断：medium，数据能证明负载进入关注区间，但需现场负载和机械检查闭环。")
+    items.append("处置闭环：medium，需要现场复位、参数恢复或试运行结果确认。")
+    return _dedupe_items(items)
+
+
+def _build_risk_notice(
+    rows: list[dict[str, object]],
+    fault_codes: list[str],
+    alarm_codes: list[str],
+) -> str:
+    notices: list[str] = []
+    if fault_codes or alarm_codes:
+        notices.append("异常码未闭环前，避免在参数或功能块状态未确认的情况下反复复位、强启或继续带载试运行。")
+    if rows:
+        latest = rows[0]
+        speed_deviation = _speed_deviation(latest)
+        max_load = _metric_max(rows, "inverter_load_rate", "motor_load_rate") or 0
+        if speed_deviation is not None and speed_deviation >= 0.2:
+            notices.append("速度给定与反馈偏差较大，试运行前应确认运行命令、反馈链路和负载状态。")
+        if max_load >= 75:
+            notices.append("负载率已进入关注区间，原因未确认前不宜扩大负载。")
+    return " ".join(notices) or "当前未发现额外风险提示，仍需按现场安全规程执行复位和试运行。"
+
+
 def build_analysis_evidence_summary(
     *,
     request: DiagnosisRequest,
@@ -466,15 +579,15 @@ def _build_recommendation_items(
     items: list[str] = []
     code_summaries = _knowledge_action_summaries(knowledge_artifact, fault_codes + alarm_codes)
     if fault_codes or alarm_codes:
-        items.append("立即确认异常码是否仍在当前设备上保持激活；若最新连续异常仍存在，先按现场规程保持安全停机或降载，避免反复强启。")
+        items.append("立即处置：确认当前设备运行/停机状态和现场安全条件；在异常码原因未确认前，避免反复复位、强启或继续带载试运行。")
         if code_summaries:
             for summary in code_summaries:
-                items.append(f"依据 RAG 手册片段执行故障码处置：{summary}")
+                items.append(f"故障码处置：按 RAG 手册片段核对触发条件和处理项，操作前记录当前参数快照；{summary}")
         elif knowledge_artifact.success:
             items.append("已自动检索 RAG 知识片段，但片段中未抽取到明确处置步骤；先按数据侧异常特征复核复位条件、运行命令和关键电气量。")
         else:
             items.append("系统已自动检索知识库但未命中明确释义；当前建议先依据数据特征执行现场安全检查，并将故障码释义作为后续知识库补齐项。")
-        items.append("记录复位前后的状态字、控制字、母线电压、运行命令和异常码变化，用于确认故障是否可复现。")
+        items.append("验证步骤：记录复位或参数恢复前后的状态字、控制字、母线电压、运行命令和异常码变化，确认故障是否可复现。")
     else:
         items.append("当前样本未见有效异常码，建议继续跟踪状态字、温度、负载率和功率指标。")
 
@@ -484,18 +597,13 @@ def _build_recommendation_items(
     max_motor_temp = _metric_max(rows, "motor_temp") or 0
     max_inverter_temp = _metric_max(rows, "inverter_temp", "inverter_radiator_temp") or 0
     if speed_deviation is not None and speed_deviation >= 0.2:
-        items.append("速度给定与反馈偏差较大，优先核对运行使能、速度给定来源、编码器/反馈链路和负载扰动。")
+        items.append("关联排查：速度给定与反馈偏差较大，核对运行使能、速度给定来源、编码器/反馈链路和负载扰动。")
     if max_load >= 75:
-        items.append("负载率进入关注区间，检查机械传动、工艺负载、制动状态和参数限幅设置。")
+        items.append("关联排查：负载率进入关注区间，检查机械传动、工艺负载、制动状态和参数限幅设置。")
     if max_motor_temp >= 60 or max_inverter_temp >= 50:
-        items.append("温度进入关注区间，检查风道、散热器、柜内温度和连续运行负载。")
-    items.extend(
-        [
-            "现场复核状态字、控制字、母线电压、温度、负载率和功率指标是否与设备现象一致。",
-            "若确认异常持续出现，按设备手册流程执行停机安全检查、复位条件确认和试运行观察。",
-        ]
-    )
-    return list(dict.fromkeys(items))
+        items.append("关联排查：温度进入关注区间，检查风道、散热器、柜内温度和连续运行负载。")
+    items.append("闭环确认：现场复核状态字、控制字、母线电压、温度、负载率和功率指标是否与设备现象一致。")
+    return _dedupe_items(items)
 
 
 def _build_sql_report_summary(sql_artifact: SqlStepArtifact) -> SqlReportSummary:
@@ -685,7 +793,7 @@ def build_structured_analysis_artifact(
         f"综合判定：{sql_report.health_level}；故障码为 {code_text}，告警码为 {alarm_text}。"
     )
     if knowledge_artifact.success:
-        conclusion += " 已自动补充知识库检索结果用于报告说明。"
+        conclusion += " 已自动补充知识库检索结果用于诊断说明。"
     elif fault_codes:
         conclusion += " 已自动查询知识库，但当前知识库未命中该故障码的明确释义。"
 
@@ -708,19 +816,39 @@ def build_structured_analysis_artifact(
         alarm_codes,
         knowledge_artifact=knowledge_artifact,
     )
-    recommendations.append(f"演示后建议接入持续采集任务，将 {REAL_DATA_LATEST_TABLE} 写入频率和最新采集时间纳入健康检查。")
+    probable_causes = _build_probable_cause_items(
+        sql_report.rows,
+        fault_codes,
+        alarm_codes,
+        knowledge_artifact=knowledge_artifact,
+    )
+    verification_items = _build_verification_items(
+        sql_report.rows,
+        fault_codes,
+        alarm_codes,
+        knowledge_artifact=knowledge_artifact,
+    )
+    confidence_details = _build_confidence_details(
+        sql_report.rows,
+        fault_codes,
+        alarm_codes,
+        knowledge_artifact=knowledge_artifact,
+    )
     missing_information = []
     if (fault_codes or alarm_codes) and not knowledge_artifact.success:
         missing_information.append("知识库未命中异常码释义")
-    missing_information.extend(["现场现象、复位结果、运行命令来源和设备手册阈值"])
+    missing_information.extend(["现场现象、复位结果、运行命令来源和参数变更记录"])
 
     return AnalysisStepArtifact(
         success=True,
         conclusion=conclusion,
         basis=basis,
+        probable_causes=probable_causes,
+        verification_items=verification_items,
         recommendations=recommendations,
-        risk_notice="如现场设备处于运行状态，复位或试运行前应先完成安全确认。",
+        risk_notice=_build_risk_notice(sql_report.rows, fault_codes, alarm_codes),
         missing_information=missing_information,
+        confidence_details=confidence_details,
         confidence="high" if knowledge_artifact.success or not (fault_codes or alarm_codes) else "medium",
     )
 
@@ -779,45 +907,3 @@ def build_report_payload(
         "report_filename": report_filename,
         "chart_payload": sql_report.chart_payload,
     }
-
-
-def build_final_answer_prompt(analysis_artifact: AnalysisStepArtifact, report_name: str) -> str:
-    return f"""
-你是 DCMA 限制型单 Agent 的最终答复整理器。
-请用中文生成最终用户答复，结构清晰，必须包含：
-1. 一句话结论
-2. 数据支撑
-3. 处理建议
-4. 风险提示或不确定性
-5. 报告文件名
-
-结论：{analysis_artifact.conclusion}
-依据：{analysis_artifact.basis}
-建议：{analysis_artifact.recommendations}
-风险提示：{analysis_artifact.risk_notice}
-缺失信息：{analysis_artifact.missing_information}
-置信度：{analysis_artifact.confidence}
-报告文件名：{report_name}
-""".strip()
-
-
-def build_final_answer_fallback(analysis_artifact: AnalysisStepArtifact, report_name: str | None = None) -> str:
-    basis_lines = "\n".join(f"- {item}" for item in analysis_artifact.basis) or "- 暂无明确数据支撑"
-    recommendation_lines = "\n".join(f"- {item}" for item in analysis_artifact.recommendations) or "- 暂无具体处置建议"
-    risk_notice = analysis_artifact.risk_notice or "当前未发现额外风险提示。"
-    missing_lines = (
-        "\n".join(f"- {item}" for item in analysis_artifact.missing_information)
-        if analysis_artifact.missing_information
-        else "- 暂无额外缺失信息"
-    )
-    sections = [
-        f"【结论】{analysis_artifact.conclusion}",
-        f"【已确认事实】\n{basis_lines}",
-        f"【可能原因与待验证】\n{missing_lines}",
-        f"【建议处置与验证】\n{recommendation_lines}",
-        f"【风险提示】{risk_notice}",
-        f"【置信度】{analysis_artifact.confidence}",
-    ]
-    if report_name:
-        sections.append(f"【报告文件】{report_name}")
-    return "\n".join(sections)

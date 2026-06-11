@@ -36,6 +36,7 @@ from .intent import (
     normalize_equipment_hint,
     should_use_rule_based_understanding,
 )
+from .final_answer import build_final_answer_fallback
 from .prompts import (
     build_single_agent_analysis_prompt,
     build_single_agent_evidence_synthesis_prompt,
@@ -44,7 +45,6 @@ from .prompts import (
 from .reporting import (
     build_analysis_evidence_summary,
     build_structured_analysis_artifact,
-    build_final_answer_fallback,
     build_report_payload,
     extract_report_filename,
     extract_report_url,
@@ -274,25 +274,39 @@ class SingleAgentStagesMixin:
 
         conclusion = str(payload.get("conclusion") or "").strip()
         basis = text_list(payload.get("basis"))
+        basis = self._sanitize_analysis_basis(basis)
+        probable_causes = text_list(payload.get("probable_causes"))
+        probable_causes = self._sanitize_analysis_probable_causes(probable_causes)
+        verification_items = text_list(payload.get("verification_items"))
         recommendations = text_list(payload.get("recommendations"))
         recommendations = self._sanitize_analysis_recommendations(recommendations)
+        verification_items, moved_recommendations = self._sanitize_analysis_verification_items(verification_items)
+        recommendations = self._sanitize_analysis_recommendations([*recommendations, *moved_recommendations])
         missing_information = text_list(payload.get("missing_information"))
-        risk_notice = str(payload.get("risk_notice") or "").strip() or None
+        missing_information = self._sanitize_analysis_missing_information(missing_information)
+        confidence_details = text_list(payload.get("confidence_details"))
+        risk_notice = self._sanitize_analysis_text(str(payload.get("risk_notice") or "").strip()) or None
 
         if fallback is not None:
             conclusion = conclusion or fallback.conclusion
             basis = basis or fallback.basis
+            probable_causes = probable_causes or fallback.probable_causes
+            verification_items = verification_items or fallback.verification_items
             recommendations = recommendations or fallback.recommendations
             missing_information = missing_information or fallback.missing_information
+            confidence_details = confidence_details or fallback.confidence_details
             risk_notice = risk_notice or fallback.risk_notice
 
         return AnalysisStepArtifact(
             success=True,
             conclusion=conclusion,
             basis=basis,
+            probable_causes=probable_causes,
+            verification_items=verification_items,
             recommendations=recommendations,
             risk_notice=risk_notice,
             missing_information=missing_information,
+            confidence_details=confidence_details,
             confidence=confidence,
             error=None,
         )
@@ -303,19 +317,82 @@ class SingleAgentStagesMixin:
             text = str(item or "").strip()
             if not text:
                 continue
-            text = re.sub(
-                r"降载至\s*\d+(?:\.\d+)?\s*%\s*(?:以下|以内|左右)?",
-                "按现场规程降载",
-                text,
-            )
-            text = re.sub(
-                r"负载(?:率)?(?:控制|降至|降到)\s*\d+(?:\.\d+)?\s*%\s*(?:以下|以内|左右)?",
-                "负载按现场规程控制在安全范围",
-                text,
-            )
+            text = self._sanitize_analysis_text(text)
             if text not in sanitized:
                 sanitized.append(text)
         return sanitized
+
+    def _sanitize_analysis_basis(self, basis: list[str]) -> list[str]:
+        sanitized: list[str] = []
+        for item in basis:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            text = re.sub(
+                r"[，,；;]\s*(?:需|需要|建议|应|应当|优先)(?:检查|核对|确认|排查|处理|复核).*$",
+                "",
+                text,
+            ).strip(" 。；;，,")
+            if text and text not in sanitized:
+                sanitized.append(text)
+        return sanitized
+
+    def _sanitize_analysis_probable_causes(self, causes: list[str]) -> list[str]:
+        sanitized: list[str] = []
+        for item in causes:
+            text = self._sanitize_analysis_text(str(item or "").strip())
+            if not text:
+                continue
+            text = re.sub(r"[，,]?\s*(?:导致|引起|造成)([^。；;，,]*)", r"，可能关联\1", text)
+            text = re.sub(r"[，,]?\s*影响([^。；;，,]*)", r"，与\1的关系需验证", text)
+            text = re.sub(r"；{2,}", "；", text).strip(" 。；;，,")
+            if text and text not in sanitized:
+                sanitized.append(text)
+        return sanitized
+
+    def _sanitize_analysis_verification_items(self, items: list[str]) -> tuple[list[str], list[str]]:
+        verification_items: list[str] = []
+        moved_recommendations: list[str] = []
+        hard_action_re = re.compile(r"^(?:按|记录|复位|恢复|执行|操作|避免|将|观察|重启)")
+        check_prefix_re = re.compile(r"^(?:现场)?(?:确认|检查|核对|排查)(?:当前)?")
+
+        for item in items:
+            text = self._sanitize_analysis_text(str(item or "").strip())
+            if not text:
+                continue
+            if hard_action_re.match(text):
+                moved_recommendations.append(text)
+                continue
+            normalized = check_prefix_re.sub("", text, count=1).strip(" ：:，,。")
+            normalized = normalized or text
+            if normalized and normalized not in verification_items:
+                verification_items.append(normalized)
+        return verification_items, moved_recommendations
+
+    def _sanitize_analysis_missing_information(self, items: list[str]) -> list[str]:
+        sanitized: list[str] = []
+        for item in items:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            text = re.sub(r"^(?:需要|需|待|请)?(?:确认|补充|检查|核对)\s*", "", text).strip(" ：:，,。")
+            if text and text not in sanitized:
+                sanitized.append(text)
+        return sanitized
+
+    def _sanitize_analysis_text(self, text: str) -> str:
+        text = re.sub(
+            r"降载至\s*\d+(?:\.\d+)?\s*%\s*(?:以下|以内|左右)?",
+            "按现场规程降载",
+            text,
+        )
+        text = re.sub(
+            r"负载(?:率)?(?:控制|降至|降到)\s*\d+(?:\.\d+)?\s*%\s*(?:以下|以内|左右)?",
+            "负载按现场规程控制在安全范围",
+            text,
+        )
+        text = text.replace("避免带载运行", "避免在参数或功能块状态未确认前继续带载试运行")
+        return text
 
     async def stream_report_step(
         self,

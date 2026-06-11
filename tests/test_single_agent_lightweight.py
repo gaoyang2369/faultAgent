@@ -78,7 +78,7 @@ def test_analysis_payload_sanitizes_unsupported_load_thresholds(monkeypatch) -> 
     artifact = runner._build_analysis_artifact_from_payload(
         {
             "conclusion": "存在故障码",
-            "basis": ["SQL 检出异常码"],
+            "basis": ["负载率最高78.47%，处于关注区间，需检查机械传动和工艺负载。"],
             "recommendations": ["临时措施：若无法立即停机，先降载至50%以下运行，避免风险。"],
             "risk_notice": "按现场规程确认安全状态。",
             "missing_information": [],
@@ -88,6 +88,42 @@ def test_analysis_payload_sanitizes_unsupported_load_thresholds(monkeypatch) -> 
 
     assert "50%" not in "\n".join(artifact.recommendations)
     assert "按现场规程降载" in artifact.recommendations[0]
+    assert artifact.basis == ["负载率最高78.47%，处于关注区间"]
+
+
+def test_analysis_payload_routes_actions_out_of_verification_items(monkeypatch) -> None:
+    from fault_diagnosis.single_agent import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "get_trace_exporter", lambda: _NoopTraceExporter())
+    runner = runner_module.RestrictedSingleAgentRunner(
+        message="诊断一下DCMA系统最近情况如何",
+        thread_id="thread.test",
+        user_identity="游客",
+        request_id="request.test",
+        stream_id="stream.test",
+        trace_id="trace.test",
+    )
+
+    artifact = runner._build_analysis_artifact_from_payload(
+        {
+            "conclusion": "存在故障码",
+            "probable_causes": ["参数单位转换后未正确恢复，导致功能块无法激活，影响速度闭环。"],
+            "verification_items": [
+                "按RAG手册将单位参数恢复出厂设置，并观察故障码是否消失。",
+                "检查速度闭环链路：运行使能状态、速度给定来源和编码器反馈信号完整性。",
+            ],
+            "recommendations": [],
+            "missing_information": ["需要确认现场操作历史"],
+            "confidence": "medium",
+        }
+    )
+
+    assert "导致" not in artifact.probable_causes[0]
+    assert "影响速度闭环" not in artifact.probable_causes[0]
+    assert any("按RAG手册将单位参数恢复出厂设置" in item for item in artifact.recommendations)
+    assert all("按RAG手册" not in item for item in artifact.verification_items)
+    assert any("速度闭环链路" in item for item in artifact.verification_items)
+    assert artifact.missing_information == ["现场操作历史"]
 
 
 async def _assert_stream_events_short_circuits_greeting_without_model(monkeypatch) -> None:
