@@ -9,7 +9,18 @@ from ..diagnosis.contracts import DiagnosisRequest
 from .contracts import SingleAgentDecision
 
 _FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{4,})(?![A-Z0-9])", re.IGNORECASE)
-_DEVICE_RE = re.compile(r"\b([A-Z]{2,}(?:-\d{1,})+|J\d+|\d+号机)\b", re.IGNORECASE)
+_DEVICE_RE = re.compile(
+    r"([A-Z]{2,}(?:-\d{1,})+|J\d+|\d+号机|[A-Z]+\d+电机\d+)",
+    re.IGNORECASE,
+)
+_GENERIC_DCMA_HINTS = {
+    "dcma",
+    "dcma系统",
+    "dcma 系统",
+    "系统",
+    "全系统",
+    "当前系统",
+}
 
 REPORT_KEYWORDS = ("报告", "出报告", "生成报告", "导出报告", "整理成报告", "形成报告")
 REPORT_CONTEXT_HINTS = ("刚才", "刚刚", "上一轮", "上一条", "上一次", "前面的结果", "诊断结果", "巡检结果")
@@ -102,6 +113,29 @@ def has_any(text: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in text for keyword in keywords if keyword)
 
 
+def normalize_equipment_hint(value: Any) -> str | None:
+    """Normalize generic system names away from concrete device filters."""
+
+    if value is None:
+        return None
+    hint = str(value).strip()
+    if not hint:
+        return None
+    compact = hint.replace(" ", "").lower()
+    if compact in {item.replace(" ", "").lower() for item in _GENERIC_DCMA_HINTS}:
+        return None
+    return hint
+
+
+def should_use_rule_based_understanding(message: str) -> bool:
+    """Fast path for routine DCMA status, alarm, fault-code and report requests."""
+
+    normalized = (message or "").strip()
+    if not normalized:
+        return False
+    return has_any(normalized, SQL_KEYWORDS + KNOWLEDGE_KEYWORDS + REPORT_KEYWORDS)
+
+
 def normalize_lightweight_message(message: str) -> str:
     """Normalize short social messages for deterministic fast-path matching."""
 
@@ -137,10 +171,11 @@ def fallback_understanding_payload(message: str, user_identity: str) -> dict[str
     fault_code_match = _FAULT_CODE_RE.search(message or "")
     device_match = _DEVICE_RE.search(message or "")
     normalized = (message or "").strip()
+    equipment_hint = normalize_equipment_hint(device_match.group(1) if device_match else None)
     return {
         "user_message": normalized,
         "user_identity": user_identity,
-        "equipment_hint": device_match.group(1) if device_match else None,
+        "equipment_hint": equipment_hint,
         "metric_hint": None,
         "fault_code_hint": fault_code_match.group(1).upper() if fault_code_match else None,
         "time_range_hint": "最近" if "最近" in normalized or "当前" in normalized else None,

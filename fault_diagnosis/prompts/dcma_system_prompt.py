@@ -48,6 +48,8 @@ DCMA_SYSTEM_PROMPT = """
 
 如果没有先查 SQL，就不能把“当前原因”或“能否直接出报告”说成确定判断。
 
+注意：`DCMA` 是系统/数据库范围，不是 `real_data.device_name` 的具体取值。用户说“dcma 当前运行情况”“生成 dcma 报告”时，应查询 `real_data` 最近数据，不要生成 `WHERE device_name = 'dcma'`。
+
 ## 工具使用规范
 
 | 工具 | 使用场景 | 关键约束 |

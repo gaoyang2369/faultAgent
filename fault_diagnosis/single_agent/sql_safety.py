@@ -9,20 +9,85 @@ from ..diagnosis.contracts import DiagnosisRequest
 _SQL_TABLE_RE = re.compile(r"\b(?:from|join)\s+`?([a-zA-Z_][\w]*)`?", re.IGNORECASE)
 
 ALLOWED_SQL_TABLES = {"real_data", "device_alarm", "device_metric", "device_fault_data", "fault_records"}
+GENERIC_EQUIPMENT_HINTS = {"dcma", "dcma系统", "dcma 系统", "系统", "全系统", "当前系统"}
+FAST_REAL_DATA_KEYWORDS = (
+    "运行",
+    "运行情况",
+    "运行状态",
+    "状态",
+    "当前",
+    "最近",
+    "异常",
+    "异常码",
+    "报警",
+    "告警",
+    "故障码",
+    "报告",
+    "巡检",
+)
 SQL_SCHEMA_CONTEXT = """
 仅允许使用以下 MySQL 表，不要使用未列出的表名：
-- real_data(timestamp, device_name, device_id, fault_code, spindle_current, spindle_speed, spindle_load, motor_temp, vibration, alarm_status)
+- real_data(id, timestamp, device_name, inverter_name, date, time, status, fault_code, alarm_code, control_word, status_word, dc_voltage, speed_setpoint, speed_actual, current_actual, torque_setpoint, torque_actual, air_intake_temp, motor_temp, inverter_temp, actual_power, field_current, torque_current, system_run_time, inverter_radiator_temp, inverter_load_rate, motor_load_rate, pulse_frequency, motor_power, feedback_power, create_time)
 - device_alarm(timestamp, alarm_time, device_name, device_id, alarm_code, fault_code, alarm_level, alarm_message, status)
 - device_metric(device_id, metric_name, metric_value, record_time)
 - device_fault_data(event_time, device_name, device_id, fault_code, spindle_load, vibration, motor_temperature, motor_temp, spindle_current, spindle_speed, alarm_status)
 - fault_records(fault_code, description, possible_cause, suggestion, severity)
-主轴负载、振动、电机温度优先从 real_data 的 spindle_load、vibration、motor_temp 查询。
+real_data 中没有 device_id、spindle_current、spindle_speed、spindle_load、vibration、alarm_status 字段；设备过滤必须使用 device_name 或 inverter_name。
+状态/报警优先查询 real_data 的 status、fault_code、alarm_code、control_word、status_word。
+运行指标优先查询 dc_voltage、speed_setpoint、speed_actual、current_actual、torque_setpoint、torque_actual、air_intake_temp、motor_temp、inverter_temp、actual_power、field_current、torque_current、inverter_radiator_temp、inverter_load_rate、motor_load_rate、pulse_frequency、motor_power、feedback_power。
+最近数据优先按 create_time DESC, id DESC 排序；date/time 是字符串字段，只有明确需要展示原始采集时间时再选择。
 只允许生成单条只读 SELECT 查询。
 """.strip()
+
+REAL_DATA_FALLBACK_COLUMN_NAMES = (
+    "id",
+    "timestamp",
+    "device_name",
+    "inverter_name",
+    "date",
+    "time",
+    "status",
+    "fault_code",
+    "alarm_code",
+    "control_word",
+    "status_word",
+    "dc_voltage",
+    "speed_setpoint",
+    "speed_actual",
+    "current_actual",
+    "torque_setpoint",
+    "torque_actual",
+    "air_intake_temp",
+    "motor_temp",
+    "inverter_temp",
+    "actual_power",
+    "field_current",
+    "torque_current",
+    "system_run_time",
+    "inverter_radiator_temp",
+    "inverter_load_rate",
+    "motor_load_rate",
+    "pulse_frequency",
+    "motor_power",
+    "feedback_power",
+    "create_time",
+)
+REAL_DATA_FALLBACK_SELECT_EXPRESSIONS = tuple(
+    "DATE_FORMAT(create_time, '%Y-%m-%d %H:%i:%s') AS create_time"
+    if column == "create_time"
+    else column
+    for column in REAL_DATA_FALLBACK_COLUMN_NAMES
+)
+REAL_DATA_FALLBACK_COLUMNS = ", ".join(REAL_DATA_FALLBACK_SELECT_EXPRESSIONS)
 
 
 def sql_literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def is_generic_equipment_hint(value: str | None) -> bool:
+    compact = (value or "").strip().replace(" ", "").lower()
+    return bool(compact and compact in {item.replace(" ", "").lower() for item in GENERIC_EQUIPMENT_HINTS})
 
 
 def extract_sql_table_names(sql_query: str) -> set[str]:
@@ -42,20 +107,40 @@ def is_readonly_sql(sql_query: str) -> bool:
 
 
 def build_fallback_sql_query(request: DiagnosisRequest) -> str:
-    equipment_hint = (request.equipment_hint or "SPINDLE-01").strip()
+    equipment_hint = (request.equipment_hint or "").strip()
     fault_code_hint = (request.fault_code_hint or "").strip()
     conditions = []
-    if equipment_hint:
+    if equipment_hint and not is_generic_equipment_hint(equipment_hint):
         equipment_literal = sql_literal(equipment_hint)
-        conditions.append(f"(device_id = {equipment_literal} OR device_name = {equipment_literal})")
+        conditions.append(f"(device_name = {equipment_literal} OR inverter_name = {equipment_literal})")
     if fault_code_hint:
         fault_code_literal = sql_literal(fault_code_hint)
-        conditions.append(f"(fault_code = {fault_code_literal} OR fault_code IS NULL)")
+        conditions.append(f"(fault_code = {fault_code_literal} OR alarm_code = {fault_code_literal})")
     where_clause = " AND ".join(conditions) or "1=1"
     return (
-        "SELECT timestamp, device_name, device_id, fault_code, spindle_current, spindle_speed, "
-        "spindle_load, motor_temp, vibration, alarm_status "
-        f"FROM real_data WHERE {where_clause} ORDER BY timestamp DESC LIMIT 50"
+        f"SELECT {REAL_DATA_FALLBACK_COLUMNS} "
+        f"FROM real_data WHERE {where_clause} ORDER BY real_data.create_time DESC, id DESC LIMIT 50"
+    )
+
+
+def build_fast_sql_plan(request: DiagnosisRequest) -> tuple[str, str] | None:
+    """Return a deterministic SQL plan for common real_data status/report queries."""
+
+    text = " ".join(
+        item
+        for item in (
+            request.user_message,
+            request.analysis_goal,
+            request.metric_hint or "",
+            request.time_range_hint or "",
+        )
+        if item
+    )
+    if not any(keyword in text for keyword in FAST_REAL_DATA_KEYWORDS):
+        return None
+    return (
+        build_fallback_sql_query(request),
+        "查询 real_data 最近 50 条运行状态、异常码和关键运行指标，用于生成 DCMA 运行报告。",
     )
 
 

@@ -33,6 +33,7 @@ def build_single_agent_understanding_prompt(user_message: str, user_identity: st
 1. 只输出 JSON，不要输出解释、Markdown 或代码块。
 2. 无法判断的槽位填 null。
 3. 如果请求太泛，也要给出最小可执行的 analysis_goal，并将缺失信息留给后续分析阶段说明。
+4. 用户说“dcma / DCMA 系统”时表示系统范围，不要把 dcma 填成具体 equipment_hint。
 
 用户身份：{user_identity}
 用户问题：{user_message}
@@ -64,6 +65,7 @@ def build_single_agent_analysis_prompt(
 3. 如果 SQL 未执行或结果不足，不能把实时状态说成已确认。
 4. 如果知识库未命中，不能把手册依据说成已确认。
 5. 对“是否能直接出报告 / 是否能下结论”的问题，必须区分“已确认结论”和“待确认假设”。
+6. 如果 SQL 结果中已经给出行数据，不要表述为“SQL 未执行或无结果”。
 
 当前时间：{current_time}
 用户问题：{request.user_message}

@@ -8,7 +8,9 @@ from fault_diagnosis.observability.tracing import NoopTraceRun
 from fault_diagnosis.single_agent.intent import (
     build_lightweight_conversation_reply,
     fallback_understanding_payload,
+    normalize_equipment_hint,
     normalize_lightweight_message,
+    should_use_rule_based_understanding,
 )
 
 
@@ -42,6 +44,17 @@ def test_fallback_understanding_extracts_fault_code_before_chinese_text() -> Non
 
     assert payload["fault_code_hint"] == "F01002"
     assert payload["needs_knowledge"] is True
+
+
+def test_rule_based_understanding_handles_dcma_status_report_fast_path() -> None:
+    message = "最近dcma运行情况如何？有异常码？可以生成具体报告展示"
+    payload = fallback_understanding_payload(message, "游客")
+
+    assert should_use_rule_based_understanding(message) is True
+    assert payload["equipment_hint"] is None
+    assert payload["needs_sql"] is True
+    assert payload["needs_report"] is True
+    assert normalize_equipment_hint("dcma") is None
 
 
 def test_stream_events_short_circuits_greeting_without_model(monkeypatch) -> None:

@@ -118,69 +118,45 @@ def save_report(
 
         report_content = f"""# {title}
 
-**报告时间**: {report_time}
-**诊断对象**: {diagnosis_object}
-**诊断类型**: {diagnosis_type}
-**报告生成**: 工业设备故障诊断专家系统
+| 项目 | 内容 |
+| --- | --- |
+| 报告时间 | {report_time} |
+| 诊断对象 | {diagnosis_object} |
+| 诊断类型 | {diagnosis_type} |
+| 生成系统 | 工业设备故障诊断专家系统 |
 
----
-
-## 目录
-
-- [执行摘要](#执行摘要)
-- [诊断过程概述](#诊断过程概述)
-- [诊断结果详情](#诊断结果详情)
-- [故障原因推断](#故障原因推断)
-- [检查与维修建议](#检查与维修建议)
-- [预防性维护建议](#预防性维护建议)
-- [诊断依据](#诊断依据)
-
----
-
-## 执行摘要
+## 1. 执行摘要
 
 {executive_summary}
 
----
-
-## 诊断过程概述
+## 2. 诊断过程概述
 
 {diagnosis_overview}
 
----
-
-## 诊断结果详情
+## 3. 诊断结果详情
 
 {diagnosis_details}
 
----
-
-## 故障原因推断
+## 4. 故障原因推断
 
 {fault_inference}
 
----
-
-## 检查与维修建议
+## 5. 检查与维修建议
 
 {repair_recommendations}
 
----
-
-## 预防性维护建议
+## 6. 预防性维护建议
 
 {preventive_maintenance}
 
----
-
-## 诊断依据
+## 7. 诊断依据
 
 {merged_basis}
 
 ---
 
-**报告生成时间**: {report_time}
-**诊断系统版本**: 工业设备故障诊断专家系统
+> 报告生成时间：{report_time}  
+> 诊断系统版本：工业设备故障诊断专家系统
 """
 
         final_filename = f"{safe_report_name}.md"

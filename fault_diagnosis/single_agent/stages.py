@@ -27,7 +27,13 @@ from ..diagnosis.steps import (
 from .artifacts import build_diagnosis_artifact_envelope
 from .contracts import SingleAgentDecision
 from .errors import SingleAgentExecutionError
-from .intent import decide_capabilities, fallback_understanding_payload, looks_like_report_handoff
+from .intent import (
+    decide_capabilities,
+    fallback_understanding_payload,
+    looks_like_report_handoff,
+    normalize_equipment_hint,
+    should_use_rule_based_understanding,
+)
 from .prompts import build_single_agent_analysis_prompt, build_single_agent_understanding_prompt
 from .reporting import (
     build_final_answer_fallback,
@@ -38,6 +44,7 @@ from .reporting import (
 )
 from .serialization import preview, stringify
 from .sql_safety import build_fallback_sql_query, build_sql_prompt, has_unknown_sql_table, is_readonly_sql
+from .sql_safety import build_fast_sql_plan
 from .tool_access import get_knowledge_tool, get_report_tool
 
 _log = get_logger("single_agent.stages")
@@ -54,6 +61,8 @@ class SingleAgentStagesMixin:
         if report_from_previous_artifact:
             payload = fallback_understanding_payload(self.message, self.user_identity)
             payload["needs_report"] = True
+        elif should_use_rule_based_understanding(self.message):
+            payload = fallback_understanding_payload(self.message, self.user_identity)
         else:
             try:
                 payload = await self._invoke_json_model(
@@ -66,6 +75,7 @@ class SingleAgentStagesMixin:
                     error=str(exc),
                 )
                 payload = fallback_understanding_payload(self.message, self.user_identity)
+        payload["equipment_hint"] = normalize_equipment_hint(payload.get("equipment_hint"))
 
         request = build_request_from_payload(
             self.message,
@@ -98,19 +108,24 @@ class SingleAgentStagesMixin:
         return request, decision
 
     async def stream_sql_step(self, request: DiagnosisRequest) -> AsyncGenerator[str, None]:
-        prompt = build_sql_prompt(request)
-        sql_query, summary = await build_sql_plan(
-            prompt,
-            self._invoke_json_model,
-            default_summary="已生成 SQL 查询",
-        )
-        if not sql_query or not is_readonly_sql(sql_query) or has_unknown_sql_table(sql_query):
-            sql_query = build_fallback_sql_query(request)
-            summary = "已使用受限 fallback 查询最近设备故障与关键指标数据"
+        fast_plan = build_fast_sql_plan(request)
+        skip_checker = fast_plan is not None
+        if fast_plan is not None:
+            sql_query, summary = fast_plan
+        else:
+            prompt = build_sql_prompt(request)
+            sql_query, summary = await build_sql_plan(
+                prompt,
+                self._invoke_json_model,
+                default_summary="已生成 SQL 查询",
+            )
+            if not sql_query or not is_readonly_sql(sql_query) or has_unknown_sql_table(sql_query):
+                sql_query = build_fallback_sql_query(request)
+                summary = "已使用受限 fallback 查询最近设备故障与关键指标数据"
 
         tools_map = build_sql_tools_map()
         checker_tool = find_sql_tool(tools_map, "sql_db_query_checker", False)
-        if checker_tool is not None:
+        if checker_tool is not None and not skip_checker:
             async for chunk in self._invoke_restricted_tool(
                 tool_name="sql_db_query_checker",
                 tool=checker_tool,
@@ -282,6 +297,8 @@ class SingleAgentStagesMixin:
             if report_artifact and report_artifact.report_filename
             else "未生成"
         )
+        if report_artifact and report_artifact.success:
+            return build_final_answer_fallback(analysis_artifact, report_name)
         prompt = build_final_answer_prompt(analysis_artifact, report_name)
         try:
             final_answer = (await self._invoke_text_model(prompt)).strip()
