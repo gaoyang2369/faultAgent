@@ -28,7 +28,7 @@ fault_diagnosis/
   auth/                  session、管理员身份、thread 归属
   infrastructure/        CORS、lifespan、模型、静态资源、数据库池
   agent_runtime/         SSE 编码、流调度、取消控制、错误分类
-  single_agent/          单 agent runner、trace、prompt
+  single_agent/          单 agent 编排、阶段处理、prompt、策略与序列化 helper
   diagnosis/             诊断域合同、step helper、artifact store
   tools/                 SQL、知识库、Markdown 报告工具
   knowledge/             FAISS/Ollama 知识库与上传 PDF 知识库
@@ -71,6 +71,14 @@ understand
 - `save_report`
 
 SQL 阶段只允许访问 `real_data`、`device_alarm`、`device_metric`、`device_fault_data`、`fault_records`，并只允许只读 `SELECT/WITH` 查询。未知表或非只读 SQL 会回退到受限最近数据查询。
+
+`single_agent/` 内部按职责拆分：
+
+- `runner.py`：对外入口、运行状态、模型调用、工具调用白名单与错误封装。
+- `flow.py`：SSE 状态机与阶段编排顺序。
+- `stages.py`：understand、SQL、knowledge、analysis、report、final answer 阶段实现。
+- `intent.py`、`sql_safety.py`、`reporting.py`、`artifacts.py`：可单测的业务 helper。
+- `serialization.py`、`json_utils.py`、`tool_access.py`：通用序列化、JSON 修复与工具懒加载。
 
 ## 诊断产物
 
@@ -126,5 +134,5 @@ start -> ping* -> tool_start/tool_end* -> token -> complete
 1. 新 HTTP 能力放在 `api/`，用例编排放在 `services/`。
 2. 新持久化能力放在 `repositories/`，不要在路由里直接写文件。
 3. 新单 agent 工具必须显式加入 `RestrictedSingleAgentRunner` 的白名单和对应阶段。
-4. 修改诊断流程优先改 `single_agent/runner.py`；只有共享合同或 helper 变化时才改 `diagnosis/`。
+4. 修改诊断流程顺序优先改 `single_agent/flow.py`，修改单个阶段优先改 `single_agent/stages.py`，不要把阶段细节重新塞回 `runner.py`。
 5. 外部依赖健康检查只保留当前运行链路会使用的依赖。

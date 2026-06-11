@@ -1,0 +1,348 @@
+"""Business stage handlers for the restricted single-agent pipeline."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, AsyncGenerator
+
+from ..common.logger import get_logger
+from ..diagnosis.adapters import build_sql_tools_map, find_sql_tool
+from ..diagnosis.artifact_store import get_thread_artifact, save_thread_artifact
+from ..diagnosis.contracts import (
+    AnalysisStepArtifact,
+    DiagnosisArtifactEnvelope,
+    DiagnosisArtifactType,
+    DiagnosisRequest,
+    KnowledgeStepArtifact,
+    ReportStepArtifact,
+    SqlStepArtifact,
+)
+from ..diagnosis.report_mapper import map_artifact_to_report_payload
+from ..diagnosis.steps import (
+    build_default_knowledge_query,
+    build_knowledge_artifact,
+    build_request_from_payload,
+    build_sql_plan,
+)
+from .artifacts import build_diagnosis_artifact_envelope
+from .contracts import SingleAgentDecision
+from .errors import SingleAgentExecutionError
+from .intent import decide_capabilities, fallback_understanding_payload, looks_like_report_handoff
+from .prompts import build_single_agent_analysis_prompt, build_single_agent_understanding_prompt
+from .reporting import (
+    build_final_answer_fallback,
+    build_final_answer_prompt,
+    build_report_payload,
+    extract_report_filename,
+    extract_report_url,
+)
+from .serialization import preview, stringify
+from .sql_safety import build_fallback_sql_query, build_sql_prompt, has_unknown_sql_table, is_readonly_sql
+from .tool_access import get_knowledge_tool, get_report_tool
+
+_log = get_logger("single_agent.stages")
+
+
+class SingleAgentStagesMixin:
+    """Stage-level behavior split out from the public runner facade."""
+
+    async def understand_request(self) -> tuple[DiagnosisRequest, SingleAgentDecision]:
+        report_from_previous_artifact = (
+            looks_like_report_handoff(self.message)
+            and get_thread_artifact(self.thread_id) is not None
+        )
+        if report_from_previous_artifact:
+            payload = fallback_understanding_payload(self.message, self.user_identity)
+            payload["needs_report"] = True
+        else:
+            try:
+                payload = await self._invoke_json_model(
+                    build_single_agent_understanding_prompt(self.message, self.user_identity)
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "请求理解模型失败，使用规则 fallback",
+                    thread_id=self.thread_id,
+                    error=str(exc),
+                )
+                payload = fallback_understanding_payload(self.message, self.user_identity)
+
+        request = build_request_from_payload(
+            self.message,
+            self.user_identity,
+            payload,
+            needs_report=None,
+            report_format=str(payload.get("report_format") or "markdown"),
+        )
+        decision = decide_capabilities(
+            payload=payload,
+            request=request,
+            message=self.message,
+            report_from_previous_artifact=report_from_previous_artifact,
+        )
+        self.trace.add_event(
+            "decision",
+            stage="understand",
+            status="completed",
+            decision=decision.model_dump(),
+            message=decision.reason,
+        )
+        self._record_artifact("request", request, stage="understand")
+        return request, decision
+
+    async def stream_sql_step(self, request: DiagnosisRequest) -> AsyncGenerator[str, None]:
+        prompt = build_sql_prompt(request)
+        sql_query, summary = await build_sql_plan(
+            prompt,
+            self._invoke_json_model,
+            default_summary="已生成 SQL 查询",
+        )
+        if not sql_query or not is_readonly_sql(sql_query) or has_unknown_sql_table(sql_query):
+            sql_query = build_fallback_sql_query(request)
+            summary = "已使用受限 fallback 查询最近设备故障与关键指标数据"
+
+        tools_map = build_sql_tools_map()
+        checker_tool = find_sql_tool(tools_map, "sql_db_query_checker", False)
+        if checker_tool is not None:
+            async for chunk in self._invoke_restricted_tool(
+                tool_name="sql_db_query_checker",
+                tool=checker_tool,
+                tool_input={"query": sql_query},
+                stage="sql",
+            ):
+                yield chunk
+            checked_query_text = stringify(self._last_step_result).strip()
+            if (
+                checked_query_text
+                and is_readonly_sql(checked_query_text)
+                and not has_unknown_sql_table(checked_query_text)
+            ):
+                sql_query = checked_query_text
+
+        query_tool = find_sql_tool(tools_map, "sql_db_query", True)
+        async for chunk in self._invoke_restricted_tool(
+            tool_name="sql_db_query",
+            tool=query_tool,
+            tool_input={"query": sql_query},
+            stage="sql",
+        ):
+            yield chunk
+        raw_output = self._last_step_result
+        artifact = SqlStepArtifact(
+            success=True,
+            summary=summary,
+            sql_used=[sql_query],
+            result_preview=preview(raw_output),
+            raw_output=stringify(raw_output),
+        )
+        self._record_artifact("sql", artifact, stage="sql")
+        self._last_step_result = artifact
+
+    async def stream_knowledge_step(
+        self,
+        request: DiagnosisRequest,
+        sql_artifact: SqlStepArtifact | None,
+    ) -> AsyncGenerator[str, None]:
+        query = build_default_knowledge_query(
+            request,
+            sql_artifact.summary if sql_artifact and sql_artifact.success else "",
+        )
+        async for chunk in self._invoke_restricted_tool(
+            tool_name="query_knowledge_base",
+            tool=get_knowledge_tool(),
+            tool_input={"query": query},
+            stage="knowledge",
+        ):
+            yield chunk
+        raw_output = stringify(self._last_step_result)
+        artifact = build_knowledge_artifact(
+            query,
+            raw_output,
+            fallback_error_message="知识检索未命中",
+        )
+        self._record_artifact("knowledge", artifact, stage="knowledge")
+        self._last_step_result = artifact
+
+    async def analyze(
+        self,
+        request: DiagnosisRequest,
+        sql_artifact: SqlStepArtifact,
+        knowledge_artifact: KnowledgeStepArtifact,
+        current_time: str,
+    ) -> AnalysisStepArtifact:
+        payload = await self._invoke_json_model(
+            build_single_agent_analysis_prompt(
+                request,
+                sql_artifact.summary,
+                sql_artifact.result_preview or sql_artifact.raw_output,
+                knowledge_artifact.raw_output,
+                current_time,
+            )
+        )
+        artifact = AnalysisStepArtifact(
+            success=True,
+            conclusion=str(payload.get("conclusion") or "").strip(),
+            basis=[str(item).strip() for item in (payload.get("basis") or []) if str(item).strip()],
+            recommendations=[str(item).strip() for item in (payload.get("recommendations") or []) if str(item).strip()],
+            risk_notice=(str(payload.get("risk_notice")).strip() if payload.get("risk_notice") else None),
+            missing_information=[
+                str(item).strip()
+                for item in (payload.get("missing_information") or [])
+                if str(item).strip()
+            ],
+            confidence=str(payload.get("confidence") or "low").strip().lower() or "low",
+            error=None,
+        )
+        if not artifact.conclusion:
+            raise SingleAgentExecutionError("分析阶段未生成结论")
+        self._record_artifact("analysis", artifact, stage="analysis")
+        return artifact
+
+    async def stream_report_step(
+        self,
+        request: DiagnosisRequest,
+        sql_artifact: SqlStepArtifact,
+        knowledge_artifact: KnowledgeStepArtifact,
+        analysis_artifact: AnalysisStepArtifact,
+        current_time: str,
+    ) -> AsyncGenerator[str, None]:
+        report_filename = f"dcma_single_agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{self.thread_id[-6:]}"
+        payload = build_report_payload(
+            request=request,
+            sql_artifact=sql_artifact,
+            knowledge_artifact=knowledge_artifact,
+            analysis_artifact=analysis_artifact,
+            current_time=current_time,
+            report_filename=report_filename,
+        )
+        async for chunk in self._invoke_restricted_tool(
+            tool_name="save_report",
+            tool=get_report_tool(),
+            tool_input=payload,
+            stage="report",
+        ):
+            yield chunk
+        save_result = stringify(self._last_step_result)
+        artifact = ReportStepArtifact(
+            success="失败" not in save_result,
+            report_filename=extract_report_filename(save_result, f"{report_filename}.md"),
+            save_result=save_result,
+            error=None if "失败" not in save_result else save_result,
+        )
+        self._record_artifact("report", artifact, stage="report")
+        self._last_step_result = artifact
+
+    async def stream_report_from_previous_artifact(self) -> AsyncGenerator[str, None]:
+        envelope = get_thread_artifact(self.thread_id)
+        if envelope is None:
+            raise SingleAgentExecutionError("当前线程没有可用于生成报告的结构化结果")
+        report_payload = map_artifact_to_report_payload(envelope)
+        async for chunk in self._invoke_restricted_tool(
+            tool_name="save_report",
+            tool=get_report_tool(),
+            tool_input=report_payload,
+            stage="report",
+        ):
+            yield chunk
+        save_result = stringify(self._last_step_result)
+        artifact = ReportStepArtifact(
+            success="失败" not in save_result,
+            report_filename=extract_report_filename(save_result, report_payload.get("report_filename")),
+            save_result=save_result,
+            error=None if "失败" not in save_result else save_result,
+        )
+        self._record_artifact("report", artifact, stage="report")
+        source_name = (
+            "故障诊断结果"
+            if str(envelope.workflow_type) == DiagnosisArtifactType.FAULT_DIAGNOSIS.value
+            else "结构化结果"
+        )
+        final_answer = (
+            f"已基于当前线程最近一次{source_name}生成报告。\n"
+            f"【来源摘要】{envelope.request_summary}\n"
+            f"【报告文件】{extract_report_url(save_result) or artifact.report_filename or '未生成'}\n"
+            f"【保存结果】{save_result}"
+        )
+        self._last_step_result = final_answer, artifact
+
+    async def build_final_answer(
+        self,
+        analysis_artifact: AnalysisStepArtifact,
+        report_artifact: ReportStepArtifact,
+    ) -> str:
+        report_name = (
+            report_artifact.report_filename
+            if report_artifact and report_artifact.report_filename
+            else "未生成"
+        )
+        prompt = build_final_answer_prompt(analysis_artifact, report_name)
+        try:
+            final_answer = (await self._invoke_text_model(prompt)).strip()
+            if final_answer:
+                return final_answer
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("最终答复整理失败，回退到模板输出", thread_id=self.thread_id, error=str(exc))
+        return build_final_answer_fallback(analysis_artifact, report_name)
+
+    def _build_skipped_sql_artifact(self, reason: str) -> SqlStepArtifact:
+        artifact = SqlStepArtifact(
+            success=False,
+            summary=reason,
+            sql_used=[],
+            result_preview="",
+            raw_output="",
+            error=None,
+        )
+        self._record_artifact("sql", artifact, stage="sql")
+        return artifact
+
+    def _build_skipped_knowledge_artifact(self, reason: str) -> KnowledgeStepArtifact:
+        artifact = KnowledgeStepArtifact(
+            success=False,
+            query="",
+            snippets=[],
+            raw_output="",
+            error=reason,
+        )
+        self._record_artifact("knowledge", artifact, stage="knowledge")
+        return artifact
+
+    def _build_skipped_report_artifact(self) -> ReportStepArtifact:
+        artifact = ReportStepArtifact(
+            success=False,
+            report_filename=None,
+            save_result="本次请求未要求生成报告",
+            error=None,
+        )
+        self._record_artifact("report", artifact, stage="report")
+        return artifact
+
+    def save_artifact_envelope(
+        self,
+        request: DiagnosisRequest,
+        sql_artifact: SqlStepArtifact,
+        knowledge_artifact: KnowledgeStepArtifact,
+        analysis_artifact: AnalysisStepArtifact,
+        report_artifact: ReportStepArtifact,
+        final_answer: str,
+        decision: SingleAgentDecision,
+    ) -> DiagnosisArtifactEnvelope:
+        self.trace.add_event(
+            "artifact",
+            stage="final_answer",
+            status="created",
+            artifact_type="diagnosis_artifact",
+            artifact={"workflow_type": DiagnosisArtifactType.FAULT_DIAGNOSIS.value, "thread_id": self.thread_id},
+        )
+        envelope = build_diagnosis_artifact_envelope(
+            thread_id=self.thread_id,
+            request=request,
+            sql_artifact=sql_artifact,
+            knowledge_artifact=knowledge_artifact,
+            analysis_artifact=analysis_artifact,
+            report_artifact=report_artifact,
+            final_answer=final_answer,
+            decision=decision,
+            trace=self.trace,
+        )
+        return save_thread_artifact(envelope)
