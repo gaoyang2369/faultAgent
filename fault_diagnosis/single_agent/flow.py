@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator
 from ..agent_runtime.sse_adapter import encode_sse_event
 from ..common.logger import get_logger
 from ..runtime.diagnosis_contract_adapter import build_diagnosis_contract_payload
+from .contracts import SingleAgentDecision
+from .intent import build_lightweight_conversation_reply
 from .reporting import extract_report_url
 
 if TYPE_CHECKING:
@@ -44,6 +46,13 @@ class SingleAgentFlowMixin:
             status="started",
             summary=self._console_preview(self.message),
         )
+        direct_answer = build_lightweight_conversation_reply(self.message)
+        initial_stage = "final_answer" if direct_answer else "understand"
+        initial_message = (
+            "已识别为轻量问候，直接生成回复。"
+            if direct_answer
+            else "限制型单 Agent 已开始处理请求。"
+        )
 
         try:
             yield encode_sse_event(
@@ -53,12 +62,69 @@ class SingleAgentFlowMixin:
                     "thread_id": self.thread_id,
                     "stream_id": self.stream_id,
                     "trace_id": self.trace_id,
-                    "stage": "understand",
-                    "message": "限制型单 Agent 已开始处理请求。",
+                    "stage": initial_stage,
+                    "message": initial_message,
                 },
                 trace_id=self.trace_id,
             )
             event_count += 1
+
+            if direct_answer:
+                decision = SingleAgentDecision(reason="轻量问候直接回答")
+                self.trace.add_event(
+                    "decision",
+                    stage="final_answer",
+                    status="completed",
+                    decision=decision.model_dump(),
+                    message=decision.reason,
+                )
+                stage_started = self._start_stage("final_answer", "轻量问候直接回答")
+                self._finish_stage("final_answer", stage_started, message="轻量问候已直接回答")
+                self.trace.finish(status="completed", final_answer=direct_answer)
+
+                yield encode_sse_event("token", {"type": "token", "content": direct_answer}, trace_id=self.trace_id)
+                token_count += 1
+                event_count += 1
+
+                self._finish_open_stage_observations(status="completed")
+                self._finalize_trace_run(
+                    status="completed",
+                    final_answer=direct_answer,
+                    metadata={
+                        "event_count": event_count,
+                        "token_count": token_count,
+                        "decision": decision.model_dump(),
+                        "direct_answer": True,
+                    },
+                )
+                yield encode_sse_event(
+                    "complete",
+                    {
+                        "type": "chat_complete",
+                        "thread_id": self.thread_id,
+                        "trace_id": self.trace_id,
+                        "runtime": "restricted_single_agent",
+                        "final_content": direct_answer,
+                        "report_filename": None,
+                        "report_url": None,
+                        "decision": decision.model_dump(),
+                        "trace": self.trace.model_dump(exclude_none=True),
+                        "todos": [],
+                        "event_count": event_count,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                    trace_id=self.trace_id,
+                )
+                _log.info(
+                    "限制型单 Agent 轻量问候直接回复完成",
+                    thread_id=self.thread_id,
+                    stream_id=self.stream_id,
+                    duration_ms=round((time.monotonic() - started_at) * 1000, 1),
+                    event_count=event_count,
+                    token_count=token_count,
+                    tool_call_count=self._tool_call_count,
+                )
+                return
 
             stage_started = self._start_stage("understand", "理解用户请求并决定必要能力")
             async for ping in self._drive_step(self.understand_request(), stage="understand"):

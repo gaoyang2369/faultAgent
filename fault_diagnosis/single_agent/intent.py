@@ -49,9 +49,78 @@ KNOWLEDGE_KEYWORDS = (
     "是什么意思",
 )
 
+_LIGHTWEIGHT_TEXT_RE = re.compile(r"[\s,，.。!！?？;；:：、~～…·'\"“”‘’()（）\[\]【】{}<>《》-]+")
+
+_GREETING_MESSAGES = {
+    "hi",
+    "hello",
+    "hey",
+    "哈喽",
+    "嗨",
+    "你好",
+    "你好呀",
+    "您好",
+    "您好呀",
+    "在吗",
+    "在不在",
+    "有人吗",
+    "早上好",
+    "上午好",
+    "中午好",
+    "下午好",
+    "晚上好",
+}
+
+_CAPABILITY_MESSAGES = {
+    "help",
+    "帮助",
+    "你是谁",
+    "你能做什么",
+    "你可以做什么",
+    "能帮我什么",
+    "可以帮我什么",
+    "怎么用",
+    "如何使用",
+}
+
+_THANKS_MESSAGES = {
+    "thanks",
+    "thankyou",
+    "谢谢",
+    "谢谢你",
+    "感谢",
+    "多谢",
+    "辛苦了",
+}
+
+_GREETING_REPLY = "你好，我是故障诊断智能助手。有什么可以帮助你的吗？你也可以直接告诉我设备型号、故障码或异常现象。"
+_CAPABILITY_REPLY = "我是故障诊断智能助手，可以帮你分析故障码、设备异常、历史告警和指标趋势；在你明确要求时，也可以生成诊断报告。"
+_THANKS_REPLY = "不客气，我会继续协助你排查故障。"
+
 
 def has_any(text: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in text for keyword in keywords if keyword)
+
+
+def normalize_lightweight_message(message: str) -> str:
+    """Normalize short social messages for deterministic fast-path matching."""
+
+    return _LIGHTWEIGHT_TEXT_RE.sub("", (message or "").strip()).lower()
+
+
+def build_lightweight_conversation_reply(message: str) -> str | None:
+    """Return a direct reply for pure greetings or simple capability questions."""
+
+    normalized = normalize_lightweight_message(message)
+    if not normalized:
+        return None
+    if normalized in _GREETING_MESSAGES:
+        return _GREETING_REPLY
+    if normalized in _CAPABILITY_MESSAGES:
+        return _CAPABILITY_REPLY
+    if normalized in _THANKS_MESSAGES:
+        return _THANKS_REPLY
+    return None
 
 
 def looks_like_report_handoff(message: str) -> bool:
