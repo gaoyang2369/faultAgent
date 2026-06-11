@@ -1,11 +1,11 @@
-"""统一把 workflow 产物映射为报告生成参数。"""
+"""统一把诊断产物映射为报告生成参数。"""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-from .contracts import WorkflowArtifactEnvelope, WorkflowType
+from .contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
 
 
 def _build_report_filename(prefix: str, thread_id: str) -> str:
@@ -13,15 +13,15 @@ def _build_report_filename(prefix: str, thread_id: str) -> str:
     return f"{prefix}_{timestamp}_{thread_id[-6:]}"
 
 
-def map_artifact_to_report_payload(envelope: WorkflowArtifactEnvelope) -> dict[str, Any]:
+def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[str, Any]:
     """将结构化产物映射为 `save_report` 所需字段。"""
 
-    workflow_type = str(envelope.workflow_type)
+    artifact_type = str(envelope.workflow_type)
     payload = envelope.payload or {}
     request = payload.get("request") or {}
     report_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
 
-    if workflow_type == WorkflowType.FAULT_DIAGNOSIS.value:
+    if artifact_type == DiagnosisArtifactType.FAULT_DIAGNOSIS.value:
         sql_artifact = payload.get("sql_artifact") or {}
         knowledge_artifact = payload.get("knowledge_artifact") or {}
         analysis_artifact = payload.get("analysis_artifact") or {}
@@ -52,7 +52,7 @@ def map_artifact_to_report_payload(envelope: WorkflowArtifactEnvelope) -> dict[s
             "report_filename": report_filename,
         }
 
-    if workflow_type == WorkflowType.STATUS_INSPECTION.value:
+    if artifact_type == DiagnosisArtifactType.STATUS_INSPECTION.value:
         sql_artifact = payload.get("sql_artifact") or {}
         knowledge_artifact = payload.get("knowledge_artifact") or {}
         inspection_artifact = payload.get("inspection_artifact") or {}
@@ -85,4 +85,4 @@ def map_artifact_to_report_payload(envelope: WorkflowArtifactEnvelope) -> dict[s
             "report_filename": report_filename,
         }
 
-    raise ValueError(f"当前 workflow_type 不支持独立生成报告：{workflow_type}")
+    raise ValueError(f"当前诊断产物类型不支持独立生成报告：{artifact_type}")

@@ -1,4 +1,4 @@
-"""文件系统版 Workflow artifact store backend。"""
+"""文件系统版诊断产物 store backend。"""
 
 from __future__ import annotations
 
@@ -8,16 +8,21 @@ from pathlib import Path
 from threading import RLock
 
 from ...common.paths import RUN_STATE_DIR
-from ..contracts import WorkflowArtifactEnvelope
+from ..contracts import DiagnosisArtifactEnvelope
 from .base import ArtifactStoreBackend
 
 
 class FileArtifactStoreBackend(ArtifactStoreBackend):
-    """按 thread_id 分片保存 Workflow artifact 的文件后端。"""
+    """按 thread_id 分片保存诊断产物的文件后端。"""
 
     def __init__(self, *, root_dir: str | os.PathLike[str] | None = None, max_thread_entries: int = 50):
-        default_root = Path(RUN_STATE_DIR) / "workflow_artifacts"
-        self.root_dir = Path(root_dir or os.getenv("WORKFLOW_ARTIFACT_DIR") or default_root)
+        default_root = Path(RUN_STATE_DIR) / "diagnosis_artifacts"
+        self.root_dir = Path(
+            root_dir
+            or os.getenv("DIAGNOSIS_ARTIFACT_DIR")
+            or os.getenv("WORKFLOW_ARTIFACT_DIR")
+            or default_root
+        )
         self.max_thread_entries = max(1, int(max_thread_entries))
         self._lock = RLock()
 
@@ -28,12 +33,12 @@ class FileArtifactStoreBackend(ArtifactStoreBackend):
         digest = hashlib.sha256(str(thread_id).encode("utf-8")).hexdigest()[:32]
         return self.root_dir / f"{digest}.jsonl"
 
-    def _read_thread_unlocked(self, thread_id: str) -> list[WorkflowArtifactEnvelope]:
+    def _read_thread_unlocked(self, thread_id: str) -> list[DiagnosisArtifactEnvelope]:
         self._ensure_ready()
         target = self._thread_file(thread_id)
         if not target.exists():
             return []
-        envelopes: list[WorkflowArtifactEnvelope] = []
+        envelopes: list[DiagnosisArtifactEnvelope] = []
         try:
             lines = target.read_text(encoding="utf-8").splitlines()
         except OSError:
@@ -43,14 +48,14 @@ class FileArtifactStoreBackend(ArtifactStoreBackend):
             if not line:
                 continue
             try:
-                envelope = WorkflowArtifactEnvelope.model_validate_json(line)
+                envelope = DiagnosisArtifactEnvelope.model_validate_json(line)
             except Exception:
                 continue
             if envelope.thread_id == thread_id:
                 envelopes.append(envelope)
         return envelopes
 
-    def _write_thread_unlocked(self, thread_id: str, envelopes: list[WorkflowArtifactEnvelope]) -> None:
+    def _write_thread_unlocked(self, thread_id: str, envelopes: list[DiagnosisArtifactEnvelope]) -> None:
         self._ensure_ready()
         target = self._thread_file(thread_id)
         selected = envelopes[-self.max_thread_entries :]
@@ -61,18 +66,18 @@ class FileArtifactStoreBackend(ArtifactStoreBackend):
         )
         os.replace(temp_path, target)
 
-    def save(self, envelope: WorkflowArtifactEnvelope) -> WorkflowArtifactEnvelope:
+    def save(self, envelope: DiagnosisArtifactEnvelope) -> DiagnosisArtifactEnvelope:
         with self._lock:
             envelopes = self._read_thread_unlocked(envelope.thread_id)
-            envelopes.append(WorkflowArtifactEnvelope.model_validate_json(envelope.model_dump_json()))
+            envelopes.append(DiagnosisArtifactEnvelope.model_validate_json(envelope.model_dump_json()))
             self._write_thread_unlocked(envelope.thread_id, envelopes)
-            return WorkflowArtifactEnvelope.model_validate_json(envelope.model_dump_json())
+            return DiagnosisArtifactEnvelope.model_validate_json(envelope.model_dump_json())
 
-    def get_latest(self, thread_id: str) -> WorkflowArtifactEnvelope | None:
+    def get_latest(self, thread_id: str) -> DiagnosisArtifactEnvelope | None:
         artifacts = self.list_thread_artifacts(thread_id, limit=1)
         return artifacts[0] if artifacts else None
 
-    def list_thread_artifacts(self, thread_id: str, limit: int = 20) -> list[WorkflowArtifactEnvelope]:
+    def list_thread_artifacts(self, thread_id: str, limit: int = 20) -> list[DiagnosisArtifactEnvelope]:
         normalized_limit = max(1, limit)
         with self._lock:
             envelopes = self._read_thread_unlocked(thread_id)

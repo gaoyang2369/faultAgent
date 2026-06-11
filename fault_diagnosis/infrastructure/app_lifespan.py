@@ -92,7 +92,7 @@ async def app_lifespan(app: FastAPI):
         app.state.checkpointer = None
         app.state.agent = None
         app.state.pool = None
-        _log.info("限制型单 Agent 已启用，旧 LangGraph agent 不再初始化")
+        _log.info("限制型单 Agent 已启用")
         _log.info("服务完成初始化并启动")
         yield
 

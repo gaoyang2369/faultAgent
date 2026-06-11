@@ -1,4 +1,4 @@
-"""Workflow artifact store backends。"""
+"""诊断产物 store backends。"""
 
 from .base import ArtifactStoreBackend
 from .file import FileArtifactStoreBackend

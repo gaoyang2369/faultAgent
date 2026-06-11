@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..workflows.contracts import WorkflowArtifactEnvelope
+from ..diagnosis.contracts import DiagnosisArtifactEnvelope
 
 
 def _dump_model(value: Any) -> dict[str, Any]:
@@ -24,9 +24,9 @@ def _compact_text(value: Any, *, limit: int = 160) -> str:
     return f"{text[:limit].rstrip()}..."
 
 
-def _workflow_key(envelope: WorkflowArtifactEnvelope) -> str:
-    workflow_type = envelope.workflow_type
-    return getattr(workflow_type, "value", str(workflow_type))
+def _diagnosis_key(envelope: DiagnosisArtifactEnvelope) -> str:
+    artifact_type = envelope.workflow_type
+    return getattr(artifact_type, "value", str(artifact_type))
 
 
 def _confidence_score(value: Any) -> float | None:
@@ -71,7 +71,7 @@ def _severity_from_payload(payload: dict[str, Any]) -> str:
     return "low"
 
 
-def _build_standard_evidence(envelope: WorkflowArtifactEnvelope) -> list[dict[str, Any]]:
+def _build_standard_evidence(envelope: DiagnosisArtifactEnvelope) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for index, item in enumerate(envelope.evidence or [], start=1):
         data = _dump_model(item)
@@ -87,7 +87,7 @@ def _build_standard_evidence(envelope: WorkflowArtifactEnvelope) -> list[dict[st
                 "summary": _compact_text(data.get("content") or data.get("title"), limit=220),
                 "metadata": {
                     "importance": data.get("importance") or "medium",
-                    "artifact_workflow_type": _workflow_key(envelope),
+                    "artifact_workflow_type": _diagnosis_key(envelope),
                     "thread_id": envelope.thread_id,
                 },
                 "artifact_id": None,
@@ -97,7 +97,7 @@ def _build_standard_evidence(envelope: WorkflowArtifactEnvelope) -> list[dict[st
     return items
 
 
-def _build_artifacts(envelope: WorkflowArtifactEnvelope) -> list[dict[str, Any]]:
+def _build_artifacts(envelope: DiagnosisArtifactEnvelope) -> list[dict[str, Any]]:
     payload = envelope.payload or {}
     report_artifact = _dump_model(payload.get("report_artifact"))
     artifacts: list[dict[str, Any]] = []
@@ -107,7 +107,7 @@ def _build_artifacts(envelope: WorkflowArtifactEnvelope) -> list[dict[str, Any]]
             {
                 "id": artifact_id,
                 "type": "report",
-                "title": "故障诊断报告" if _workflow_key(envelope) == "fault_diagnosis" else "Workflow 报告",
+                "title": "故障诊断报告" if _diagnosis_key(envelope) == "fault_diagnosis" else "诊断报告",
                 "summary": _compact_text(report_artifact.get("save_result") or envelope.final_answer),
                 "path": envelope.report_filename,
                 "content": None,
@@ -118,7 +118,7 @@ def _build_artifacts(envelope: WorkflowArtifactEnvelope) -> list[dict[str, Any]]
     return artifacts
 
 
-def _build_findings(envelope: WorkflowArtifactEnvelope, evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_findings(envelope: DiagnosisArtifactEnvelope, evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
     payload = envelope.payload or {}
     analysis = _dump_model(payload.get("analysis_artifact"))
     inspection = _dump_model(payload.get("inspection_artifact"))
@@ -141,7 +141,7 @@ def _build_findings(envelope: WorkflowArtifactEnvelope, evidence: list[dict[str,
             "evidence_ids": evidence_ids,
             "text": _compact_text(source.get("conclusion") or source.get("summary") or envelope.final_answer, limit=260),
             "metadata": {
-                "workflow_id": _workflow_key(envelope),
+                "workflow_id": _diagnosis_key(envelope),
                 "source": "analysis_artifact" if analysis else "inspection_artifact",
             },
         }
@@ -162,7 +162,7 @@ def _build_finding_links(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
     return links
 
 
-def _build_timeline(envelope: WorkflowArtifactEnvelope, evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_timeline(envelope: DiagnosisArtifactEnvelope, evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
     payload = envelope.payload or {}
     events: list[dict[str, Any]] = []
     evidence_ids = [item["id"] for item in evidence]
@@ -205,7 +205,7 @@ def _build_timeline(envelope: WorkflowArtifactEnvelope, evidence: list[dict[str,
     return events
 
 
-def _build_governance(envelope: WorkflowArtifactEnvelope) -> dict[str, Any]:
+def _build_governance(envelope: DiagnosisArtifactEnvelope) -> dict[str, Any]:
     payload = envelope.payload or {}
     analysis = _dump_model(payload.get("analysis_artifact"))
     inspection = _dump_model(payload.get("inspection_artifact"))
@@ -222,8 +222,8 @@ def _build_governance(envelope: WorkflowArtifactEnvelope) -> dict[str, Any]:
     }
 
 
-def build_phase4_contract_payload(envelope: WorkflowArtifactEnvelope | None) -> dict[str, Any]:
-    """把 workflow artifact 转成第四阶段前后端共同消费的标准字段。"""
+def build_diagnosis_contract_payload(envelope: DiagnosisArtifactEnvelope | None) -> dict[str, Any]:
+    """把单 Agent 诊断产物转成前端共同消费的结构化字段。"""
 
     if envelope is None:
         return {}
@@ -233,7 +233,7 @@ def build_phase4_contract_payload(envelope: WorkflowArtifactEnvelope | None) -> 
     timeline = _build_timeline(envelope, evidence)
     artifacts = _build_artifacts(envelope)
     governance = _build_governance(envelope)
-    workflow_id = _workflow_key(envelope)
+    workflow_id = _diagnosis_key(envelope)
     scenario_result = {
         "scenario": workflow_id,
         "status": "completed",

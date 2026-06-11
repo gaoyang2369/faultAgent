@@ -82,7 +82,7 @@ def create_dev_report(thread_id: str, message: str, user_identity: str) -> str:
 ## 说明
 
 - 当前运行在 `LOCAL_DEV_MODE`
-- 已跳过 PostgreSQL / MySQL / Ollama / Tavily / 外部故障诊断 API
+- 已跳过 PostgreSQL / MySQL / Ollama
 - 当前报告用于验证：SSE、消息渲染、报告链接、静态文件服务
 
 ## 原始请求
@@ -108,7 +108,7 @@ def build_dev_response(message: str, user_identity: str, report_filename: str) -
             "",
             f"- 用户身份：{user_identity}",
             f"- 原始请求：{message}",
-            "- 已跳过 PostgreSQL / MySQL / Ollama / Tavily / 外部故障诊断 API",
+            "- 已跳过 PostgreSQL / MySQL / Ollama",
             "- 当前重点是验证前端联通、SSE 流式、历史记录接口、任务面板和报告落盘",
             f"- 演示报告：`{report_filename}`",
             "",

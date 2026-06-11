@@ -35,7 +35,6 @@ def _redact(value: Any) -> str:
     text = str(value)
     for secret_name in (
         "OPENAI_API_KEY",
-        "TAVILY_API_KEY",
         "MYSQL_PW",
         "POSTGRES_PASSWORD",
         "SESSION_SECRET",
@@ -176,28 +175,6 @@ async def _check_ollama(timeout_seconds: float, deep: bool) -> dict[str, Any]:
         )
 
     return await _with_timeout("Ollama 健康检查", timeout_seconds, probe())
-
-
-async def _check_tavily(timeout_seconds: float, deep: bool) -> dict[str, Any]:
-    configured = _configured("TAVILY_API_KEY")
-    if not configured:
-        return _check_result("not_configured", configured=False)
-    if not deep:
-        return _check_result("available", configured=True)
-
-    def probe():
-        from langchain_tavily import TavilySearch
-
-        tool = TavilySearch(max_results=1, topic="general")
-        tool.invoke({"query": "工业设备故障诊断 健康检查"})
-        return _check_result("available", configured=True)
-
-    try:
-        return await asyncio.wait_for(asyncio.to_thread(probe), timeout=timeout_seconds)
-    except asyncio.TimeoutError:
-        return _check_result("failed", configured=True, failure_type="timeout", detail=f"Tavily 超过 {timeout_seconds}s 未返回")
-    except Exception as exc:
-        return _check_result("failed", configured=True, failure_type="exception", detail=_redact(exc))
 
 
 async def _check_llm(timeout_seconds: float, deep: bool) -> dict[str, Any]:
@@ -435,9 +412,9 @@ def _check_history_index(app) -> dict[str, Any]:
         return _check_result("failed", detail=_redact(exc))
 
 
-def _check_workflow_artifact_store() -> dict[str, Any]:
+def _check_diagnosis_artifact_store() -> dict[str, Any]:
     try:
-        from ..workflows.artifact_store import check_artifact_store_health
+        from ..diagnosis.artifact_store import check_artifact_store_health
 
         payload = check_artifact_store_health()
         status = payload.get("status") or "available"
@@ -510,7 +487,7 @@ async def build_dependencies_health(app, deep: bool = True, timeout_seconds: flo
     checks = {
         "session_secret": _check_session_secret(app),
         "history_index": _check_history_index(app),
-        "workflow_artifact_store": _check_workflow_artifact_store(),
+        "diagnosis_artifact_store": _check_diagnosis_artifact_store(),
         "faiss": _check_faiss(deep=deep),
         "reports_directory": _check_reports_directory(),
         "governance_repository": _check_governance_repository(),
@@ -521,7 +498,6 @@ async def build_dependencies_health(app, deep: bool = True, timeout_seconds: flo
         "mysql": await _check_mysql(timeout_seconds, deep=deep),
         "postgresql": await _check_postgres(app, timeout_seconds, deep=deep),
         "ollama": await _check_ollama(timeout_seconds, deep=deep),
-        "tavily": await _check_tavily(timeout_seconds, deep=deep),
         "llm": await _check_llm(timeout_seconds, deep=deep),
     }
     return {

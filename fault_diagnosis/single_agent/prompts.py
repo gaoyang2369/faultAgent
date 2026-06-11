@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..workflows.contracts import DiagnosisRequest
+from ..diagnosis.contracts import DiagnosisRequest
 
 
 def build_single_agent_understanding_prompt(user_message: str, user_identity: str) -> str:

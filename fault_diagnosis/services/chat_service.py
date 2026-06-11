@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 from datetime import datetime
 from typing import Any
@@ -560,34 +559,11 @@ class ChatService:
             app_state.dev_updated_at[thread_id] = datetime.now().isoformat()
             return
 
-        update_state = getattr(getattr(request.app.state, "agent", None), "aupdate_state", None)
-        if not callable(update_state):
-            raise RuntimeError("当前 Agent 不支持历史状态更新")
-
-        try:
-            from langchain_core.messages import RemoveMessage
-            from langgraph.graph.message import REMOVE_ALL_MESSAGES
-        except Exception as exc:
-            raise RuntimeError("当前运行环境不支持消息覆盖更新") from exc
-
-        state_update = {
-            "messages": [
-                RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                *to_langchain_history_messages(kept_messages),
-            ],
-            "todos": [],
-        }
-        update_result = update_state(
-            {"configurable": {"thread_id": thread_id}},
-            state_update,
-            as_node="model",
-        )
-        if inspect.isawaitable(update_result):
-            await update_result
+        raise RuntimeError("当前单 Agent 运行模式不支持覆盖非 dev 历史状态")
 
     def _clear_stale_thread_artifact(self, thread_id: str) -> None:
         try:
-            from ..workflows.artifact_store import clear_thread_artifact
+            from ..diagnosis.artifact_store import clear_thread_artifact
 
             clear_thread_artifact(thread_id)
         except Exception as artifact_error:

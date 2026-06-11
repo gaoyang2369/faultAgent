@@ -1,4 +1,4 @@
-"""线程级 Workflow 结构化产物存储 facade。"""
+"""线程级诊断结构化产物存储 facade。"""
 
 from __future__ import annotations
 
@@ -12,14 +12,18 @@ from .artifact_backends import (
     MemoryArtifactStoreBackend,
     PostgresArtifactStoreBackend,
 )
-from .contracts import WorkflowArtifactEnvelope
+from .contracts import DiagnosisArtifactEnvelope
 
 _BACKEND: ArtifactStoreBackend | None = None
 _BACKEND_LOCK = RLock()
 
 
 def _resolve_default_backend_name() -> str:
-    explicit = (os.getenv("WORKFLOW_ARTIFACT_BACKEND") or "").strip().lower()
+    explicit = (
+        os.getenv("DIAGNOSIS_ARTIFACT_BACKEND")
+        or os.getenv("WORKFLOW_ARTIFACT_BACKEND")
+        or ""
+    ).strip().lower()
     if explicit:
         return explicit
     if os.getenv("PYTEST_CURRENT_TEST"):
@@ -34,10 +38,18 @@ def _build_backend_from_env() -> ArtifactStoreBackend:
     if backend_name in {"file", "filesystem", "fs"}:
         return FileArtifactStoreBackend()
     if backend_name == "postgres":
-        table_name = (os.getenv("WORKFLOW_ARTIFACT_TABLE") or "workflow_artifacts").strip() or "workflow_artifacts"
-        dsn = (os.getenv("WORKFLOW_ARTIFACT_POSTGRES_DSN") or "").strip() or None
+        table_name = (
+            os.getenv("DIAGNOSIS_ARTIFACT_TABLE")
+            or os.getenv("WORKFLOW_ARTIFACT_TABLE")
+            or "diagnosis_artifacts"
+        ).strip() or "diagnosis_artifacts"
+        dsn = (
+            os.getenv("DIAGNOSIS_ARTIFACT_POSTGRES_DSN")
+            or os.getenv("WORKFLOW_ARTIFACT_POSTGRES_DSN")
+            or ""
+        ).strip() or None
         return PostgresArtifactStoreBackend(dsn=dsn, table_name=table_name)
-    raise ValueError(f"不支持的 workflow artifact backend：{backend_name}")
+    raise ValueError(f"不支持的 diagnosis artifact backend：{backend_name}")
 
 
 def configure_artifact_store_backend(backend: ArtifactStoreBackend) -> ArtifactStoreBackend:
@@ -67,19 +79,19 @@ def get_artifact_store_backend() -> ArtifactStoreBackend:
         return _BACKEND
 
 
-def save_thread_artifact(envelope: WorkflowArtifactEnvelope) -> WorkflowArtifactEnvelope:
+def save_thread_artifact(envelope: DiagnosisArtifactEnvelope) -> DiagnosisArtifactEnvelope:
     """按 thread_id 保存一条结构化产物。"""
 
     return get_artifact_store_backend().save(envelope)
 
 
-def get_thread_artifact(thread_id: str) -> WorkflowArtifactEnvelope | None:
+def get_thread_artifact(thread_id: str) -> DiagnosisArtifactEnvelope | None:
     """读取指定 thread_id 最近一次结构化产物。"""
 
     return get_artifact_store_backend().get_latest(thread_id)
 
 
-def list_thread_artifacts(thread_id: str, limit: int = 20) -> list[WorkflowArtifactEnvelope]:
+def list_thread_artifacts(thread_id: str, limit: int = 20) -> list[DiagnosisArtifactEnvelope]:
     """读取指定 thread_id 最近若干条结构化产物。"""
 
     return get_artifact_store_backend().list_thread_artifacts(thread_id, limit=limit)

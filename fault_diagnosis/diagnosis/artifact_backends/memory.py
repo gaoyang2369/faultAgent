@@ -1,4 +1,4 @@
-"""内存版 Workflow artifact store backend。"""
+"""内存版诊断产物 store backend。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from threading import RLock
 
-from ..contracts import WorkflowArtifactEnvelope
+from ..contracts import DiagnosisArtifactEnvelope
 from .base import ArtifactStoreBackend
 
 
@@ -17,7 +17,7 @@ class MemoryArtifactStoreBackend(ArtifactStoreBackend):
     def __init__(self, *, max_entries: int = 200, ttl_seconds: int = 24 * 3600):
         self.max_entries = max_entries
         self.ttl_seconds = ttl_seconds
-        self._artifacts: OrderedDict[str, list[tuple[datetime, WorkflowArtifactEnvelope]]] = OrderedDict()
+        self._artifacts: OrderedDict[str, list[tuple[datetime, DiagnosisArtifactEnvelope]]] = OrderedDict()
         self._entry_count = 0
         self._lock = RLock()
 
@@ -53,7 +53,7 @@ class MemoryArtifactStoreBackend(ArtifactStoreBackend):
             else:
                 self._artifacts.pop(oldest_thread_id, None)
 
-    def save(self, envelope: WorkflowArtifactEnvelope) -> WorkflowArtifactEnvelope:
+    def save(self, envelope: DiagnosisArtifactEnvelope) -> DiagnosisArtifactEnvelope:
         with self._lock:
             self._purge_expired_locked(envelope.thread_id)
             entries = self._artifacts.get(envelope.thread_id, [])
@@ -64,7 +64,7 @@ class MemoryArtifactStoreBackend(ArtifactStoreBackend):
             self._evict_lru_locked()
             return deepcopy(entries[-1][1])
 
-    def get_latest(self, thread_id: str) -> WorkflowArtifactEnvelope | None:
+    def get_latest(self, thread_id: str) -> DiagnosisArtifactEnvelope | None:
         with self._lock:
             self._purge_expired_locked(thread_id)
             entries = self._artifacts.get(thread_id)
@@ -73,7 +73,7 @@ class MemoryArtifactStoreBackend(ArtifactStoreBackend):
             self._artifacts.move_to_end(thread_id)
             return deepcopy(entries[-1][1])
 
-    def list_thread_artifacts(self, thread_id: str, limit: int = 20) -> list[WorkflowArtifactEnvelope]:
+    def list_thread_artifacts(self, thread_id: str, limit: int = 20) -> list[DiagnosisArtifactEnvelope]:
         normalized_limit = max(1, limit)
         with self._lock:
             self._purge_expired_locked(thread_id)

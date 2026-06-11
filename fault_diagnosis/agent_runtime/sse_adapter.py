@@ -153,16 +153,16 @@ def parse_sse_chunk(chunk: str) -> tuple[str, dict[str, Any]] | None:
 
 
 def enrich_complete_payload(data: dict[str, Any], thread_id: str) -> dict[str, Any]:
-    """为 Workflow complete 事件补充第四阶段结构化字段。"""
+    """为单 Agent complete 事件补充前端结构化诊断字段。"""
 
     try:
-        from ..runtime.workflow_contract_adapter import build_phase4_contract_payload
-        from ..workflows.artifact_store import get_thread_artifact
+        from ..runtime.diagnosis_contract_adapter import build_diagnosis_contract_payload
+        from ..diagnosis.artifact_store import get_thread_artifact
 
-        contract_payload = build_phase4_contract_payload(get_thread_artifact(thread_id))
+        contract_payload = build_diagnosis_contract_payload(get_thread_artifact(thread_id))
     except Exception as exc:
         _log.warning(
-            "Workflow 第四阶段契约适配失败",
+            "诊断结构化契约适配失败",
             thread_id=_summarize_identifier_for_log(thread_id, keep=10),
             error=str(exc),
         )
@@ -220,7 +220,7 @@ def adapt_sse_chunk(
     *,
     thread_id: str,
 ) -> str:
-    """为 Workflow / Dev 路径的既有 SSE 帧补充统一协议字段。"""
+    """为单 Agent / Dev 路径的既有 SSE 帧补充统一协议字段。"""
 
     parsed = parse_sse_chunk(chunk)
     if parsed is None:
@@ -235,7 +235,7 @@ def adapt_sse_chunk(
     return encode_sse_event(event_name, data)
 
 
-def enrich_workflow_sse_chunk(chunk: str, thread_id: str) -> str:
-    """兼容增强 Workflow SSE 帧，不改变既有事件外壳。"""
+def enrich_diagnosis_sse_chunk(chunk: str, thread_id: str) -> str:
+    """兼容增强诊断 SSE 帧，不改变既有事件外壳。"""
 
     return adapt_sse_chunk(chunk, None, thread_id=thread_id)

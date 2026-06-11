@@ -15,20 +15,21 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator
 from ..agent_runtime.error_classification import classify_model_gateway_error, model_error_code
 from ..agent_runtime.sse_adapter import build_server_error_payload, encode_sse_event
 from ..common.logger import get_logger
-from ..workflows.adapters import build_sql_tools_map, find_sql_tool, invoke_tool
-from ..workflows.artifact_store import get_thread_artifact, save_thread_artifact
-from ..workflows.contracts import (
+from ..diagnosis.adapters import build_sql_tools_map, find_sql_tool, invoke_tool
+from ..diagnosis.artifact_store import get_thread_artifact, save_thread_artifact
+from ..diagnosis.contracts import (
     AnalysisStepArtifact,
     DiagnosisRequest,
     EvidenceItem,
     KnowledgeStepArtifact,
     ReportStepArtifact,
     SqlStepArtifact,
-    WorkflowArtifactEnvelope,
-    WorkflowType,
+    DiagnosisArtifactEnvelope,
+    DiagnosisArtifactType,
 )
-from ..workflows.report_mapper import map_artifact_to_report_payload
-from ..workflows.steps import build_default_knowledge_query, build_knowledge_artifact, build_request_from_payload, build_sql_plan
+from ..diagnosis.report_mapper import map_artifact_to_report_payload
+from ..diagnosis.steps import build_default_knowledge_query, build_knowledge_artifact, build_request_from_payload, build_sql_plan
+from ..runtime.diagnosis_contract_adapter import build_diagnosis_contract_payload
 from .contracts import AgentTrace, SingleAgentDecision, SingleAgentLimits
 from .prompts import build_single_agent_analysis_prompt, build_single_agent_understanding_prompt
 
@@ -778,7 +779,7 @@ class RestrictedSingleAgentRunner:
             error=None if "失败" not in save_result else save_result,
         )
         self._record_artifact("report", artifact, stage="report")
-        source_name = "故障诊断结果" if str(envelope.workflow_type) == WorkflowType.FAULT_DIAGNOSIS.value else "结构化结果"
+        source_name = "故障诊断结果" if str(envelope.workflow_type) == DiagnosisArtifactType.FAULT_DIAGNOSIS.value else "结构化结果"
         final_answer = (
             f"已基于当前线程最近一次{source_name}生成报告。\n"
             f"【来源摘要】{envelope.request_summary}\n"
@@ -870,13 +871,13 @@ class RestrictedSingleAgentRunner:
         report_artifact: ReportStepArtifact,
         final_answer: str,
         decision: SingleAgentDecision,
-    ) -> WorkflowArtifactEnvelope:
+    ) -> DiagnosisArtifactEnvelope:
         self.trace.add_event(
             "artifact",
             stage="final_answer",
             status="created",
-            artifact_type="workflow_artifact",
-            artifact={"workflow_type": WorkflowType.FAULT_DIAGNOSIS.value, "thread_id": self.thread_id},
+            artifact_type="diagnosis_artifact",
+            artifact={"workflow_type": DiagnosisArtifactType.FAULT_DIAGNOSIS.value, "thread_id": self.thread_id},
         )
         evidence = [
             EvidenceItem(
@@ -898,8 +899,8 @@ class RestrictedSingleAgentRunner:
                 importance="high",
             ),
         ]
-        envelope = WorkflowArtifactEnvelope(
-            workflow_type=WorkflowType.FAULT_DIAGNOSIS,
+        envelope = DiagnosisArtifactEnvelope(
+            workflow_type=DiagnosisArtifactType.FAULT_DIAGNOSIS,
             thread_id=self.thread_id,
             created_at=datetime.now().isoformat(),
             request_summary=request.analysis_goal or request.user_message,
@@ -1100,33 +1101,39 @@ class RestrictedSingleAgentRunner:
                 final_answer,
                 decision,
             )
+            diagnosis_contract_payload = build_diagnosis_contract_payload(saved_envelope)
 
             if final_answer.strip():
                 yield encode_sse_event("token", {"type": "token", "content": final_answer}, trace_id=self.trace_id)
                 token_count += 1
                 event_count += 1
 
+            complete_payload = {
+                "type": "chat_complete",
+                "thread_id": self.thread_id,
+                "trace_id": self.trace_id,
+                "runtime": "restricted_single_agent",
+                "final_content": final_answer,
+                "report_filename": report_artifact.report_filename,
+                "report_url": _extract_report_url(report_artifact.save_result),
+                "decision": decision.model_dump(),
+                "sql_artifact": sql_artifact.model_dump(exclude_none=True),
+                "knowledge_artifact": knowledge_artifact.model_dump(exclude_none=True),
+                "analysis_artifact": analysis_artifact.model_dump(exclude_none=True),
+                "report_artifact": report_artifact.model_dump(exclude_none=True),
+                "artifact": saved_envelope.model_dump(exclude_none=True),
+                "trace": self.trace.model_dump(exclude_none=True),
+                "todos": [],
+                "event_count": event_count,
+                "timestamp": datetime.now().isoformat(),
+            }
+            for key, value in diagnosis_contract_payload.items():
+                if key not in complete_payload or complete_payload.get(key) in (None, [], {}):
+                    complete_payload[key] = value
+
             yield encode_sse_event(
                 "complete",
-                {
-                    "type": "chat_complete",
-                    "thread_id": self.thread_id,
-                    "trace_id": self.trace_id,
-                    "runtime": "restricted_single_agent",
-                    "final_content": final_answer,
-                    "report_filename": report_artifact.report_filename,
-                    "report_url": _extract_report_url(report_artifact.save_result),
-                    "decision": decision.model_dump(),
-                    "sql_artifact": sql_artifact.model_dump(exclude_none=True),
-                    "knowledge_artifact": knowledge_artifact.model_dump(exclude_none=True),
-                    "analysis_artifact": analysis_artifact.model_dump(exclude_none=True),
-                    "report_artifact": report_artifact.model_dump(exclude_none=True),
-                    "artifact": saved_envelope.model_dump(exclude_none=True),
-                    "trace": self.trace.model_dump(exclude_none=True),
-                    "todos": [],
-                    "event_count": event_count,
-                    "timestamp": datetime.now().isoformat(),
-                },
+                complete_payload,
                 trace_id=self.trace_id,
             )
             _log.info(

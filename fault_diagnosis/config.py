@@ -113,12 +113,6 @@ KB_EMBED_CACHE_PATH = os.getenv(
     os.path.join(FAISS_PATH, "embedding_cache.sqlite3"),
 )
 
-# === Agent Behavior ===
-MAX_TOKENS_BEFORE_SUMMARY = int(os.getenv("MAX_TOKENS_BEFORE_SUMMARY", "64000"))
-MESSAGES_TO_KEEP = int(os.getenv("MESSAGES_TO_KEEP", "20"))
-RECURSION_LIMIT = int(os.getenv("RECURSION_LIMIT", "50"))
-STREAM_HEARTBEAT_SECONDS = float(os.getenv("STREAM_HEARTBEAT_SECONDS", "15"))
-MODEL_STREAM_FIRST_EVENT_TIMEOUT_SECONDS = float(os.getenv("MODEL_STREAM_FIRST_EVENT_TIMEOUT_SECONDS", "20"))
 HEALTHCHECK_TIMEOUT_SECONDS = float(os.getenv("HEALTHCHECK_TIMEOUT_SECONDS", "5"))
 
 # === Database ===
@@ -130,13 +124,9 @@ MYSQL_USER = (
 )
 
 # === External APIs ===
-FAULT_API_URL = os.getenv("FAULT_API_URL", "http://10.108.13.250:8001/predict_reason")
 TTS_SYNTHESIZE_URL = os.getenv("TTS_SYNTHESIZE_URL", "").strip()
 TTS_SYNTHESIZE_TIMEOUT_SECONDS = float(os.getenv("TTS_SYNTHESIZE_TIMEOUT_SECONDS", "15"))
 TTS_SYNTHESIZE_MAX_CHARS = max(1, int(os.getenv("TTS_SYNTHESIZE_MAX_CHARS", "500")))
-
-# === Optional Domain Modules ===
-ENABLE_ROBOT_ARM = _env_bool("ENABLE_ROBOT_ARM", False)
 
 # === Runtime Environment ===
 APP_ENV = os.getenv("APP_ENV", os.getenv("ENV", "development")).strip().lower() or "development"

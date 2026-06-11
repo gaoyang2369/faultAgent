@@ -1923,8 +1923,6 @@ const TOOL_DISPLAY_NAMES = {
   query_knowledge_base: '知识库检索',
   fig_inter: '图表生成',
   save_report: 'Markdown报告生成',
-  save_html_report: 'HTML报告生成',
-  create_work_order: '工单生成',
   get_time: '时间工具',
   write_todos: '任务规划'
 };

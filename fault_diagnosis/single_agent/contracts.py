@@ -54,7 +54,7 @@ class TraceEvent(BaseModel):
 
 
 class AgentTrace(BaseModel):
-    """Full per-run trace saved for later offline reliability analysis."""
+    """Full per-run trace saved for troubleshooting and audit."""
 
     trace_id: str
     request_id: str

@@ -413,7 +413,7 @@ class HistoryService:
 
     def _clear_thread_artifact(self, history_type: str, thread_id: str) -> None:
         try:
-            from ..workflows.artifact_store import clear_thread_artifact
+            from ..diagnosis.artifact_store import clear_thread_artifact
 
             clear_thread_artifact(thread_id)
         except Exception as artifact_error:

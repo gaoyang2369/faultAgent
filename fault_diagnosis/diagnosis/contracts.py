@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class WorkflowType(str, Enum):
+class DiagnosisArtifactType(str, Enum):
     """线程级产物类型。
 
     除 `fault_diagnosis` 外的值主要用于兼容历史 artifact 读取。
@@ -87,12 +87,14 @@ class ReportStepArtifact(BaseModel):
     error: str | None = None
 
 
-class WorkflowArtifactEnvelope(BaseModel):
+class DiagnosisArtifactEnvelope(BaseModel):
     """统一的线程级结构化产物容器。"""
 
     model_config = ConfigDict(use_enum_values=True)
 
-    workflow_type: WorkflowType
+    # Keep the persisted field name for compatibility with existing frontend
+    # contracts and stored artifacts.
+    workflow_type: DiagnosisArtifactType
     thread_id: str
     created_at: str
     request_summary: str

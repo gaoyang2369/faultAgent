@@ -1,4 +1,4 @@
-"""Postgres 版 Workflow artifact store backend。"""
+"""Postgres 版诊断产物 store backend。"""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - 依赖缺失时走运行时保护
     connect = None
 
-from ..contracts import WorkflowArtifactEnvelope
+from ..contracts import DiagnosisArtifactEnvelope
 from .base import ArtifactStoreBackend
 
 
 class PostgresArtifactStoreBackend(ArtifactStoreBackend):
-    """基于 Postgres JSONB 的 artifact store backend。"""
+    """基于 Postgres JSONB 的诊断产物 store backend。"""
 
-    def __init__(self, *, dsn: str | None = None, table_name: str = "workflow_artifacts"):
+    def __init__(self, *, dsn: str | None = None, table_name: str = "diagnosis_artifacts"):
         self.dsn = dsn or self._build_default_dsn()
         self.table_name = self._normalize_table_name(table_name)
         self._schema_ready = False
@@ -33,7 +33,7 @@ class PostgresArtifactStoreBackend(ArtifactStoreBackend):
 
     def _normalize_table_name(self, table_name: str) -> str:
         normalized = re.sub(r"[^a-zA-Z0-9_]", "_", (table_name or "").strip())
-        normalized = normalized.strip("_") or "workflow_artifacts"
+        normalized = normalized.strip("_") or "diagnosis_artifacts"
         return normalized
 
     def _connect(self):
@@ -69,7 +69,7 @@ class PostgresArtifactStoreBackend(ArtifactStoreBackend):
                     )
             self._schema_ready = True
 
-    def save(self, envelope: WorkflowArtifactEnvelope) -> WorkflowArtifactEnvelope:
+    def save(self, envelope: DiagnosisArtifactEnvelope) -> DiagnosisArtifactEnvelope:
         self._ensure_schema()
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -85,13 +85,13 @@ class PostgresArtifactStoreBackend(ArtifactStoreBackend):
                         envelope.model_dump_json(),
                     ),
                 )
-        return WorkflowArtifactEnvelope.model_validate_json(envelope.model_dump_json())
+        return DiagnosisArtifactEnvelope.model_validate_json(envelope.model_dump_json())
 
-    def get_latest(self, thread_id: str) -> WorkflowArtifactEnvelope | None:
+    def get_latest(self, thread_id: str) -> DiagnosisArtifactEnvelope | None:
         artifacts = self.list_thread_artifacts(thread_id, limit=1)
         return artifacts[0] if artifacts else None
 
-    def list_thread_artifacts(self, thread_id: str, limit: int = 20) -> list[WorkflowArtifactEnvelope]:
+    def list_thread_artifacts(self, thread_id: str, limit: int = 20) -> list[DiagnosisArtifactEnvelope]:
         self._ensure_schema()
         normalized_limit = max(1, limit)
         with self._connect() as conn:
@@ -107,7 +107,7 @@ class PostgresArtifactStoreBackend(ArtifactStoreBackend):
                     (thread_id, normalized_limit),
                 )
                 rows = cur.fetchall()
-        return [WorkflowArtifactEnvelope.model_validate(json.loads(row[0])) for row in rows]
+        return [DiagnosisArtifactEnvelope.model_validate(json.loads(row[0])) for row in rows]
 
     def clear_thread(self, thread_id: str) -> None:
         self._ensure_schema()
