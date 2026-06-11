@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover - local unit tests may not install LangC
         return decorator
 
 _SAFE_REPORT_STEM_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_DETAILS_START_RE = re.compile(r"^:::details\s+(.+)$")
 _WINDOWS_RESERVED_NAMES = {
     "con",
     "prn",
@@ -143,6 +144,32 @@ def _markdown_to_html(markdown: str) -> str:
             flush_list()
             flush_quote()
             index += 1
+            continue
+        details_match = _DETAILS_START_RE.match(stripped)
+        if details_match:
+            flush_paragraph()
+            flush_list()
+            flush_quote()
+            summary = details_match.group(1).strip()
+            nested_lines: list[str] = []
+            depth = 1
+            index += 1
+            while index < len(lines):
+                current = lines[index].strip()
+                if _DETAILS_START_RE.match(current):
+                    depth += 1
+                elif current == ":::":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                nested_lines.append(lines[index])
+                index += 1
+            if index < len(lines) and lines[index].strip() == ":::":
+                index += 1
+            html_parts.append(
+                f"<details class=\"details-block\"><summary>{_format_inline(summary)}</summary>"
+                f"<div class=\"details-body\">{_markdown_to_html(chr(10).join(nested_lines))}</div></details>"
+            )
             continue
         if stripped.startswith("|") and index + 1 < len(lines) and _is_table_separator(lines[index + 1]):
             flush_paragraph()
@@ -270,15 +297,16 @@ def _build_status_summary_section(chart_payload: dict | None) -> str:
     summary = chart_payload.get("status_summary")
     if not isinstance(summary, dict):
         return ""
-    items = [
+    status_items = [
         ("状态等级", summary.get("status_level") or "未知"),
-        ("数据源", summary.get("source_table") or "-"),
-        ("设备对象", summary.get("device") or "-"),
-        ("最新采样", summary.get("latest_sample_time") or "-"),
-        ("样本窗口", summary.get("sample_window") or "-"),
         ("当前事件", summary.get("current_event") or "无"),
         ("关键现象", summary.get("key_phenomenon") or "-"),
         ("处置优先级", summary.get("priority") or "未知"),
+    ]
+    info_items = [
+        ("数据源与窗口", f"{summary.get('source_table') or '-'}；{summary.get('sample_window') or '-'}"),
+        ("设备映射", summary.get("device_mapping") or summary.get("device") or "-"),
+        ("一句话诊断结论", summary.get("initial_assessment") or "-"),
     ]
     cards = "".join(
         f"""
@@ -287,22 +315,30 @@ def _build_status_summary_section(chart_payload: dict | None) -> str:
           <div class="status-card-value">{escape(str(value))}</div>
         </div>
         """
-        for label, value in items
+        for label, value in status_items
     )
-    initial_assessment = escape(str(summary.get("initial_assessment") or "-"))
+    info_cards = "".join(
+        f"""
+        <div class="status-info-item">
+          <div class="status-card-label">{escape(str(label))}</div>
+          <div class="status-info-value">{escape(str(value))}</div>
+        </div>
+        """
+        for label, value in info_items
+    )
     next_action = escape(str(summary.get("next_action") or "-"))
     return f"""
     <section class="status-summary-card" aria-label="当前运行状态摘要">
       <div class="status-card-head">
         <div>
           <div class="section-kicker">STATUS</div>
-          <h2>当前运行状态摘要</h2>
+          <h2>当前运行诊断摘要</h2>
         </div>
         <strong>{escape(str(summary.get("status_level") or "未知"))}</strong>
       </div>
       <div class="status-card-grid">{cards}</div>
+      <div class="status-info-grid">{info_cards}</div>
       <div class="status-card-notes">
-        <p><strong>初步判断：</strong>{initial_assessment}</p>
         <p><strong>下一步动作：</strong>{next_action}</p>
       </div>
     </section>
@@ -372,37 +408,125 @@ def _build_latest_snapshot(chart_payload: dict) -> str:
     """
 
 
+def _trend_panel_html(group: dict, index: int, *, wide: bool = True) -> str:
+    wide_class = " chart-panel-wide" if wide else ""
+    return f"""
+        <article class="chart-panel{wide_class}">
+          <h3>{escape(str(group.get("name") or "关键指标趋势"))}</h3>
+          <div id="{_chart_trend_id(index)}" class="chart-box"></div>
+        </article>
+        """
+
+
+def _core_trend_group_indexes(trend_groups: list[dict]) -> list[int]:
+    if not trend_groups:
+        return []
+    preferred_keys = ("speed", "health_overview")
+    indexes: list[int] = []
+    for key in preferred_keys:
+        matched = next(
+            (index for index, group in enumerate(trend_groups) if str(group.get("key") or "") == key),
+            None,
+        )
+        if matched is not None and matched not in indexes:
+            indexes.append(matched)
+    if not indexes:
+        indexes.append(0)
+    return indexes[:2]
+
+
+def _build_event_timeline_panel(chart_payload: dict) -> str:
+    timeline = chart_payload.get("event_timeline")
+    if not isinstance(timeline, list) or not timeline:
+        return """
+        <article class="chart-panel event-panel">
+          <h3>事件码时间线</h3>
+          <div class="chart-empty chart-empty-inline">样本窗口内未见有效事件码或告警码</div>
+        </article>
+        """
+    rows = "".join(
+        f"""
+        <div class="event-row">
+          <strong>{escape(str(item.get("code") or "-"))}</strong>
+          <span>{escape(str(item.get("count") or 0))}/{escape(str(item.get("sample_count") or 0))}</span>
+          <span>{escape(str(item.get("ratio") or "-"))}</span>
+          <span>连续 {escape(str(item.get("latest_streak") or 0))} 条</span>
+          <em>{escape(str(item.get("continuity") or "-"))}</em>
+        </div>
+        """
+        for item in timeline[:5]
+        if isinstance(item, dict)
+    )
+    return f"""
+      <article class="chart-panel event-panel">
+        <h3>事件码时间线</h3>
+        <div class="event-list">{rows}</div>
+      </article>
+    """
+
+
 def _build_chart_section(chart_payload: dict | None) -> str:
     if not chart_payload:
         return ""
     data_json = _json_for_script(chart_payload)
     trend_groups = _chart_trend_groups(chart_payload)
-    trend_panels = "".join(
-        f"""
-        <article class="chart-panel chart-panel-wide">
-          <h3>{escape(str(group.get("name") or "关键指标趋势"))}</h3>
-          <div id="{_chart_trend_id(index)}" class="chart-box"></div>
-        </article>
-        """
-        for index, group in enumerate(trend_groups)
+    core_indexes = _core_trend_group_indexes(trend_groups)
+    core_trend_panels = "".join(
+        _trend_panel_html(trend_groups[index], index, wide=True)
+        for index in core_indexes
+        if index < len(trend_groups)
     )
+    detail_trend_panels = "".join(
+        _trend_panel_html(group, index, wide=True)
+        for index, group in enumerate(trend_groups)
+        if index not in core_indexes
+    )
+    detail_html = ""
+    if detail_trend_panels:
+        detail_html = f"""
+        <details class="chart-details">
+          <summary>展开查看：完整趋势图、状态分布和指标快照</summary>
+          <div class="chart-grid chart-grid-detail">
+            {detail_trend_panels}
+            <article class="chart-panel">
+              <h3>状态字分布</h3>
+              <div id="dcma-status-chart" class="chart-box chart-box-small"></div>
+            </article>
+            <article class="chart-panel">
+              <h3>异常码分布</h3>
+              <div id="dcma-fault-chart" class="chart-box chart-box-small"></div>
+            </article>
+            {_build_latest_snapshot(chart_payload)}
+          </div>
+        </details>
+        """
+    else:
+        detail_html = f"""
+        <details class="chart-details">
+          <summary>展开查看：状态分布和指标快照</summary>
+          <div class="chart-grid chart-grid-detail">
+            <article class="chart-panel">
+              <h3>状态字分布</h3>
+              <div id="dcma-status-chart" class="chart-box chart-box-small"></div>
+            </article>
+            <article class="chart-panel">
+              <h3>异常码分布</h3>
+              <div id="dcma-fault-chart" class="chart-box chart-box-small"></div>
+            </article>
+            {_build_latest_snapshot(chart_payload)}
+          </div>
+        </details>
+        """
     return f"""
     <section class="report-section chart-section" aria-label="运行数据可视化">
       <div class="section-kicker">VIS</div>
-      <h2>运行数据可视化</h2>
+      <h2>核心趋势与事件持续性</h2>
       {_build_quality_summary(chart_payload)}
-      <div class="chart-grid">
-        {trend_panels}
-        <article class="chart-panel">
-          <h3>状态字分布</h3>
-          <div id="dcma-status-chart" class="chart-box chart-box-small"></div>
-        </article>
-        <article class="chart-panel">
-          <h3>异常码分布</h3>
-          <div id="dcma-fault-chart" class="chart-box chart-box-small"></div>
-        </article>
-        {_build_latest_snapshot(chart_payload)}
+      <div class="chart-grid chart-grid-core">
+        {core_trend_panels}
+        {_build_event_timeline_panel(chart_payload)}
       </div>
+      {detail_html}
       <p class="chart-status" data-chart-status>图表加载中；若网络受限，请参考下方数据表。</p>
       <script type="application/json" id="dcma-chart-data">{data_json}</script>
     </section>
@@ -596,6 +720,15 @@ def _build_chart_assets(chart_payload: dict | None) -> str:
         else setEmpty("dcma-fault-chart", "未见有效异常码");
 
         if (status) status.textContent = "图表已生成；下方保留完整数据表、诊断依据和处置建议。";
+        document.querySelectorAll("details").forEach(function (details) {
+          details.addEventListener("toggle", function () {
+            if (details.open) {
+              setTimeout(function () {
+                charts.forEach(function (chart) { chart.resize(); });
+              }, 0);
+            }
+          });
+        });
         window.addEventListener("resize", function () {
           charts.forEach(function (chart) { chart.resize(); });
         });
@@ -625,23 +758,27 @@ def _build_report_html(
     chart_section = _build_chart_section(chart_data)
     chart_assets = _build_chart_assets(chart_data)
     sections = [
-        ("01", "状态摘要", executive_summary),
-        ("02", "数据来源与采样窗口", diagnosis_overview),
-        ("03", "运行数据与证据链", diagnosis_details),
-        ("04", "诊断判断与不确定性", fault_inference),
-        ("05", "分级处置建议", repair_recommendations),
-        ("06", "后续运行验证", preventive_maintenance),
-        ("07", "附录：SQL 与知识来源", diagnosis_basis),
+        ("01", "核心诊断摘要", executive_summary, False),
+        ("02", "数据来源与采样窗口", diagnosis_overview, False),
+        ("03", "诊断证据链", diagnosis_details, False),
+        ("04", "诊断判断与不确定性", fault_inference, False),
+        ("05", "分级处置建议", repair_recommendations, False),
+        ("06", "复测验证与能力边界", preventive_maintenance, False),
+        ("07", "详细附录", diagnosis_basis, True),
     ]
     section_html = "\n".join(
         f"""
         <section class="report-section">
           <div class="section-kicker">{number}</div>
           <h2>{escape(name)}</h2>
-          <div class="section-body">{_markdown_to_html(body)}</div>
+          <div class="section-body">{
+            f'<details class="details-block"><summary>展开查看：SQL 与执行信息</summary><div class="details-body">{_markdown_to_html(body)}</div></details>'
+            if collapsed
+            else _markdown_to_html(body)
+          }</div>
         </section>
         """
-        for number, name, body in sections
+        for number, name, body, collapsed in sections
     )
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -735,6 +872,20 @@ def _build_report_html(
     }}
     .status-card-label {{ color: var(--muted); font-size: 12px; margin-bottom: 3px; }}
     .status-card-value {{ font-weight: 800; overflow-wrap: anywhere; }}
+    .status-info-grid {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }}
+    .status-info-item {{
+      min-width: 0;
+      border: 1px solid #e4ebf2;
+      border-radius: 8px;
+      padding: 12px 14px;
+      background: #ffffff;
+    }}
+    .status-info-value {{ font-weight: 700; color: #243047; overflow-wrap: anywhere; }}
     .status-card-notes {{
       margin-top: 14px;
       padding-top: 12px;
@@ -788,6 +939,8 @@ def _build_report_html(
       gap: 14px;
       align-items: stretch;
     }}
+    .chart-grid-core {{ margin-bottom: 12px; }}
+    .chart-grid-detail {{ margin-top: 12px; }}
     .chart-panel {{
       min-width: 0;
       border: 1px solid var(--line);
@@ -811,6 +964,51 @@ def _build_report_html(
       font-size: 14px;
     }}
     .chart-empty-inline {{ min-height: 88px; height: auto; }}
+    .event-panel {{ grid-column: 1 / -1; }}
+    .event-list {{ display: grid; gap: 8px; }}
+    .event-row {{
+      display: grid;
+      grid-template-columns: 1.1fr 0.8fr 0.7fr 1fr 0.9fr;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid #edf1f6;
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #fbfcfe;
+      overflow-wrap: anywhere;
+    }}
+    .event-row strong {{ color: #0f766e; }}
+    .event-row em {{
+      font-style: normal;
+      justify-self: start;
+      border-radius: 6px;
+      padding: 2px 8px;
+      background: #fff7ed;
+      color: #9a3412;
+      font-size: 12px;
+      font-weight: 800;
+    }}
+    .chart-details,
+    .details-block {{
+      margin: 12px 0 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+    }}
+    .chart-details summary,
+    .details-block summary {{
+      cursor: pointer;
+      padding: 11px 14px;
+      color: #243047;
+      font-weight: 800;
+    }}
+    .chart-details summary::marker,
+    .details-block summary::marker {{ color: var(--teal); }}
+    .details-body {{
+      border-top: 1px solid var(--line);
+      padding: 12px 14px 2px;
+      background: #fbfcfe;
+    }}
     .metric-panel h3 {{ margin-bottom: 4px; }}
     .metric-groups {{
       display: grid;
@@ -862,11 +1060,13 @@ def _build_report_html(
       .status-card-head {{ display: block; }}
       .status-card-head strong {{ margin-top: 10px; }}
       .status-card-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .status-info-grid {{ grid-template-columns: 1fr; }}
       .report-section {{ padding: 18px; }}
       .quality-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .chart-grid {{ grid-template-columns: 1fr; }}
       .chart-box {{ height: 300px; }}
       .chart-box-small {{ height: 240px; }}
+      .event-row {{ grid-template-columns: 1fr 1fr; }}
       .metric-groups {{ grid-template-columns: 1fr; }}
     }}
   </style>

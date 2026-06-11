@@ -58,10 +58,10 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
         inspection_artifact = payload.get("inspection_artifact") or {}
         report_filename = _build_report_filename("dcma_report_generation_inspection", envelope.thread_id)
         return {
-            "title": "DCMA 状态巡检报告",
+            "title": "DCMA 运行诊断报告",
             "report_time": report_time,
             "diagnosis_object": request.get("equipment_hint") or "DCMA 系统",
-            "diagnosis_type": "状态巡检",
+            "diagnosis_type": "运行诊断",
             "executive_summary": inspection_artifact.get("summary") or envelope.final_answer,
             "diagnosis_overview": "本报告基于当前线程最近一次状态巡检结果生成，无需重新执行 SQL 查询和巡检分析。",
             "diagnosis_details": (

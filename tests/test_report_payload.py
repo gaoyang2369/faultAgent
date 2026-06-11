@@ -93,8 +93,8 @@ def test_report_payload_renders_real_data_rows_as_tables() -> None:
         report_filename="test-report",
     )
 
-    assert payload["title"] == "DCMA 当前运行状态报告"
-    assert payload["diagnosis_type"] == "运行状态报告"
+    assert payload["title"] == "DCMA 运行诊断报告"
+    assert payload["diagnosis_type"] == "运行诊断报告"
     assert "状态等级" in payload["executive_summary"]
     assert "设备映射" in payload["executive_summary"]
     assert f"已从 {REAL_DATA_LATEST_TABLE} 获取 1 条 DCMA 运行数据" in payload["executive_summary"]
@@ -102,18 +102,19 @@ def test_report_payload_renders_real_data_rows_as_tables() -> None:
     assert "数据时间戳" not in payload["executive_summary"]
     assert "real_data_01" in payload["executive_summary"]
     assert "数据时效提示" in payload["executive_summary"]
-    assert "### 状态摘要" in payload["diagnosis_details"]
-    assert "### 数据质量与实时性" in payload["diagnosis_details"]
-    assert "### 运行健康判定" in payload["diagnosis_details"]
+    assert "### 诊断证据链" in payload["diagnosis_details"]
+    assert "#### 数据事实" in payload["diagnosis_details"]
+    assert "#### 知识库解释" in payload["diagnosis_details"]
+    assert "#### 规则判断" in payload["diagnosis_details"]
+    assert "#### Agent 推断" in payload["diagnosis_details"]
+    assert "展开查看：数据质量与实时性" in payload["diagnosis_details"]
+    assert "展开查看：运行健康与采样概览" in payload["diagnosis_details"]
     assert "### 事件码时间线" in payload["diagnosis_details"]
-    assert "### 异常特征解读" in payload["diagnosis_details"]
     assert "### 关键指标工程判定" in payload["diagnosis_details"]
-    assert "### 控制字/状态字解析" in payload["diagnosis_details"]
-    assert "### 结论分层" in payload["diagnosis_details"]
-    assert "### 指标趋势可视化" in payload["diagnosis_details"]
-    assert "### 最新运行快照" in payload["diagnosis_details"]
-    assert "### 状态分布" in payload["diagnosis_details"]
-    assert "### 异常码分布" in payload["diagnosis_details"]
+    assert "展开查看：控制字 / 状态字解析" in payload["diagnosis_details"]
+    assert "展开查看：完整趋势统计" in payload["diagnosis_details"]
+    assert "展开查看：最新采样明细" in payload["diagnosis_details"]
+    assert "展开查看：状态与异常分布" in payload["diagnosis_details"]
     assert "| 时间 | 设备 | 状态 | 故障/事件码 | 告警码" in payload["diagnosis_details"]
     assert "G120电机1" in payload["diagnosis_details"]
     assert "F1030-0/0/0" in payload["fault_inference"]
