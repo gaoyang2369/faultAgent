@@ -127,6 +127,8 @@ LANGFUSE_SECRET_KEY=replace_me
 LANGFUSE_HOST=https://cloud.langfuse.com
 AGENT_TRACE_CAPTURE_CONTENT=false
 AGENT_TRACE_FLUSH_ON_RUN=false
+AGENT_TRACE_LOCAL_LOG=false
+AGENT_TRACE_LOCAL_LOG_PATH=trash/run/agent-trace.jsonl
 ```
 
 ## 知识库
@@ -162,7 +164,7 @@ python rebuild_kb.py --incremental --no-force-rebuild
 - [HTTP API](docs/backend-api-contract.md)
 - [SSE events](docs/sse-event-contract.md)
 
-默认仅保留本地 `AgentTrace` 和 SSE `trace_id`；开启 Langfuse 后才会导出外部 trace。
+默认仅保留内存态 `AgentTrace` 和 SSE `trace_id`；开启 Langfuse 后会导出外部 trace。需要本地排障文件时，可设置 `AGENT_TRACE_LOCAL_LOG=true`，请求结束后会追加写入 `trash/run/agent-trace.jsonl`。
 
 ## 本地开发模式
 

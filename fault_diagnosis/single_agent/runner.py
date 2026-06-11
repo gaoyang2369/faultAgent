@@ -13,7 +13,7 @@ from typing import Any, AsyncGenerator
 from ..agent_runtime.error_classification import classify_model_gateway_error, model_error_code
 from ..agent_runtime.sse_adapter import build_server_error_payload, encode_sse_event
 from ..common.logger import get_logger
-from ..observability import NoopTraceRun, TraceRunContext, get_trace_exporter
+from ..observability import NoopTraceRun, TraceRunContext, get_trace_exporter, write_local_trace
 from ..diagnosis.adapters import invoke_tool
 from .contracts import AgentTrace, SingleAgentLimits
 from .errors import SingleAgentExecutionError
@@ -112,7 +112,8 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
     ) -> None:
         if self._trace_finalized:
             return
-        self.trace.finish(status=status, final_answer=final_answer, error=error)
+        if self.trace.status == "running" or not self.trace.finished_at:
+            self.trace.finish(status=status, final_answer=final_answer, error=error)
         trace_metadata = {
             "request_id": self.request_id,
             "thread_id": self.thread_id,
@@ -132,6 +133,18 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             )
         except Exception as exc:  # pragma: no cover - export is best effort
             _log.warning("trace exporter 收口失败", error=str(exc), trace_id=self.trace_id)
+        local_trace_path = write_local_trace(
+            self.trace.model_dump(exclude_none=True),
+            metadata=trace_metadata,
+        )
+        if local_trace_path:
+            _log.info(
+                "本地 trace 已写入",
+                trace_id=self.trace_id,
+                request_id=self.request_id,
+                path=local_trace_path,
+                event_count=len(self.trace.events),
+            )
         self._trace_finalized = True
 
     def _finish_open_stage_observations(self, *, status: str, error: str | None = None) -> None:

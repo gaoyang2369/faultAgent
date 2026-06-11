@@ -15,6 +15,8 @@ from ..config import (
     AGENT_TRACE_BACKEND,
     AGENT_TRACE_CAPTURE_CONTENT,
     AGENT_TRACE_FLUSH_ON_RUN,
+    AGENT_TRACE_LOCAL_LOG,
+    AGENT_TRACE_LOCAL_LOG_PATH,
     ADMIN_PASSWORD,
     ADMIN_PASSWORD_IS_DEFAULT,
     ADMIN_UPLOAD_DIR,
@@ -482,6 +484,8 @@ def _check_trace_exporter() -> dict[str, Any]:
             backend=backend,
             capture_content=AGENT_TRACE_CAPTURE_CONTENT,
             flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
+            local_log=AGENT_TRACE_LOCAL_LOG,
+            local_log_path=AGENT_TRACE_LOCAL_LOG_PATH,
             detail="trace export disabled",
         )
 
@@ -498,6 +502,8 @@ def _check_trace_exporter() -> dict[str, Any]:
             host_configured=bool(host or base_url),
             capture_content=AGENT_TRACE_CAPTURE_CONTENT,
             flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
+            local_log=AGENT_TRACE_LOCAL_LOG,
+            local_log_path=AGENT_TRACE_LOCAL_LOG_PATH,
             detail="LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY 未配置",
         )
     try:
@@ -511,6 +517,8 @@ def _check_trace_exporter() -> dict[str, Any]:
             host_configured=bool(host or base_url),
             capture_content=AGENT_TRACE_CAPTURE_CONTENT,
             flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
+            local_log=AGENT_TRACE_LOCAL_LOG,
+            local_log_path=AGENT_TRACE_LOCAL_LOG_PATH,
             detail=_redact(exc),
         )
     return _check_result(
@@ -521,6 +529,8 @@ def _check_trace_exporter() -> dict[str, Any]:
         host_configured=bool(host or base_url),
         capture_content=AGENT_TRACE_CAPTURE_CONTENT,
         flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
+        local_log=AGENT_TRACE_LOCAL_LOG,
+        local_log_path=AGENT_TRACE_LOCAL_LOG_PATH,
         detail="Langfuse SDK 已可用，等待运行时 trace 写入",
     )
 

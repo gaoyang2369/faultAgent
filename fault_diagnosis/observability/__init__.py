@@ -9,6 +9,7 @@ from .tracing import (
     get_trace_exporter,
     reset_trace_exporter,
     shutdown_trace_exporter,
+    write_local_trace,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "get_trace_exporter",
     "reset_trace_exporter",
     "shutdown_trace_exporter",
+    "write_local_trace",
 ]

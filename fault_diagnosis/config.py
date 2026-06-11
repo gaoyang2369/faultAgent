@@ -138,6 +138,11 @@ AGENT_TRACE_CAPTURE_CONTENT = _env_bool("AGENT_TRACE_CAPTURE_CONTENT", False)
 AGENT_TRACE_PREVIEW_CHARS = max(200, int(os.getenv("AGENT_TRACE_PREVIEW_CHARS", "1200")))
 AGENT_TRACE_FLUSH_ON_RUN = _env_bool("AGENT_TRACE_FLUSH_ON_RUN", False)
 AGENT_TRACE_FLUSH_TIMEOUT_SECONDS = float(os.getenv("AGENT_TRACE_FLUSH_TIMEOUT_SECONDS", "5"))
+AGENT_TRACE_LOCAL_LOG = _env_bool("AGENT_TRACE_LOCAL_LOG", False)
+AGENT_TRACE_LOCAL_LOG_PATH = _resolve_project_path(
+    os.getenv("AGENT_TRACE_LOCAL_LOG_PATH", "").strip(),
+    os.path.join(RUN_STATE_DIR, "agent-trace.jsonl"),
+)
 
 # === Web / Session ===
 DEFAULT_FRONTEND_ORIGINS = (

@@ -94,6 +94,8 @@ LANGFUSE_SECRET_KEY=replace_me
 LANGFUSE_HOST=https://cloud.langfuse.com
 AGENT_TRACE_CAPTURE_CONTENT=false
 AGENT_TRACE_FLUSH_ON_RUN=false
+AGENT_TRACE_LOCAL_LOG=false
+AGENT_TRACE_LOCAL_LOG_PATH=trash/run/agent-trace.jsonl
 ```
 
 生产环境缺少 `SESSION_SECRET` 时服务会拒绝启动。生成示例：
@@ -215,3 +217,4 @@ trash/run/app-json.log             JSON 日志
 - SQL 工具不可用：确认 `HOST`、`MYSQL_USER`、`MYSQL_PW`、`PORT`、`DCMA_DB_NAME`。
 - SSE 无输出：确认 Nginx `proxy_buffering off`，并查看 `trash/run/app-json.log`。
 - Langfuse 没有 trace：确认 `AGENT_TRACE_BACKEND=langfuse`，并已配置 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`。
+- 需要本地查看完整 trace：设置 `AGENT_TRACE_LOCAL_LOG=true` 后重启服务，再查看 `trash/run/agent-trace.jsonl`。

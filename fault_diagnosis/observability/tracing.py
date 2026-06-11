@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from threading import RLock
 from typing import Any, Iterator, Protocol
 
@@ -15,6 +17,8 @@ from ..config import (
     AGENT_TRACE_CAPTURE_CONTENT,
     AGENT_TRACE_FLUSH_ON_RUN,
     AGENT_TRACE_FLUSH_TIMEOUT_SECONDS,
+    AGENT_TRACE_LOCAL_LOG,
+    AGENT_TRACE_LOCAL_LOG_PATH,
     AGENT_TRACE_PREVIEW_CHARS,
     APP_ENV,
 )
@@ -696,3 +700,32 @@ def shutdown_trace_exporter() -> None:
         exporter.shutdown()
     except Exception as exc:  # pragma: no cover - best effort
         _log.warning("Trace exporter shutdown failed", error=str(exc))
+
+
+def write_local_trace(trace_payload: dict[str, Any], *, metadata: dict[str, Any] | None = None) -> str | None:
+    """Persist one completed trace snapshot locally as JSONL when enabled."""
+
+    if not AGENT_TRACE_LOCAL_LOG:
+        return None
+    envelope = {
+        "written_at": datetime.now(timezone.utc).isoformat(),
+        "metadata": sanitize_trace_value(
+            metadata or {},
+            capture_content=True,
+            preview_chars=AGENT_TRACE_PREVIEW_CHARS,
+        ),
+        "trace": sanitize_trace_value(
+            trace_payload,
+            capture_content=AGENT_TRACE_CAPTURE_CONTENT,
+            preview_chars=AGENT_TRACE_PREVIEW_CHARS,
+        ),
+    }
+    try:
+        os.makedirs(os.path.dirname(AGENT_TRACE_LOCAL_LOG_PATH), exist_ok=True)
+        with open(AGENT_TRACE_LOCAL_LOG_PATH, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(envelope, ensure_ascii=False, default=str))
+            handle.write("\n")
+        return AGENT_TRACE_LOCAL_LOG_PATH
+    except Exception as exc:  # pragma: no cover - local diagnostics are best effort
+        _log.warning("本地 trace 写入失败", path=AGENT_TRACE_LOCAL_LOG_PATH, error=str(exc))
+        return None
