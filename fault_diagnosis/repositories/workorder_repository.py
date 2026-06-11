@@ -90,12 +90,14 @@ class FileWorkOrderRepository:
                 "fault_code": str(payload.get("fault_code") or "").strip() or None,
                 "workorder_type": str(payload.get("workorder_type") or "").strip() or "运行异常排查",
                 "priority": str(payload.get("priority") or "P2").strip() or "P2",
+                "priority_label": str(payload.get("priority_label") or "").strip() or None,
                 "risk_level": str(payload.get("risk_level") or "低").strip() or "低",
                 "trigger_source": str(payload.get("trigger_source") or "故障诊断 Agent").strip(),
                 "diagnosis_conclusion": str(payload.get("diagnosis_conclusion") or "").strip(),
                 "key_evidence": self._text_list(payload.get("key_evidence")),
                 "processing_steps": self._text_list(payload.get("processing_steps")),
                 "acceptance_criteria": self._text_list(payload.get("acceptance_criteria")),
+                "task_mappings": self._task_mappings(payload.get("task_mappings")),
                 "assignee": str(payload.get("assignee") or "").strip() or None,
                 "assignee_role": str(payload.get("assignee_role") or "").strip() or None,
                 "suggested_completion_window": str(payload.get("suggested_completion_window") or "").strip() or None,
@@ -106,6 +108,7 @@ class FileWorkOrderRepository:
                 "request_id": str(payload.get("request_id") or "").strip() or None,
                 "source": payload.get("source") if isinstance(payload.get("source"), dict) else {},
             }
+            record["operation_logs"] = self._initial_operation_logs(record, now)
             records.append(record)
             self._write_records_unlocked(records)
             return deepcopy(record)
@@ -167,10 +170,30 @@ class FileWorkOrderRepository:
             for record in records:
                 if record.get("work_order_id") != normalized_id:
                     continue
+                before_status = str(record.get("status") or "待派单")
+                changed_fields: list[str] = []
                 for key in allowed_fields:
                     if key in patch and patch[key] is not None:
-                        record[key] = str(patch[key]).strip() or record.get(key)
-                record["updated_at"] = datetime.now().isoformat(timespec="seconds")
+                        value = str(patch[key]).strip() or record.get(key)
+                        if record.get(key) != value:
+                            record[key] = value
+                            changed_fields.append(key)
+                now = datetime.now()
+                if changed_fields:
+                    record.setdefault("operation_logs", [])
+                    if not isinstance(record["operation_logs"], list):
+                        record["operation_logs"] = []
+                    record["operation_logs"].append(
+                        self._update_operation_log(
+                            record,
+                            now,
+                            before_status=before_status,
+                            changed_fields=changed_fields,
+                            operator=patch.get("operator"),
+                            note=patch.get("note"),
+                        )
+                    )
+                record["updated_at"] = now.isoformat(timespec="seconds")
                 updated = deepcopy(record)
                 break
             if updated is None:
@@ -207,6 +230,98 @@ class FileWorkOrderRepository:
             return []
         cleaned = [str(item).strip() for item in value if str(item).strip()]
         return list(dict.fromkeys(cleaned))
+
+    @classmethod
+    def _task_mappings(cls, value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        mappings: list[dict[str, Any]] = []
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            evidence = str(item.get("evidence") or "").strip()
+            tasks = cls._text_list(item.get("tasks"))
+            if not evidence or not tasks:
+                continue
+            key = (evidence, tuple(tasks))
+            if key in seen:
+                continue
+            seen.add(key)
+            mappings.append({"evidence": evidence, "tasks": tasks})
+        return mappings[:10]
+
+    @staticmethod
+    def _initial_operation_logs(record: dict[str, Any], now: datetime) -> list[dict[str, Any]]:
+        timestamp = now.isoformat(timespec="seconds")
+        actor = record.get("trigger_source") or "故障诊断 Agent"
+        logs = [
+            {
+                "time": timestamp,
+                "actor": actor,
+                "action": "创建工单",
+                "detail": f"创建维修工单 {record.get('work_order_id')}",
+                "status": record.get("status") or "待派单",
+            }
+        ]
+        if record.get("trace_id"):
+            logs.append(
+                {
+                    "time": timestamp,
+                    "actor": actor,
+                    "action": "绑定诊断链路",
+                    "detail": f"绑定诊断链路 {record.get('trace_id')}",
+                    "status": record.get("status") or "待派单",
+                }
+            )
+        logs.append(
+            {
+                "time": timestamp,
+                "actor": actor,
+                "action": "状态初始化",
+                "detail": f"当前状态：{record.get('status') or '待派单'}",
+                "status": record.get("status") or "待派单",
+            }
+        )
+        return logs
+
+    @staticmethod
+    def _update_operation_log(
+        record: dict[str, Any],
+        now: datetime,
+        *,
+        before_status: str,
+        changed_fields: list[str],
+        operator: Any,
+        note: Any,
+    ) -> dict[str, Any]:
+        status = str(record.get("status") or "待派单")
+        assignee = str(record.get("assignee") or record.get("assignee_role") or "电气维护人员").strip()
+        status_details = {
+            "已派单": f"工单派发给 {assignee}",
+            "处理中": "维修人员开始处理工单",
+            "待复核": "处理结果已提交，等待复核",
+            "已关闭": "复核通过，工单关闭",
+        }
+        if "status" in changed_fields and before_status != status:
+            action = "状态流转"
+            detail = status_details.get(status, f"状态由 {before_status} 更新为 {status}")
+        elif "assignee" in changed_fields or "assignee_role" in changed_fields:
+            action = "更新负责人"
+            detail = f"负责人更新为 {assignee}"
+        else:
+            action = "更新工单"
+            detail = "更新工单字段：" + "、".join(changed_fields)
+        note_text = str(note or "").strip()
+        if note_text:
+            detail = f"{detail}；{note_text}"
+        return {
+            "time": now.isoformat(timespec="seconds"),
+            "actor": str(operator or "").strip() or "演示用户",
+            "action": action,
+            "detail": detail,
+            "status": status,
+        }
 
     @staticmethod
     def _summary(records: list[dict[str, Any]]) -> dict[str, Any]:

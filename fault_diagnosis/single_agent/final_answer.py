@@ -11,7 +11,17 @@ def _clean_items(items: list[str]) -> list[str]:
 
 
 def _strip_action_prefix(text: str) -> str:
-    for prefix in ("立即处置：", "故障码处置：", "验证步骤：", "关联排查：", "数据关联排查：", "根因排查：", "闭环确认："):
+    for prefix in (
+        "立即处置：",
+        "手册建议处置：",
+        "故障码处置：",
+        "验证步骤：",
+        "关联排查：",
+        "数据关联排查：",
+        "根因排查：",
+        "复位后验证：",
+        "闭环确认：",
+    ):
         if text.startswith(prefix):
             return text[len(prefix):].strip()
     return text

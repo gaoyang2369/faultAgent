@@ -16,12 +16,14 @@ class CreateWorkOrderPayload(BaseModel):
     fault_code: str | None = None
     workorder_type: str = "运行异常排查"
     priority: str = "P2"
+    priority_label: str | None = None
     risk_level: str = "低"
     trigger_source: str = "故障诊断 Agent"
     diagnosis_conclusion: str = ""
     key_evidence: list[str] = Field(default_factory=list)
     processing_steps: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
+    task_mappings: list[dict[str, Any]] = Field(default_factory=list)
     assignee: str | None = None
     assignee_role: str | None = None
     suggested_completion_window: str | None = None
@@ -40,6 +42,8 @@ class UpdateWorkOrderPayload(BaseModel):
     assignee_role: str | None = None
     due_at: str | None = None
     priority: str | None = None
+    operator: str | None = None
+    note: str | None = None
 
 
 class WorkOrderService:

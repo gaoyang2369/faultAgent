@@ -1709,14 +1709,16 @@ def _workorder_steps(
     temp_trigger: bool,
     voltage_trigger: bool,
 ) -> list[str]:
-    steps = ["备份参数"]
+    steps = ["备份当前参数快照"]
     if primary_code:
-        steps.append("检查单位制参数")
-        steps.append("重新激活功能块")
+        steps.append("核查单位制相关参数")
+        steps.append("按手册建议恢复单位设置")
+        steps.append(f"重新激活功能块并观察 {primary_code} 是否复现")
     if speed_trigger:
-        steps.append("复核速度反馈链路")
+        steps.append("复核速度设定与反馈链路")
+        steps.append("检查编码器信号与速度反馈一致性")
     if load_trigger:
-        steps.append("复核负载与机械传动状态")
+        steps.append("检查负载波动、机械阻滞和制动状态")
     if temp_trigger:
         steps.append("检查散热与柜内温度")
     if voltage_trigger:
@@ -1734,16 +1736,78 @@ def _workorder_acceptance_criteria(
 ) -> list[str]:
     criteria = []
     if primary_code:
-        criteria.append(f"{primary_code} 不再复现")
+        criteria.append(f"{primary_code} 不再持续出现")
     if speed_trigger:
-        criteria.append("速度偏差低于阈值")
+        criteria.append("速度偏差恢复至阈值以内")
     if load_trigger:
-        criteria.append("负载率恢复正常")
+        criteria.append("负载率回落至正常区间")
     if temp_trigger:
         criteria.append("温度回落到关注阈值以下")
     if voltage_trigger:
         criteria.append("母线电压波动恢复正常")
+    if (primary_code or speed_trigger or load_trigger) and not temp_trigger and not voltage_trigger:
+        criteria.append("温度和母线电压无新增异常")
     return _dedupe_items(criteria)
+
+
+def _workorder_task_mappings(
+    *,
+    primary_code: str,
+    primary_streak: int,
+    speed_deviation: float | None,
+    max_load: float | None,
+    max_motor_temp: float | None,
+    max_inverter_temp: float | None,
+    voltage_min: float | None,
+    voltage_max: float | None,
+    speed_trigger: bool,
+    load_trigger: bool,
+    temp_trigger: bool,
+    voltage_trigger: bool,
+) -> list[dict[str, Any]]:
+    mappings: list[dict[str, Any]] = []
+    if primary_code:
+        evidence = f"{primary_code} 持续出现 {primary_streak} 条" if primary_streak > 1 else f"最近样本出现 {primary_code}"
+        mappings.append(
+            {
+                "evidence": evidence,
+                "tasks": [
+                    "核查单位制相关参数",
+                    "按手册建议恢复单位设置",
+                    f"重新激活功能块并观察 {primary_code} 是否复现",
+                ],
+            }
+        )
+    if speed_trigger and speed_deviation is not None:
+        mappings.append(
+            {
+                "evidence": f"速度偏差 {_format_float(speed_deviation)}%",
+                "tasks": ["复核速度设定与反馈链路", "检查编码器信号与速度反馈一致性"],
+            }
+        )
+    if load_trigger and max_load is not None:
+        mappings.append(
+            {
+                "evidence": f"负载率 {_format_float(max_load)}%",
+                "tasks": ["检查负载波动、机械阻滞和制动状态"],
+            }
+        )
+    if not temp_trigger and (max_motor_temp is not None or max_inverter_temp is not None):
+        mappings.append(
+            {
+                "evidence": f"温度正常，电机最高 {_format_float(max_motor_temp)}℃，变频器最高 {_format_float(max_inverter_temp)}℃",
+                "tasks": ["暂不生成温升排查任务"],
+            }
+        )
+    if voltage_min is not None and voltage_max is not None:
+        if voltage_trigger:
+            tasks = ["检查供电与母线电压波动"]
+            evidence = f"母线电压 {_format_float(voltage_min)}-{_format_float(voltage_max)}V 波动异常"
+        else:
+            tasks = ["暂不生成供电异常排查任务"]
+            evidence = f"母线电压 {_format_float(voltage_min)}-{_format_float(voltage_max)}V 基本稳定"
+        mappings.append({"evidence": evidence, "tasks": tasks})
+    return mappings[:6]
 
 
 def build_workorder_suggestion(
@@ -1768,6 +1832,7 @@ def build_workorder_suggestion(
             key_evidence=[],
             processing_steps=[],
             acceptance_criteria=[],
+            task_mappings=[],
             equipment_object=request.equipment_hint or "DCMA 系统",
             fault_code=None,
             title="",
@@ -1893,6 +1958,20 @@ def build_workorder_suggestion(
         temp_trigger=temp_trigger,
         voltage_trigger=voltage_trigger,
     )
+    task_mappings = _workorder_task_mappings(
+        primary_code=primary_code,
+        primary_streak=primary_streak,
+        speed_deviation=speed_deviation,
+        max_load=max_load,
+        max_motor_temp=max_motor_temp,
+        max_inverter_temp=max_inverter_temp,
+        voltage_min=voltage_min,
+        voltage_max=voltage_max,
+        speed_trigger=speed_trigger,
+        load_trigger=load_trigger,
+        temp_trigger=temp_trigger,
+        voltage_trigger=voltage_trigger,
+    )
 
     reason_parts: list[str] = []
     if primary_code:
@@ -1927,8 +2006,9 @@ def build_workorder_suggestion(
         suggested_completion_window=completion_window,
         diagnosis_conclusion=diagnosis_conclusion,
         key_evidence=_dedupe_items(key_evidence)[:5],
-        processing_steps=processing_steps[:5],
-        acceptance_criteria=acceptance_criteria[:4],
+        processing_steps=processing_steps[:8],
+        acceptance_criteria=acceptance_criteria[:6],
+        task_mappings=task_mappings,
         equipment_object=equipment_object,
         fault_code=primary_code or None,
         title=title,

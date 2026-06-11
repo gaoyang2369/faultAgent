@@ -96,6 +96,7 @@ class WorkOrderSuggestion(BaseModel):
     key_evidence: list[str] = Field(default_factory=list, description="可验收的关键证据")
     processing_steps: list[str] = Field(default_factory=list, description="任务化处理步骤")
     acceptance_criteria: list[str] = Field(default_factory=list, description="验收标准")
+    task_mappings: list[dict[str, Any]] = Field(default_factory=list, description="诊断证据到工单任务的映射")
     equipment_object: str = Field(default="", description="设备对象")
     fault_code: str | None = Field(default=None, description="关联故障码或事件码")
     title: str = Field(default="", description="建议工单标题")

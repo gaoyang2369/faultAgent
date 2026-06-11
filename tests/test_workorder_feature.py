@@ -7,7 +7,7 @@ from fault_diagnosis.diagnosis.contracts import (
     SqlStepArtifact,
 )
 from fault_diagnosis.repositories.workorder_repository import FileWorkOrderRepository
-from fault_diagnosis.services.workorder_service import CreateWorkOrderPayload, WorkOrderService
+from fault_diagnosis.services.workorder_service import CreateWorkOrderPayload, UpdateWorkOrderPayload, WorkOrderService
 from fault_diagnosis.single_agent.reporting import build_workorder_suggestion
 
 
@@ -90,8 +90,10 @@ def test_workorder_suggestion_triggers_for_persistent_a07089() -> None:
     assert suggestion.fault_code == "A07089"
     assert "速度偏差" in "；".join(suggestion.key_evidence)
     assert "负载率" in "；".join(suggestion.key_evidence)
-    assert "复核速度反馈链路" in suggestion.processing_steps
-    assert "A07089 不再复现" in suggestion.acceptance_criteria
+    assert "复核速度设定与反馈链路" in suggestion.processing_steps
+    assert "A07089 不再持续出现" in suggestion.acceptance_criteria
+    assert any("速度偏差" in item["evidence"] for item in suggestion.task_mappings)
+    assert any("暂不生成供电异常排查任务" in "；".join(item["tasks"]) for item in suggestion.task_mappings)
 
 
 def test_file_workorder_repository_creates_trace_bound_record(tmp_path) -> None:
@@ -106,8 +108,14 @@ def test_file_workorder_repository_creates_trace_bound_record(tmp_path) -> None:
             risk_level="中",
             diagnosis_conclusion="A07089 持续存在，且速度偏差和负载率偏高。",
             key_evidence=["最近 50 条均出现 A07089", "速度偏差 46.3%", "负载率 78.47%"],
-            processing_steps=["备份参数", "检查单位制参数", "复核速度反馈链路"],
-            acceptance_criteria=["A07089 不再复现", "速度偏差低于阈值"],
+            processing_steps=["备份当前参数快照", "核查单位制相关参数", "复核速度设定与反馈链路"],
+            acceptance_criteria=["A07089 不再持续出现", "速度偏差恢复至阈值以内"],
+            task_mappings=[
+                {
+                    "evidence": "A07089 持续出现 50 条",
+                    "tasks": ["核查单位制相关参数", "重新激活功能块并观察 A07089 是否复现"],
+                }
+            ],
             assignee_role="电气维护人员",
             suggested_completion_window="24小时内",
             thread_id="thread_demo",
@@ -122,7 +130,22 @@ def test_file_workorder_repository_creates_trace_bound_record(tmp_path) -> None:
     assert record["trace_id"] == "trace_demo"
     assert record["request_id"] == "req_demo"
     assert record["due_at"]
+    assert record["task_mappings"][0]["evidence"] == "A07089 持续出现 50 条"
+    assert any(log["action"] == "绑定诊断链路" for log in record["operation_logs"])
+
+    updated = service.update_work_order(
+        UpdateWorkOrderPayload(
+            work_order_id=record["work_order_id"],
+            status="已派单",
+            operator="演示用户",
+            note="派单",
+        )
+    )
+    assert updated and updated["work_order"]["status"] == "已派单"
+    assert updated["work_order"]["operation_logs"][-1]["action"] == "状态流转"
+    assert "工单派发给" in updated["work_order"]["operation_logs"][-1]["detail"]
 
     listed = service.list_work_orders(trace_id="trace_demo")
     assert listed["summary"]["total"] == 1
     assert listed["items"][0]["work_order_id"] == record["work_order_id"]
+    assert listed["items"][0]["status"] == "已派单"
