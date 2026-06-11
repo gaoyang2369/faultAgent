@@ -445,7 +445,7 @@
         </div>
       </div>
 
-      <details v-if="!isUser && executionTimeline.length" class="details-section details-section--timeline">
+      <details v-if="false && !isUser && executionTimeline.length" class="details-section details-section--timeline">
         <summary class="details-section__summary">
           <span class="details-section__title">诊断过程时间线</span>
           <span class="details-section__meta">{{ filteredExecutionTimeline.length }} / {{ executionTimeline.length }} 个节点</span>
@@ -572,7 +572,7 @@
         </div>
       </div>
 
-      <details v-if="!isUser && governanceSuggestions.items.length" class="details-section details-section--governance">
+      <details v-if="false && !isUser && governanceSuggestions.items.length" class="details-section details-section--governance">
         <summary class="details-section__summary">
           <span class="details-section__title">系统改进建议</span>
           <span class="details-section__meta">{{ governanceSuggestions.items.length }} 个方向</span>
@@ -945,7 +945,7 @@
         </details>
       </div>
 
-      <details v-if="!isUser && evidenceFindings.length" class="details-section details-section--findings">
+      <details v-if="false && !isUser && evidenceFindings.length" class="details-section details-section--findings">
         <summary class="details-section__summary">
           <span class="details-section__title">结论依据</span>
           <span class="details-section__meta">{{ evidenceFindings.length }} 条判断</span>
@@ -1007,7 +1007,7 @@
         </div>
       </details>
 
-      <details v-if="!isUser && normalizedEvidences.length" class="details-section details-section--catalog">
+      <details v-if="false && !isUser && normalizedEvidences.length" class="details-section details-section--catalog">
         <summary class="details-section__summary">
           <span class="details-section__title">依据清单</span>
           <span class="details-section__meta">{{ filteredNormalizedEvidences.length }} / {{ normalizedEvidences.length }} 条</span>
@@ -1871,7 +1871,6 @@ const assistantDetailsHint = computed(() => {
   if (executionTimeline.value.length) sections.push('过程');
   if (evidenceFindings.value.length || normalizedEvidences.value.length) sections.push('依据');
   if (toolEvents.value.length) sections.push('工具');
-  if (governanceSuggestions.value.items.length) sections.push('改进建议');
   return sections.join(' / ');
 });
 const formatConfidenceText = (value) => {

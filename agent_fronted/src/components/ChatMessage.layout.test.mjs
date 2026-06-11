@@ -39,6 +39,26 @@ assert.match(
 )
 assert.match(
   source,
+  /v-if="false && !isUser && executionTimeline\.length"/,
+  'legacy diagnostic timeline should stay disabled'
+)
+assert.match(
+  source,
+  /v-if="false && !isUser && governanceSuggestions\.items\.length"/,
+  'legacy governance suggestions should stay disabled'
+)
+assert.match(
+  source,
+  /v-if="false && !isUser && evidenceFindings\.length"/,
+  'legacy finding details should stay disabled'
+)
+assert.match(
+  source,
+  /v-if="false && !isUser && normalizedEvidences\.length"/,
+  'legacy evidence catalog should stay disabled'
+)
+assert.match(
+  source,
   /watch\(hasFinalAnswerContent,[\s\S]*assistantDetailsExpanded\.value = false;/,
   'process details should auto-collapse when final answer content appears'
 )
