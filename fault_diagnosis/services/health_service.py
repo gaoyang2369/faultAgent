@@ -12,6 +12,9 @@ import httpx
 
 from ..config import (
     ALLOW_DEFAULT_ADMIN_PASSWORD,
+    AGENT_TRACE_BACKEND,
+    AGENT_TRACE_CAPTURE_CONTENT,
+    AGENT_TRACE_FLUSH_ON_RUN,
     ADMIN_PASSWORD,
     ADMIN_PASSWORD_IS_DEFAULT,
     ADMIN_UPLOAD_DIR,
@@ -471,6 +474,57 @@ def _check_admin_password() -> dict[str, Any]:
     )
 
 
+def _check_trace_exporter() -> dict[str, Any]:
+    backend = AGENT_TRACE_BACKEND
+    if backend != "langfuse":
+        return _check_result(
+            "not_configured",
+            backend=backend,
+            capture_content=AGENT_TRACE_CAPTURE_CONTENT,
+            flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
+            detail="trace export disabled",
+        )
+
+    public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()
+    secret_key = os.getenv("LANGFUSE_SECRET_KEY", "").strip()
+    host = os.getenv("LANGFUSE_HOST", "").strip()
+    base_url = os.getenv("LANGFUSE_BASE_URL", "").strip()
+    if not (public_key and secret_key):
+        return _check_result(
+            "not_configured",
+            backend=backend,
+            public_key_configured=bool(public_key),
+            secret_key_configured=bool(secret_key),
+            host_configured=bool(host or base_url),
+            capture_content=AGENT_TRACE_CAPTURE_CONTENT,
+            flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
+            detail="LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY 未配置",
+        )
+    try:
+        import langfuse  # noqa: F401
+    except Exception as exc:
+        return _check_result(
+            "failed",
+            backend=backend,
+            public_key_configured=True,
+            secret_key_configured=True,
+            host_configured=bool(host or base_url),
+            capture_content=AGENT_TRACE_CAPTURE_CONTENT,
+            flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
+            detail=_redact(exc),
+        )
+    return _check_result(
+        "available",
+        backend=backend,
+        public_key_configured=True,
+        secret_key_configured=True,
+        host_configured=bool(host or base_url),
+        capture_content=AGENT_TRACE_CAPTURE_CONTENT,
+        flush_on_run=AGENT_TRACE_FLUSH_ON_RUN,
+        detail="Langfuse SDK 已可用，等待运行时 trace 写入",
+    )
+
+
 def _overall_status(checks: dict[str, dict[str, Any]]) -> str:
     statuses = {check.get("status") for check in checks.values()}
     if "failed" in statuses:
@@ -494,6 +548,7 @@ async def build_dependencies_health(app, deep: bool = True, timeout_seconds: flo
         "admin_pdf_registry": _check_admin_pdf_registry(),
         "uploaded_pdf_kb": _check_uploaded_pdf_kb(),
         "admin_password": _check_admin_password(),
+        "trace_exporter": _check_trace_exporter(),
         "medicine_ocr": _check_medicine_ocr(),
         "mysql": await _check_mysql(timeout_seconds, deep=deep),
         "postgresql": await _check_postgres(app, timeout_seconds, deep=deep),

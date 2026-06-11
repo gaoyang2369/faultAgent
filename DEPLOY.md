@@ -86,6 +86,14 @@ SESSION_COOKIE_DOMAIN=
 SESSION_COOKIE_PATH=/
 
 DIAGNOSIS_ARTIFACT_BACKEND=file
+
+# 可选：Langfuse trace 导出
+AGENT_TRACE_BACKEND=langfuse
+LANGFUSE_PUBLIC_KEY=replace_me
+LANGFUSE_SECRET_KEY=replace_me
+LANGFUSE_HOST=https://cloud.langfuse.com
+AGENT_TRACE_CAPTURE_CONTENT=false
+AGENT_TRACE_FLUSH_ON_RUN=false
 ```
 
 生产环境缺少 `SESSION_SECRET` 时服务会拒绝启动。生成示例：
@@ -206,3 +214,4 @@ trash/run/app-json.log             JSON 日志
 - 知识库不可用：确认 `faiss_db/` 存在，Ollama 可访问，`EMBEDDING_MODEL` 已下载。
 - SQL 工具不可用：确认 `HOST`、`MYSQL_USER`、`MYSQL_PW`、`PORT`、`DCMA_DB_NAME`。
 - SSE 无输出：确认 Nginx `proxy_buffering off`，并查看 `trash/run/app-json.log`。
+- Langfuse 没有 trace：确认 `AGENT_TRACE_BACKEND=langfuse`，并已配置 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`。

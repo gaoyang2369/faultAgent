@@ -132,6 +132,13 @@ TTS_SYNTHESIZE_MAX_CHARS = max(1, int(os.getenv("TTS_SYNTHESIZE_MAX_CHARS", "500
 APP_ENV = os.getenv("APP_ENV", os.getenv("ENV", "development")).strip().lower() or "development"
 IS_PRODUCTION = APP_ENV in {"prod", "production"}
 
+# === Observability / Trace Export ===
+AGENT_TRACE_BACKEND = _env_choice("AGENT_TRACE_BACKEND", "none", {"none", "langfuse"})
+AGENT_TRACE_CAPTURE_CONTENT = _env_bool("AGENT_TRACE_CAPTURE_CONTENT", False)
+AGENT_TRACE_PREVIEW_CHARS = max(200, int(os.getenv("AGENT_TRACE_PREVIEW_CHARS", "1200")))
+AGENT_TRACE_FLUSH_ON_RUN = _env_bool("AGENT_TRACE_FLUSH_ON_RUN", False)
+AGENT_TRACE_FLUSH_TIMEOUT_SECONDS = float(os.getenv("AGENT_TRACE_FLUSH_TIMEOUT_SECONDS", "5"))
+
 # === Web / Session ===
 DEFAULT_FRONTEND_ORIGINS = (
     ""

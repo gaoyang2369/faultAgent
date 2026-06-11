@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from ..common.logger import get_logger
+from ..observability import shutdown_trace_exporter
 from ..config import (
     APP_ENV,
     FRONTEND_ORIGINS,
@@ -65,6 +66,7 @@ async def app_lifespan(app: FastAPI):
         app.state.agent = None
         app.state.pool = None
         yield
+        shutdown_trace_exporter()
         _log.info("本地开发模式已关闭")
         return
 
@@ -101,4 +103,5 @@ async def app_lifespan(app: FastAPI):
         raise RuntimeError(f"应用初始化失败: {str(exc)}") from exc
     finally:
         await close_pool()
+        shutdown_trace_exporter()
         _log.info("服务已关闭，资源清理完成")

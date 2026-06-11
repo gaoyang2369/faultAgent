@@ -10,6 +10,7 @@ langchain-community==0.4.1
 langchain-core==1.0.3
 langchain-openai==1.0.2
 langchain-ollama==1.0.0
+langfuse==4.7.1
 
 # 数据库
 pymysql==1.1.2

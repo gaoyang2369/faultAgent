@@ -119,6 +119,14 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 DIAGNOSIS_ARTIFACT_BACKEND=file
 DIAGNOSIS_ARTIFACT_TABLE=diagnosis_artifacts
 DIAGNOSIS_ARTIFACT_POSTGRES_DSN=
+
+# 可选：Langfuse trace 导出
+AGENT_TRACE_BACKEND=langfuse
+LANGFUSE_PUBLIC_KEY=replace_me
+LANGFUSE_SECRET_KEY=replace_me
+LANGFUSE_HOST=https://cloud.langfuse.com
+AGENT_TRACE_CAPTURE_CONTENT=false
+AGENT_TRACE_FLUSH_ON_RUN=false
 ```
 
 ## 知识库
@@ -153,6 +161,8 @@ python rebuild_kb.py --incremental --no-force-rebuild
 
 - [HTTP API](docs/backend-api-contract.md)
 - [SSE events](docs/sse-event-contract.md)
+
+默认仅保留本地 `AgentTrace` 和 SSE `trace_id`；开启 Langfuse 后才会导出外部 trace。
 
 ## 本地开发模式
 

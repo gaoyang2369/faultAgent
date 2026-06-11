@@ -30,6 +30,12 @@ class SingleAgentFlowMixin:
         if getattr(app.state, "chat_model", None) is not None and self.model is None:
             self.model = app.state.chat_model
 
+        self._reset_trace_run()
+        try:
+            self._trace_run = self.trace_exporter.start_run(self._build_trace_context())
+        except Exception as exc:  # pragma: no cover - exporter initialization should be best effort
+            _log.warning("trace exporter 初始化失败，已降级为本地 no-op", error=str(exc))
+
         event_count = 0
         token_count = 0
         started_at = time.monotonic()
@@ -68,6 +74,17 @@ class SingleAgentFlowMixin:
                 stage_started = self._start_stage("final_answer", "整理报告生成结果")
                 self._finish_stage("final_answer", stage_started, message="最终回答已生成")
                 self.trace.finish(status="completed", final_answer=final_answer)
+                self._finish_open_stage_observations(status="completed")
+                self._finalize_trace_run(
+                    status="completed",
+                    final_answer=final_answer,
+                    metadata={
+                        "event_count": event_count,
+                        "token_count": token_count + 1,
+                        "decision": decision.model_dump(),
+                        "report_filename": report_artifact.report_filename,
+                    },
+                )
                 yield encode_sse_event("token", {"type": "token", "content": final_answer}, trace_id=self.trace_id)
                 token_count += 1
                 yield encode_sse_event(
@@ -187,6 +204,18 @@ class SingleAgentFlowMixin:
                 token_count += 1
                 event_count += 1
 
+            self._finish_open_stage_observations(status="completed")
+            self._finalize_trace_run(
+                status="completed",
+                final_answer=final_answer,
+                metadata={
+                    "event_count": event_count,
+                    "token_count": token_count,
+                    "decision": decision.model_dump(),
+                    "report_filename": report_artifact.report_filename,
+                },
+            )
+
             complete_payload = {
                 "type": "chat_complete",
                 "thread_id": self.thread_id,
@@ -226,6 +255,8 @@ class SingleAgentFlowMixin:
             )
         except Exception as exc:
             self.trace.finish(status="error", error=str(exc))
+            self._finish_open_stage_observations(status="error", error=str(exc))
+            self._finalize_trace_run(status="error", error=str(exc))
             _log.exception(
                 "限制型单 Agent 流式请求失败",
                 thread_id=self.thread_id,
