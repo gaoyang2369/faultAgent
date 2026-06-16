@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import json
 import re
 from datetime import datetime
@@ -41,7 +40,8 @@ from .reporting_defs import (
     TREND_METRIC_DEFS as _TREND_METRIC_DEFS,
     SqlReportSummary,
 )
-from .sql_safety import REAL_DATA_FALLBACK_COLUMN_NAMES, REAL_DATA_LATEST_TABLE
+from .sql_result_parser import parse_sql_rows
+from .sql_safety import REAL_DATA_LATEST_TABLE
 
 _REPORT_URL_RE = re.compile(r"(/reports/[A-Za-z0-9._\-]+\.(?:md|html))", re.IGNORECASE)
 _EMPTY_CODE_VALUES = {"", "0", "0.0", "none", "null", "无", "正常", "nan"}
@@ -292,26 +292,7 @@ def _data_quality_markdown(data_quality: dict[str, object]) -> str:
 
 
 def _parse_sql_rows(raw_output: str) -> list[dict[str, object]]:
-    text = (raw_output or "").strip()
-    if not text:
-        return []
-    try:
-        parsed = ast.literal_eval(text)
-    except (SyntaxError, ValueError):
-        return []
-    if not isinstance(parsed, list):
-        return []
-
-    rows: list[dict[str, object]] = []
-    for item in parsed:
-        if not isinstance(item, (list, tuple)):
-            continue
-        row = {
-            column: item[index] if index < len(item) else None
-            for index, column in enumerate(REAL_DATA_FALLBACK_COLUMN_NAMES)
-        }
-        rows.append(row)
-    return rows
+    return parse_sql_rows(raw_output)
 
 
 def _unique_non_empty(rows: list[dict[str, object]], key: str) -> list[str]:

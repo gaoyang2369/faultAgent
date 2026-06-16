@@ -11,6 +11,7 @@ from ..common.logger import get_logger
 from ..diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from ..runtime.diagnosis_contract_adapter import build_diagnosis_contract_payload
 from .contracts import SingleAgentDecision
+from .evidence import build_evidence_bundle, build_output_guardrail_result, initialize_evidence_bundle
 from .intent import build_lightweight_conversation_reply
 from .reporting import extract_report_url
 
@@ -133,6 +134,22 @@ class SingleAgentFlowMixin:
                 yield ping
             request, decision = self._last_step_result
             self._finish_stage("understand", stage_started, message=decision.reason)
+            if self._is_cancelled():
+                yield self._build_cancel_complete_frame()
+                return
+
+            stage_started = self._start_stage("initialize_evidence_bundle", "初始化本次任务证据账本")
+            self.evidence_bundle = initialize_evidence_bundle(
+                trace_id=self.trace_id,
+                request=request,
+                decision=decision,
+            )
+            self._record_artifact("evidence_bundle", self.evidence_bundle, stage="initialize_evidence_bundle")
+            self._finish_stage(
+                "initialize_evidence_bundle",
+                stage_started,
+                message=f"证据账本已初始化：{self.evidence_bundle.bundle_id}",
+            )
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
                 return
@@ -279,6 +296,30 @@ class SingleAgentFlowMixin:
                 yield self._build_cancel_complete_frame()
                 return
 
+            stage_started = self._start_stage("evidence_validation", "生成并校验证据链")
+            self.evidence_bundle = build_evidence_bundle(
+                trace_id=self.trace_id,
+                request=request,
+                decision=decision,
+                sql_artifact=sql_artifact,
+                knowledge_artifact=knowledge_artifact,
+                analysis_artifact=analysis_artifact,
+                workorder_suggestion=workorder_suggestion,
+                report_artifact=report_artifact,
+            )
+            self._record_artifact("evidence_bundle", self.evidence_bundle, stage="evidence_validation")
+            self._finish_stage(
+                "evidence_validation",
+                stage_started,
+                message=(
+                    f"证据链校验完成：{len(self.evidence_bundle.evidence_items)} 条证据，"
+                    f"{len(self.evidence_bundle.claims)} 条判断"
+                ),
+            )
+            if self._is_cancelled():
+                yield self._build_cancel_complete_frame()
+                return
+
             stage_started = self._start_stage("final_answer", "整理最终回答")
             async for ping in self._drive_step(
                 self.build_final_answer(analysis_artifact, report_artifact),
@@ -287,7 +328,18 @@ class SingleAgentFlowMixin:
                 yield ping
             final_answer = self._last_step_result
             self._finish_stage("final_answer", stage_started, message="最终回答已生成")
-            self.trace.finish(status="completed", final_answer=final_answer)
+
+            stage_started = self._start_stage("output_guardrail", "检查最终回答和证据链一致性")
+            self.output_guardrail_result = build_output_guardrail_result(final_answer, self.evidence_bundle)
+            self._record_artifact("output_guardrail", self.output_guardrail_result, stage="output_guardrail")
+            self._finish_stage(
+                "output_guardrail",
+                stage_started,
+                status="completed" if self.output_guardrail_result.get("passed") else "warning",
+                message="输出校验通过" if self.output_guardrail_result.get("passed") else "输出校验存在提示",
+            )
+
+            stage_started = self._start_stage("save_artifact", "保存诊断产物与证据链")
             saved_envelope = self.save_artifact_envelope(
                 request,
                 sql_artifact,
@@ -297,8 +349,12 @@ class SingleAgentFlowMixin:
                 report_artifact,
                 final_answer,
                 decision,
+                evidence_bundle=self.evidence_bundle,
+                output_guardrail=self.output_guardrail_result,
             )
             diagnosis_contract_payload = build_diagnosis_contract_payload(saved_envelope)
+            self._finish_stage("save_artifact", stage_started, message="诊断产物与证据链已保存")
+            self.trace.finish(status="completed", final_answer=final_answer)
 
             if final_answer.strip():
                 yield encode_sse_event("token", {"type": "token", "content": final_answer}, trace_id=self.trace_id)
@@ -314,6 +370,7 @@ class SingleAgentFlowMixin:
                     "token_count": token_count,
                     "decision": decision.model_dump(),
                     "report_filename": report_artifact.report_filename,
+                    "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
                 },
             )
 
@@ -332,6 +389,8 @@ class SingleAgentFlowMixin:
                 "analysis_artifact": analysis_artifact.model_dump(exclude_none=True),
                 "workorder_decision": workorder_suggestion.model_dump(exclude_none=True),
                 "report_artifact": report_artifact.model_dump(exclude_none=True),
+                "evidence_bundle": self.evidence_bundle.model_dump(exclude_none=True) if self.evidence_bundle else None,
+                "output_guardrail": self.output_guardrail_result or {},
                 "artifact": saved_envelope.model_dump(exclude_none=True),
                 "trace": self.trace.model_dump(exclude_none=True),
                 "todos": [],

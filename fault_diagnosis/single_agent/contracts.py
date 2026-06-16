@@ -13,7 +13,7 @@ TraceEventType = Literal["stage", "decision", "tool_call", "tool_result", "artif
 class SingleAgentLimits(BaseModel):
     """Hard limits for one deterministic single-agent run."""
 
-    max_rounds: int = Field(default=7, ge=1)
+    max_rounds: int = Field(default=16, ge=1)
     max_tool_calls: int = Field(default=4, ge=0)
     allowed_tools: tuple[str, ...] = (
         "sql_db_query_checker",

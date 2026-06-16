@@ -14,6 +14,7 @@ from ..diagnosis.contracts import (
     DiagnosisArtifactEnvelope,
     DiagnosisArtifactType,
     DiagnosisRequest,
+    EvidenceBundle,
     KnowledgeStepArtifact,
     ReportStepArtifact,
     SqlStepArtifact,
@@ -536,6 +537,8 @@ class SingleAgentStagesMixin:
         report_artifact: ReportStepArtifact,
         final_answer: str,
         decision: SingleAgentDecision,
+        evidence_bundle: EvidenceBundle | None = None,
+        output_guardrail: dict[str, object] | None = None,
     ) -> DiagnosisArtifactEnvelope:
         self.trace.add_event(
             "artifact",
@@ -555,5 +558,7 @@ class SingleAgentStagesMixin:
             final_answer=final_answer,
             decision=decision,
             trace=self.trace,
+            evidence_bundle=evidence_bundle,
+            output_guardrail=output_guardrail,
         )
         return save_thread_artifact(envelope)

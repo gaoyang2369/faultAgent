@@ -21,6 +21,7 @@ from ..config import (
 from ..observability import NoopTraceRun, TraceRunContext, get_trace_exporter, write_local_trace
 from ..diagnosis.adapters import invoke_tool
 from .contracts import AgentTrace, SingleAgentLimits
+from .evidence import build_tool_evidence_preview
 from .errors import SingleAgentExecutionError
 from .flow import SingleAgentFlowMixin
 from .json_utils import build_json_repair_prompt, extract_json_text, loads_json_object
@@ -69,6 +70,8 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self._round_count = 0
         self._tool_call_count = 0
         self._last_step_result: Any = None
+        self.evidence_bundle: Any | None = None
+        self.output_guardrail_result: dict[str, Any] | None = None
 
     def _console_trace(self, message: str, **fields: Any) -> None:
         if not AGENT_TRACE_CONSOLE:
@@ -146,6 +149,8 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self._trace_run = NoopTraceRun(trace_context=self._build_trace_context())
         self._trace_finalized = False
         self._stage_observations = {}
+        self.evidence_bundle = None
+        self.output_guardrail_result = None
 
     def _finalize_trace_run(
         self,
@@ -169,6 +174,13 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         }
         if metadata:
             trace_metadata.update(metadata)
+        if self.evidence_bundle is not None:
+            trace_metadata.setdefault("evidence_bundle_id", getattr(self.evidence_bundle, "bundle_id", None))
+            trace_metadata.setdefault("evidence_count", len(getattr(self.evidence_bundle, "evidence_items", []) or []))
+            trace_metadata.setdefault("claim_count", len(getattr(self.evidence_bundle, "claims", []) or []))
+            trace_metadata.setdefault("evidence_quality_checks", getattr(self.evidence_bundle, "quality_checks", {}) or {})
+        if self.output_guardrail_result is not None:
+            trace_metadata.setdefault("output_guardrail", self.output_guardrail_result)
         self._console_trace(
             "Agent run finished",
             status=status,
@@ -499,6 +511,15 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             "trace_id": self.trace_id,
             "stage_duration_ms": duration_ms,
         }
+        evidence_preview = build_tool_evidence_preview(tool_name=tool_name, output=output)
+        if evidence_preview:
+            payload["evidence"] = sanitize_for_json(evidence_preview)
+            payload["evidence_count"] = len(evidence_preview)
+            payload["evidence_ids"] = [
+                item.get("evidence_id")
+                for item in evidence_preview
+                if item.get("evidence_id")
+            ]
         serialized = json.dumps(sanitize_for_json(payload), ensure_ascii=False, default=str)
         if len(serialized) > 6000:
             payload.pop("result", None)

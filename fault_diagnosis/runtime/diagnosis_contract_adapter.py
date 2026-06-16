@@ -30,6 +30,11 @@ def _diagnosis_key(envelope: DiagnosisArtifactEnvelope) -> str:
 
 
 def _confidence_score(value: Any) -> float | None:
+    if isinstance(value, dict):
+        explicit_score = value.get("score")
+        if isinstance(explicit_score, (int, float)):
+            return round(max(0.0, min(float(explicit_score), 1.0)), 2)
+        return _confidence_score(value.get("level"))
     if isinstance(value, (int, float)):
         return round(max(0.0, min(float(value), 1.0)), 2)
     normalized = str(value or "").strip().lower()
@@ -43,6 +48,8 @@ def _confidence_score(value: Any) -> float | None:
 
 
 def _confidence_label(value: Any) -> str:
+    if isinstance(value, dict):
+        return _confidence_label(value.get("level"))
     if isinstance(value, (int, float)):
         score = float(value)
         if score >= 0.75:
@@ -76,25 +83,36 @@ def _build_standard_evidence(envelope: DiagnosisArtifactEnvelope) -> list[dict[s
     for index, item in enumerate(envelope.evidence or [], start=1):
         data = _dump_model(item)
         source_type = str(data.get("source_type") or "generic").strip() or "generic"
-        evidence_id = f"evidence_{source_type}_{index:03d}"
+        evidence_id = str(data.get("evidence_id") or f"evidence_{source_type}_{index:03d}")
+        evidence_type = str(data.get("evidence_type") or source_type)
+        summary = data.get("summary") or data.get("content") or data.get("title")
         items.append(
             {
                 "id": evidence_id,
                 "evidence_id": evidence_id,
-                "type": source_type,
+                "type": evidence_type,
                 "source": source_type,
-                "title": data.get("title") or "证据项",
-                "summary": _compact_text(data.get("content") or data.get("title"), limit=220),
+                "title": data.get("title") or data.get("summary") or "证据项",
+                "summary": _compact_text(summary, limit=220),
                 "metadata": {
                     "importance": data.get("importance") or "medium",
                     "artifact_workflow_type": _diagnosis_key(envelope),
                     "thread_id": envelope.thread_id,
+                    "source_name": data.get("source_name"),
+                    "quality": data.get("quality") or {},
+                    **(data.get("metadata") or {}),
                 },
                 "artifact_id": None,
-                "status": "available" if data.get("content") else "unavailable",
+                "status": "available" if summary else "unavailable",
             }
         )
     return items
+
+
+def _evidence_bundle_payload(envelope: DiagnosisArtifactEnvelope) -> dict[str, Any]:
+    payload = envelope.payload or {}
+    bundle = payload.get("evidence_bundle")
+    return bundle if isinstance(bundle, dict) else {}
 
 
 def _build_artifacts(envelope: DiagnosisArtifactEnvelope) -> list[dict[str, Any]]:
@@ -120,6 +138,48 @@ def _build_artifacts(envelope: DiagnosisArtifactEnvelope) -> list[dict[str, Any]
 
 def _build_findings(envelope: DiagnosisArtifactEnvelope, evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
     payload = envelope.payload or {}
+    bundle = _evidence_bundle_payload(envelope)
+    claims = bundle.get("claims") if isinstance(bundle.get("claims"), list) else []
+    if claims:
+        evidence_by_id = {item["id"]: item for item in evidence}
+        final_claim_ids = bundle.get("final_claim_ids") if isinstance(bundle.get("final_claim_ids"), list) else []
+        selected_claims = [
+            claim
+            for claim in claims
+            if not final_claim_ids or claim.get("claim_id") in final_claim_ids
+        ][:5]
+        findings: list[dict[str, Any]] = []
+        for index, claim in enumerate(selected_claims, start=1):
+            claim_id = str(claim.get("claim_id") or f"claim_{index:03d}")
+            supporting_ids = [
+                str(evidence_id)
+                for evidence_id in claim.get("supporting_evidence_ids") or []
+                if str(evidence_id) in evidence_by_id
+            ]
+            confidence = claim.get("confidence") or {}
+            findings.append(
+                {
+                    "id": claim_id,
+                    "finding_id": claim_id,
+                    "title": _compact_text(claim.get("statement") or claim_id, limit=80),
+                    "description": _compact_text(claim.get("reasoning_summary") or claim.get("statement"), limit=260),
+                    "severity": _severity_from_claim(claim, payload),
+                    "confidence": _confidence_label(confidence),
+                    "confidence_score": _confidence_score(confidence),
+                    "evidence_ids": supporting_ids,
+                    "text": _compact_text(claim.get("statement"), limit=260),
+                    "metadata": {
+                        "workflow_id": _diagnosis_key(envelope),
+                        "source": claim.get("created_by") or "evidence_bundle",
+                        "claim_type": claim.get("claim_type"),
+                        "missing_evidence": claim.get("missing_evidence") or [],
+                        "decision": claim.get("decision"),
+                    },
+                }
+            )
+        if findings:
+            return findings
+
     analysis = _dump_model(payload.get("analysis_artifact"))
     inspection = _dump_model(payload.get("inspection_artifact"))
     source = analysis or inspection
@@ -146,6 +206,18 @@ def _build_findings(envelope: DiagnosisArtifactEnvelope, evidence: list[dict[str
             },
         }
     ]
+
+
+def _severity_from_claim(claim: dict[str, Any], payload: dict[str, Any]) -> str:
+    claim_type = str(claim.get("claim_type") or "")
+    statement = str(claim.get("statement") or "")
+    if claim_type == "risk_assessment" or any(keyword in statement for keyword in ("高风险", "停机", "故障")):
+        return "high"
+    if claim_type == "workorder_decision" and claim.get("decision") == "suggest_create":
+        return "high"
+    if claim_type in {"root_cause_candidate", "diagnosis_summary"}:
+        return _severity_from_payload(payload)
+    return "medium"
 
 
 def _build_finding_links(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
