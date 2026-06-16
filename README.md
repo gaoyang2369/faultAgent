@@ -130,6 +130,7 @@ AGENT_TRACE_FLUSH_ON_RUN=false
 AGENT_TRACE_LOCAL_LOG=false
 AGENT_TRACE_LOCAL_LOG_PATH=trash/run/agent-trace.jsonl
 AGENT_TRACE_CONSOLE=false
+AGENT_TRACE_CONSOLE_VERBOSE=false
 AGENT_TRACE_CONSOLE_PREVIEW_CHARS=240
 ```
 
@@ -166,7 +167,7 @@ python rebuild_kb.py --incremental --no-force-rebuild
 - [HTTP API](docs/backend-api-contract.md)
 - [SSE events](docs/sse-event-contract.md)
 
-默认仅保留内存态 `AgentTrace` 和 SSE `trace_id`；开启 Langfuse 后会导出外部 trace。需要本地排障文件时，可设置 `AGENT_TRACE_LOCAL_LOG=true`，请求结束后会追加写入 `trash/run/agent-trace.jsonl`。开发阶段想直接在后端终端看阶段、模型调用和工具调用摘要时，可设置 `AGENT_TRACE_CONSOLE=true`。
+默认仅保留内存态 `AgentTrace` 和 SSE `trace_id`；开启 Langfuse 后会导出外部 trace。需要本地排障文件时，可设置 `AGENT_TRACE_LOCAL_LOG=true`，请求结束后会追加写入 `trash/run/agent-trace.jsonl`。开发阶段想直接在后端终端看阶段、模型调用和工具调用摘要时，可设置 `AGENT_TRACE_CONSOLE=true`；默认是简洁模式，如需在终端展示 artifact、工具入参和结果预览，再设置 `AGENT_TRACE_CONSOLE_VERBOSE=true`。
 
 ## 本地开发模式
 

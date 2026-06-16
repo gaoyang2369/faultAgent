@@ -4,6 +4,38 @@ from fault_diagnosis.observability.payloads import sanitize_trace_value
 from fault_diagnosis.observability.tracing import NoopTraceRun, TraceRunContext
 
 
+def test_agent_console_compact_fields_hide_noisy_payloads(monkeypatch) -> None:
+    from fault_diagnosis.single_agent import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "AGENT_TRACE_CONSOLE_VERBOSE", False)
+    runner = runner_module.RestrictedSingleAgentRunner(
+        message="生成dcma系统最近的运行报告",
+        thread_id="thread.test",
+        user_identity="游客",
+        request_id="request.test",
+        stream_id="stream.test",
+        trace_id="trace.test",
+    )
+
+    compact = runner._compact_console_fields(
+        {
+            "stage": "sql",
+            "status": "completed",
+            "input_preview": {"query": "SELECT * FROM real_data_01"},
+            "result_preview": [("large", "result")],
+            "decision": {"needs_sql": True},
+            "summary": "查询 real_data_01 最近 50 条运行状态、异常码和关键运行指标，用于生成 DCMA 运行报告。",
+        }
+    )
+
+    assert compact["stage"] == "sql"
+    assert compact["status"] == "completed"
+    assert "real_data_01" in compact["summary"]
+    assert "input_preview" not in compact
+    assert "result_preview" not in compact
+    assert "decision" not in compact
+
+
 def test_sanitize_trace_value_redacts_sensitive_fields() -> None:
     payload = {
         "api_key": "sk-test-secret",
@@ -38,4 +70,3 @@ def test_noop_trace_run_lifecycle_is_safe() -> None:
     trace_run.finish(status="completed", output="done")
     trace_run.flush()
     trace_run.close()
-

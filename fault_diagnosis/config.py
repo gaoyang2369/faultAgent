@@ -144,6 +144,7 @@ AGENT_TRACE_LOCAL_LOG_PATH = _resolve_project_path(
     os.path.join(RUN_STATE_DIR, "agent-trace.jsonl"),
 )
 AGENT_TRACE_CONSOLE = _env_bool("AGENT_TRACE_CONSOLE", False)
+AGENT_TRACE_CONSOLE_VERBOSE = _env_bool("AGENT_TRACE_CONSOLE_VERBOSE", False)
 AGENT_TRACE_CONSOLE_PREVIEW_CHARS = max(80, int(os.getenv("AGENT_TRACE_CONSOLE_PREVIEW_CHARS", "240")))
 
 # === Web / Session ===

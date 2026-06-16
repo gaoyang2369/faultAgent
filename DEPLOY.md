@@ -97,6 +97,7 @@ AGENT_TRACE_FLUSH_ON_RUN=false
 AGENT_TRACE_LOCAL_LOG=false
 AGENT_TRACE_LOCAL_LOG_PATH=trash/run/agent-trace.jsonl
 AGENT_TRACE_CONSOLE=false
+AGENT_TRACE_CONSOLE_VERBOSE=false
 AGENT_TRACE_CONSOLE_PREVIEW_CHARS=240
 ```
 
@@ -220,4 +221,4 @@ trash/run/app-json.log             JSON 日志
 - SSE 无输出：确认 Nginx `proxy_buffering off`，并查看 `trash/run/app-json.log`。
 - Langfuse 没有 trace：确认 `AGENT_TRACE_BACKEND=langfuse`，并已配置 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`。
 - 需要本地查看完整 trace：设置 `AGENT_TRACE_LOCAL_LOG=true` 后重启服务，再查看 `trash/run/agent-trace.jsonl`。
-- 开发期想在终端直接看 Agent 阶段和工具调用：设置 `AGENT_TRACE_CONSOLE=true` 后重启服务。
+- 开发期想在终端直接看 Agent 阶段和工具调用：设置 `AGENT_TRACE_CONSOLE=true` 后重启服务；如需查看 artifact、工具入参和结果预览，再打开 `AGENT_TRACE_CONSOLE_VERBOSE=true`。

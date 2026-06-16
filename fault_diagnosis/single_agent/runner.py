@@ -13,7 +13,11 @@ from typing import Any, AsyncGenerator
 from ..agent_runtime.error_classification import classify_model_gateway_error, model_error_code
 from ..agent_runtime.sse_adapter import build_server_error_payload, encode_sse_event
 from ..common.logger import get_logger
-from ..config import AGENT_TRACE_CONSOLE, AGENT_TRACE_CONSOLE_PREVIEW_CHARS
+from ..config import (
+    AGENT_TRACE_CONSOLE,
+    AGENT_TRACE_CONSOLE_PREVIEW_CHARS,
+    AGENT_TRACE_CONSOLE_VERBOSE,
+)
 from ..observability import NoopTraceRun, TraceRunContext, get_trace_exporter, write_local_trace
 from ..diagnosis.adapters import invoke_tool
 from .contracts import AgentTrace, SingleAgentLimits
@@ -69,19 +73,42 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
     def _console_trace(self, message: str, **fields: Any) -> None:
         if not AGENT_TRACE_CONSOLE:
             return
+        console_fields = self._compact_console_fields(fields)
+        context_fields = {
+            "request_id": self.request_id,
+            "trace_id": self.trace_id,
+        }
+        if AGENT_TRACE_CONSOLE_VERBOSE:
+            context_fields["thread_id"] = preview(self.thread_id, limit=80)
+            context_fields["stream_id"] = preview(self.stream_id, limit=80)
         _log.info(
             message,
-            request_id=self.request_id,
-            trace_id=self.trace_id,
-            thread_id=preview(self.thread_id, limit=80),
-            stream_id=preview(self.stream_id, limit=80),
-            **fields,
+            **context_fields,
+            **console_fields,
         )
 
-    def _console_preview(self, value: Any) -> str:
+    def _console_preview(self, value: Any, *, limit: int | None = None) -> str:
         return " ".join(
-            preview(sanitize_for_json(value), limit=AGENT_TRACE_CONSOLE_PREVIEW_CHARS).split()
+            preview(
+                sanitize_for_json(value),
+                limit=limit or AGENT_TRACE_CONSOLE_PREVIEW_CHARS,
+            ).split()
         )
+
+    def _compact_console_fields(self, fields: dict[str, Any]) -> dict[str, Any]:
+        if AGENT_TRACE_CONSOLE_VERBOSE:
+            return fields
+        compact: dict[str, Any] = {}
+        for key, value in fields.items():
+            if key in {"decision", "input_preview", "result_preview"}:
+                continue
+            if key == "summary":
+                compact[key] = self._console_preview(value, limit=140)
+            elif key == "error":
+                compact[key] = self._console_preview(value, limit=180)
+            else:
+                compact[key] = value
+        return compact
 
     def _resolve_model(self):
         if self.model is not None:
@@ -276,6 +303,8 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             artifact_type=artifact_type,
             artifact=payload if isinstance(payload, dict) else {"value": payload},
         )
+        if not AGENT_TRACE_CONSOLE_VERBOSE:
+            return
         self._console_trace(
             "Agent artifact recorded",
             stage=stage,
