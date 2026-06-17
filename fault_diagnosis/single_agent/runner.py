@@ -72,6 +72,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self._last_step_result: Any = None
         self.evidence_bundle: Any | None = None
         self.output_guardrail_result: dict[str, Any] | None = None
+        self._active_allowed_tools: tuple[str, ...] | None = None
 
     def _console_trace(self, message: str, **fields: Any) -> None:
         if not AGENT_TRACE_CONSOLE:
@@ -151,6 +152,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self._stage_observations = {}
         self.evidence_bundle = None
         self.output_guardrail_result = None
+        self._active_allowed_tools = None
 
     def _finalize_trace_run(
         self,
@@ -435,7 +437,8 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
                 raise SingleAgentExecutionError(message) from repair_exc
 
     def _start_tool_call(self, *, tool_name: str, tool_input: Any, stage: str) -> tuple[str, float, dict[str, Any]]:
-        if tool_name not in self.limits.allowed_tools:
+        allowed_tools = self._active_allowed_tools if self._active_allowed_tools is not None else self.limits.allowed_tools
+        if tool_name not in allowed_tools:
             raise SingleAgentExecutionError(f"工具不在单 Agent 白名单内：{tool_name}")
         self._tool_call_count += 1
         if self._tool_call_count > self.limits.max_tool_calls:

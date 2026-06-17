@@ -14,6 +14,13 @@ from .contracts import SingleAgentDecision
 from .evidence import build_evidence_bundle, build_output_guardrail_result, initialize_evidence_bundle
 from .intent import build_lightweight_conversation_reply
 from .reporting import extract_report_url
+from .workflow.nodes import (
+    build_audit_log_result,
+    build_permission_check_result,
+    build_resolution_recommendation_result,
+    build_risk_check_result,
+    workflow_node_enabled,
+)
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -138,6 +145,37 @@ class SingleAgentFlowMixin:
                 yield self._build_cancel_complete_frame()
                 return
 
+            stage_started = self._start_stage("select_workflow_policy", "选择任务 workflow policy 和工具白名单")
+            self._active_allowed_tools = tuple(decision.runtime_tools)
+            self._record_artifact(
+                "workflow_route",
+                {
+                    "primary_task_type": decision.primary_task_type,
+                    "route_confidence": decision.route_confidence,
+                    "user_goal": decision.user_goal,
+                    "objects": decision.objects,
+                    "time_window": decision.time_window,
+                    "subgoals": decision.subgoals,
+                    "missing_slots": decision.missing_slots,
+                    "risk_level": decision.risk_level,
+                    "requested_output": decision.requested_output,
+                    "flags": decision.flags,
+                },
+                stage="select_workflow_policy",
+            )
+            self._record_artifact("workflow_policy", decision.workflow_policy, stage="select_workflow_policy")
+            self._finish_stage(
+                "select_workflow_policy",
+                stage_started,
+                message=(
+                    f"{decision.workflow_policy.get('policy_id', decision.primary_task_type)}："
+                    f"启用节点 {', '.join(name for name, enabled in decision.enabled_nodes.items() if enabled) or '无工具节点'}"
+                ),
+            )
+            if self._is_cancelled():
+                yield self._build_cancel_complete_frame()
+                return
+
             stage_started = self._start_stage("initialize_evidence_bundle", "初始化本次任务证据账本")
             self.evidence_bundle = initialize_evidence_bundle(
                 trace_id=self.trace_id,
@@ -153,6 +191,36 @@ class SingleAgentFlowMixin:
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
                 return
+
+            permission_check_result: dict[str, Any] = {}
+            if workflow_node_enabled(decision, "permission_check"):
+                stage_started = self._start_stage("permission_check", "检查动作请求权限边界")
+                permission_check_result = build_permission_check_result(decision, user_identity=self.user_identity)
+                self._record_artifact("permission_check", permission_check_result, stage="permission_check")
+                self._finish_stage(
+                    "permission_check",
+                    stage_started,
+                    status="warning",
+                    message=permission_check_result.get("reason", ""),
+                )
+                if self._is_cancelled():
+                    yield self._build_cancel_complete_frame()
+                    return
+
+            risk_check_result: dict[str, Any] = {}
+            if workflow_node_enabled(decision, "risk_check"):
+                stage_started = self._start_stage("risk_check", "检查动作请求风险等级")
+                risk_check_result = build_risk_check_result(decision)
+                self._record_artifact("risk_check", risk_check_result, stage="risk_check")
+                self._finish_stage(
+                    "risk_check",
+                    stage_started,
+                    status="warning",
+                    message=risk_check_result.get("reason", ""),
+                )
+                if self._is_cancelled():
+                    yield self._build_cancel_complete_frame()
+                    return
 
             if decision.report_from_previous_artifact:
                 stage_started = self._start_stage("report", "基于当前线程已有结果生成报告")
@@ -189,6 +257,12 @@ class SingleAgentFlowMixin:
                         "report_filename": report_artifact.report_filename,
                         "report_url": extract_report_url(report_artifact.save_result),
                         "decision": decision.model_dump(),
+                        "workflow_route": {
+                            "primary_task_type": decision.primary_task_type,
+                            "subgoals": decision.subgoals,
+                            "missing_slots": decision.missing_slots,
+                        },
+                        "workflow_policy": decision.workflow_policy,
                         "trace": self.trace.model_dump(exclude_none=True),
                         "todos": [],
                         "event_count": event_count,
@@ -206,7 +280,7 @@ class SingleAgentFlowMixin:
                 )
                 return
 
-            if decision.needs_sql:
+            if workflow_node_enabled(decision, "sql"):
                 stage_started = self._start_stage("sql", "执行受限 SQL 查询")
                 async for chunk in self.stream_sql_step(request):
                     yield chunk
@@ -224,7 +298,16 @@ class SingleAgentFlowMixin:
             sql_fault_codes = extract_fault_codes_from_text(
                 getattr(sql_artifact, "raw_output", "") or getattr(sql_artifact, "result_preview", "")
             )
-            needs_knowledge = decision.needs_knowledge or bool(sql_fault_codes)
+            policy_knowledge_setting = (decision.workflow_policy.get("enabled_nodes") or {}).get("knowledge")
+            needs_knowledge = workflow_node_enabled(decision, "knowledge") or (
+                bool(sql_fault_codes) and policy_knowledge_setting is not False
+            )
+            if (
+                needs_knowledge
+                and self._active_allowed_tools is not None
+                and "query_knowledge_base" not in self._active_allowed_tools
+            ):
+                self._active_allowed_tools = (*self._active_allowed_tools, "query_knowledge_base")
             if needs_knowledge:
                 knowledge_message = (
                     f"执行知识库检索（故障码：{', '.join(sql_fault_codes)}）"
@@ -258,23 +341,56 @@ class SingleAgentFlowMixin:
                 yield self._build_cancel_complete_frame()
                 return
 
-            stage_started = self._start_stage("workorder_decision", "判断是否建议生成维修工单")
-            async for ping in self._drive_step(
-                self.decide_workorder(request, sql_artifact, knowledge_artifact, analysis_artifact),
-                stage="workorder_decision",
-            ):
-                yield ping
-            workorder_suggestion = self._last_step_result
-            self._finish_stage(
-                "workorder_decision",
-                stage_started,
-                message=workorder_suggestion.reason,
-            )
+            resolution_recommendation: dict[str, Any] = {}
+            if workflow_node_enabled(decision, "resolution_recommendation"):
+                stage_started = self._start_stage("resolution_recommendation", "生成处置建议节点产物")
+                resolution_recommendation = build_resolution_recommendation_result(
+                    decision=decision,
+                    analysis_artifact=analysis_artifact,
+                )
+                self._record_artifact(
+                    "resolution_recommendation",
+                    resolution_recommendation,
+                    stage="resolution_recommendation",
+                )
+                self._finish_stage(
+                    "resolution_recommendation",
+                    stage_started,
+                    message=f"已整理 {len(resolution_recommendation.get('recommendations', []))} 条处置建议",
+                )
+                if self._is_cancelled():
+                    yield self._build_cancel_complete_frame()
+                    return
+
+            if workflow_node_enabled(decision, "workorder_decision"):
+                stage_started = self._start_stage("workorder_decision", "判断是否建议生成维修工单")
+                async for ping in self._drive_step(
+                    self.decide_workorder(request, sql_artifact, knowledge_artifact, analysis_artifact),
+                    stage="workorder_decision",
+                ):
+                    yield ping
+                workorder_suggestion = self._last_step_result
+                self._finish_stage(
+                    "workorder_decision",
+                    stage_started,
+                    message=workorder_suggestion.reason,
+                )
+            else:
+                stage_started = self._start_stage("workorder_decision", "当前 workflow 未启用工单决策")
+                workorder_suggestion = self._build_skipped_workorder_suggestion(
+                    "当前任务分类或缺失槽位未触发 workorder_decision 节点"
+                )
+                self._finish_stage(
+                    "workorder_decision",
+                    stage_started,
+                    status="skipped",
+                    message=workorder_suggestion.reason,
+                )
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
                 return
 
-            if decision.needs_report:
+            if workflow_node_enabled(decision, "report"):
                 stage_started = self._start_stage("report", "生成可视化 HTML 报告")
                 async for chunk in self.stream_report_step(
                     request,
@@ -322,7 +438,7 @@ class SingleAgentFlowMixin:
 
             stage_started = self._start_stage("final_answer", "整理最终回答")
             async for ping in self._drive_step(
-                self.build_final_answer(analysis_artifact, report_artifact),
+                self.build_final_answer(analysis_artifact, report_artifact, decision),
                 stage="final_answer",
             ):
                 yield ping
@@ -330,7 +446,7 @@ class SingleAgentFlowMixin:
             self._finish_stage("final_answer", stage_started, message="最终回答已生成")
 
             stage_started = self._start_stage("output_guardrail", "检查最终回答和证据链一致性")
-            self.output_guardrail_result = build_output_guardrail_result(final_answer, self.evidence_bundle)
+            self.output_guardrail_result = build_output_guardrail_result(final_answer, self.evidence_bundle, decision)
             self._record_artifact("output_guardrail", self.output_guardrail_result, stage="output_guardrail")
             self._finish_stage(
                 "output_guardrail",
@@ -338,6 +454,22 @@ class SingleAgentFlowMixin:
                 status="completed" if self.output_guardrail_result.get("passed") else "warning",
                 message="输出校验通过" if self.output_guardrail_result.get("passed") else "输出校验存在提示",
             )
+
+            audit_log_result: dict[str, Any] = {}
+            if workflow_node_enabled(decision, "audit_log"):
+                stage_started = self._start_stage("audit_log", "记录动作请求审计信息")
+                audit_log_result = build_audit_log_result(
+                    decision=decision,
+                    permission_check=permission_check_result,
+                    risk_check=risk_check_result,
+                    output_guardrail=self.output_guardrail_result or {},
+                )
+                self._record_artifact("audit_log", audit_log_result, stage="audit_log")
+                self._finish_stage(
+                    "audit_log",
+                    stage_started,
+                    message="动作请求审计信息已记录",
+                )
 
             stage_started = self._start_stage("save_artifact", "保存诊断产物与证据链")
             saved_envelope = self.save_artifact_envelope(
@@ -351,6 +483,12 @@ class SingleAgentFlowMixin:
                 decision,
                 evidence_bundle=self.evidence_bundle,
                 output_guardrail=self.output_guardrail_result,
+                workflow_artifacts={
+                    "permission_check": permission_check_result,
+                    "risk_check": risk_check_result,
+                    "resolution_recommendation": resolution_recommendation,
+                    "audit_log": audit_log_result,
+                },
             )
             diagnosis_contract_payload = build_diagnosis_contract_payload(saved_envelope)
             self._finish_stage("save_artifact", stage_started, message="诊断产物与证据链已保存")
@@ -371,6 +509,8 @@ class SingleAgentFlowMixin:
                     "decision": decision.model_dump(),
                     "report_filename": report_artifact.report_filename,
                     "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
+                    "workflow_policy_id": decision.workflow_policy.get("policy_id"),
+                    "primary_task_type": decision.primary_task_type,
                 },
             )
 
@@ -387,10 +527,25 @@ class SingleAgentFlowMixin:
                 "sql_artifact": sql_artifact.model_dump(exclude_none=True),
                 "knowledge_artifact": knowledge_artifact.model_dump(exclude_none=True),
                 "analysis_artifact": analysis_artifact.model_dump(exclude_none=True),
+                "permission_check": permission_check_result,
+                "risk_check": risk_check_result,
+                "resolution_recommendation": resolution_recommendation,
+                "audit_log": audit_log_result,
                 "workorder_decision": workorder_suggestion.model_dump(exclude_none=True),
                 "report_artifact": report_artifact.model_dump(exclude_none=True),
                 "evidence_bundle": self.evidence_bundle.model_dump(exclude_none=True) if self.evidence_bundle else None,
                 "output_guardrail": self.output_guardrail_result or {},
+                "workflow_route": {
+                    "primary_task_type": decision.primary_task_type,
+                    "route_confidence": decision.route_confidence,
+                    "objects": decision.objects,
+                    "time_window": decision.time_window,
+                    "subgoals": decision.subgoals,
+                    "missing_slots": decision.missing_slots,
+                    "risk_level": decision.risk_level,
+                    "requested_output": decision.requested_output,
+                },
+                "workflow_policy": decision.workflow_policy,
                 "artifact": saved_envelope.model_dump(exclude_none=True),
                 "trace": self.trace.model_dump(exclude_none=True),
                 "todos": [],

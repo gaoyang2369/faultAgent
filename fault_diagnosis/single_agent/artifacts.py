@@ -33,6 +33,7 @@ def build_diagnosis_artifact_envelope(
     trace: AgentTrace,
     evidence_bundle: EvidenceBundle | None = None,
     output_guardrail: dict[str, object] | None = None,
+    workflow_artifacts: dict[str, object] | None = None,
 ) -> DiagnosisArtifactEnvelope:
     evidence = (
         evidence_bundle.evidence_items
@@ -69,11 +70,12 @@ def build_diagnosis_artifact_envelope(
         "report_artifact": report_artifact.model_dump(exclude_none=True),
         "trace": trace.model_dump(exclude_none=True),
         "output_guardrail": output_guardrail or {},
+        "workflow_artifacts": workflow_artifacts or {},
     }
     if evidence_bundle is not None:
         payload["evidence_bundle"] = evidence_bundle.model_dump(exclude_none=True)
     return DiagnosisArtifactEnvelope(
-        workflow_type=DiagnosisArtifactType.FAULT_DIAGNOSIS,
+        workflow_type=_artifact_type_from_decision(decision),
         thread_id=thread_id,
         created_at=datetime.now().isoformat(),
         request_summary=request.analysis_goal or request.user_message,
@@ -82,3 +84,10 @@ def build_diagnosis_artifact_envelope(
         payload=payload,
         evidence=evidence,
     )
+
+
+def _artifact_type_from_decision(decision: SingleAgentDecision) -> DiagnosisArtifactType:
+    try:
+        return DiagnosisArtifactType(decision.primary_task_type)
+    except ValueError:
+        return DiagnosisArtifactType.FAULT_DIAGNOSIS

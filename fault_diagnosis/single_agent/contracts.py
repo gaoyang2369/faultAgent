@@ -24,12 +24,28 @@ class SingleAgentLimits(BaseModel):
 
 
 class SingleAgentDecision(BaseModel):
-    """Capability decisions made after request understanding."""
+    """Capability and workflow decisions made after request understanding."""
 
     needs_sql: bool = False
     needs_knowledge: bool = False
     needs_report: bool = False
     report_from_previous_artifact: bool = False
+    primary_task_type: str = "fault_diagnosis"
+    route_confidence: float = 0.0
+    user_goal: str = ""
+    objects: dict[str, Any] = Field(default_factory=dict)
+    time_window: dict[str, Any] = Field(default_factory=dict)
+    subgoals: list[dict[str, Any]] = Field(default_factory=list)
+    missing_slots: list[str] = Field(default_factory=list)
+    risk_level: str = "read_only"
+    requested_output: str = "answer"
+    action_type: str | None = None
+    flags: dict[str, bool] = Field(default_factory=dict)
+    workflow_policy: dict[str, Any] = Field(default_factory=dict)
+    enabled_nodes: dict[str, bool] = Field(default_factory=dict)
+    runtime_tools: list[str] = Field(default_factory=list)
+    output_schema: str = ""
+    guardrails: list[str] = Field(default_factory=list)
     reason: str = ""
 
 

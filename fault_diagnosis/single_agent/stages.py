@@ -486,13 +486,36 @@ class SingleAgentStagesMixin:
         self,
         analysis_artifact: AnalysisStepArtifact,
         report_artifact: ReportStepArtifact,
+        decision: SingleAgentDecision | None = None,
     ) -> str:
         report_name = (
             report_artifact.report_filename
             if report_artifact and report_artifact.report_filename
             else None
         )
-        return build_final_answer_fallback(analysis_artifact, report_name)
+        answer = build_final_answer_fallback(analysis_artifact, report_name)
+        if decision is None:
+            return answer
+
+        prefixes: list[str] = []
+        if decision.primary_task_type == "action_request":
+            prefixes.append(
+                "【动作审批】本次请求识别为写操作/控制操作意图；"
+                "Agent 不直接执行设备控制、配置修改、告警关闭或工单派发，"
+                "只能提供草稿、审批提示或人工确认建议。"
+            )
+        blocked_subgoals = [
+            item for item in decision.subgoals if item.get("status") == "blocked" and item.get("missing_slots")
+        ]
+        if blocked_subgoals:
+            missing = []
+            for item in blocked_subgoals[:3]:
+                missing.extend(str(slot) for slot in item.get("missing_slots") or [])
+            unique_missing = list(dict.fromkeys(missing))
+            prefixes.append(f"【待补充】{'; '.join(unique_missing[:5])}。这些缺口会降低对应子目标结论置信度。")
+        if prefixes:
+            return "\n".join([*prefixes, answer])
+        return answer
 
     def _build_skipped_sql_artifact(self, reason: str) -> SqlStepArtifact:
         artifact = SqlStepArtifact(
@@ -527,6 +550,18 @@ class SingleAgentStagesMixin:
         self._record_artifact("report", artifact, stage="report")
         return artifact
 
+    def _build_skipped_workorder_suggestion(self, reason: str) -> WorkOrderSuggestion:
+        suggestion = WorkOrderSuggestion(
+            need_workorder=False,
+            reason=reason,
+            workorder_type="",
+            priority="P3",
+            priority_label="未触发",
+            risk_level="低",
+        )
+        self._record_artifact("workorder_decision", suggestion, stage="workorder_decision")
+        return suggestion
+
     def save_artifact_envelope(
         self,
         request: DiagnosisRequest,
@@ -539,6 +574,7 @@ class SingleAgentStagesMixin:
         decision: SingleAgentDecision,
         evidence_bundle: EvidenceBundle | None = None,
         output_guardrail: dict[str, object] | None = None,
+        workflow_artifacts: dict[str, object] | None = None,
     ) -> DiagnosisArtifactEnvelope:
         self.trace.add_event(
             "artifact",
@@ -560,5 +596,6 @@ class SingleAgentStagesMixin:
             trace=self.trace,
             evidence_bundle=evidence_bundle,
             output_guardrail=output_guardrail,
+            workflow_artifacts=workflow_artifacts,
         )
         return save_thread_artifact(envelope)

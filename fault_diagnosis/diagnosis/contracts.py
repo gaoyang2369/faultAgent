@@ -15,6 +15,12 @@ class DiagnosisArtifactType(str, Enum):
     """
 
     FAULT_DIAGNOSIS = "fault_diagnosis"
+    STATUS_QUERY = "status_query"
+    ALARM_TRIAGE = "alarm_triage"
+    ROOT_CAUSE_ANALYSIS = "root_cause_analysis"
+    HEALTH_ASSESSMENT = "health_assessment"
+    KNOWLEDGE_QA = "knowledge_qa"
+    ACTION_REQUEST = "action_request"
     STATUS_INSPECTION = "status_inspection"
     MANUAL_QA = "manual_qa"
     REPORT_GENERATION = "report_generation"

@@ -7,8 +7,9 @@ from typing import Any
 
 from ..diagnosis.contracts import DiagnosisRequest
 from .contracts import SingleAgentDecision
+from .workflow import build_workflow_plan, route_task
 
-_FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{4,})(?![A-Z0-9])", re.IGNORECASE)
+_FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{3,5})(?![A-Z0-9])", re.IGNORECASE)
 _DEVICE_RE = re.compile(
     r"([A-Z]{2,}(?:-\d{1,})+|J\d+|\d+号机|[A-Z]+\d+电机\d+)",
     re.IGNORECASE,
@@ -201,32 +202,77 @@ def decide_capabilities(
     payload_sql = payload.get("needs_sql")
     payload_knowledge = payload.get("needs_knowledge")
 
-    needs_sql = bool(payload_sql) if isinstance(payload_sql, bool) else has_any(normalized, SQL_KEYWORDS)
-    needs_knowledge = (
-        bool(payload_knowledge)
-        if isinstance(payload_knowledge, bool)
-        else bool(request.fault_code_hint) or has_any(normalized, KNOWLEDGE_KEYWORDS)
-    )
     needs_report = bool(request.needs_report) or has_any(normalized, REPORT_KEYWORDS)
+    route = route_task(
+        payload=payload,
+        message=normalized,
+        report_from_previous_artifact=report_from_previous_artifact,
+    )
+    if isinstance(payload_sql, bool) and payload_sql:
+        route.flags["need_sql"] = True
+    if isinstance(payload_knowledge, bool) and payload_knowledge:
+        route.flags["need_knowledge"] = True
+    if needs_report:
+        route.flags["need_report"] = True
+
+    plan = build_workflow_plan(route, needs_report=needs_report)
+    needs_sql = plan.resolved_nodes.get("sql", False)
+    needs_knowledge = plan.resolved_nodes.get("knowledge", False)
+    needs_report = plan.resolved_nodes.get("report", False)
 
     if report_from_previous_artifact:
         return SingleAgentDecision(
-            needs_sql=False,
-            needs_knowledge=False,
+            needs_sql=needs_sql,
+            needs_knowledge=needs_knowledge,
             needs_report=True,
             report_from_previous_artifact=True,
+            primary_task_type=route.primary_task_type.value,
+            route_confidence=route.route_confidence,
+            user_goal=route.user_goal,
+            objects=route.objects.model_dump(exclude_none=True),
+            time_window=route.time_window.model_dump(exclude_none=True),
+            subgoals=[item.model_dump(exclude_none=True) for item in route.subgoals],
+            missing_slots=route.missing_slots,
+            risk_level=route.risk_level,
+            requested_output=route.requested_output,
+            action_type=route.action_type,
+            flags=route.flags,
+            workflow_policy=plan.policy.model_dump(exclude_none=True),
+            enabled_nodes=plan.resolved_nodes,
+            runtime_tools=plan.runtime_tools,
+            output_schema=plan.policy.output_schema,
+            guardrails=plan.policy.guardrails,
             reason="识别到基于当前线程已有结果生成报告的请求",
         )
 
     reason_parts = [
+        f"任务类型 {route.primary_task_type.value}",
         "需要 SQL" if needs_sql else "跳过 SQL",
         "需要知识库" if needs_knowledge else "跳过知识库",
         "需要报告" if needs_report else "跳过报告",
     ]
+    if plan.metadata.get("blocked_subgoals"):
+        reason_parts.append("存在可继续但需披露的 blocked subgoal")
     return SingleAgentDecision(
         needs_sql=needs_sql,
         needs_knowledge=needs_knowledge,
         needs_report=needs_report,
         report_from_previous_artifact=False,
+        primary_task_type=route.primary_task_type.value,
+        route_confidence=route.route_confidence,
+        user_goal=route.user_goal,
+        objects=route.objects.model_dump(exclude_none=True),
+        time_window=route.time_window.model_dump(exclude_none=True),
+        subgoals=[item.model_dump(exclude_none=True) for item in route.subgoals],
+        missing_slots=route.missing_slots,
+        risk_level=route.risk_level,
+        requested_output=route.requested_output,
+        action_type=route.action_type,
+        flags=route.flags,
+        workflow_policy=plan.policy.model_dump(exclude_none=True),
+        enabled_nodes=plan.resolved_nodes,
+        runtime_tools=plan.runtime_tools,
+        output_schema=plan.policy.output_schema,
+        guardrails=plan.policy.guardrails,
         reason="；".join(reason_parts),
     )

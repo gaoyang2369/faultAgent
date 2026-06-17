@@ -46,24 +46,38 @@ def initialize_evidence_bundle(
 ) -> EvidenceBundle:
     """Create the request-scoped empty evidence ledger."""
 
+    workflow_policy = decision.workflow_policy or {}
+    workflow_id = str(workflow_policy.get("workflow_id") or WORKFLOW_ID)
+    workflow_version = str(workflow_policy.get("version") or WORKFLOW_VERSION)
     task = {
-        "task_type": "fault_diagnosis",
-        "workflow_id": WORKFLOW_ID,
-        "workflow_version": WORKFLOW_VERSION,
+        "task_type": decision.primary_task_type or "fault_diagnosis",
+        "primary_task_type": decision.primary_task_type or "fault_diagnosis",
+        "workflow_id": workflow_id,
+        "workflow_version": workflow_version,
+        "policy_id": workflow_policy.get("policy_id"),
+        "route_confidence": decision.route_confidence,
         "user_query": request.user_message,
         "user_identity": request.user_identity,
         "asset_id": request.equipment_hint,
+        "objects": decision.objects,
+        "time_window": decision.time_window,
+        "subgoals": decision.subgoals,
+        "missing_slots": decision.missing_slots,
+        "risk_level": decision.risk_level,
+        "requested_output": decision.requested_output,
         "symptom": request.metric_hint or request.fault_code_hint or request.analysis_goal,
         "time_range_hint": request.time_range_hint,
         "requires_sql": decision.needs_sql,
         "requires_knowledge": decision.needs_knowledge,
         "requires_report": decision.needs_report,
+        "enabled_nodes": decision.enabled_nodes,
+        "guardrails": decision.guardrails,
     }
     return EvidenceBundle(
         bundle_id=_bundle_id(trace_id),
         trace_id=trace_id,
         task={key: value for key, value in task.items() if value not in (None, "", [])},
-        artifacts={"workflow_id": WORKFLOW_ID, "workflow_version": WORKFLOW_VERSION},
+        artifacts={"workflow_id": workflow_id, "workflow_version": workflow_version},
     )
 
 
@@ -145,12 +159,19 @@ def validate_evidence_bundle(bundle: EvidenceBundle) -> dict[str, Any]:
     }
 
 
-def build_output_guardrail_result(final_answer: str, bundle: EvidenceBundle | None) -> dict[str, Any]:
+def build_output_guardrail_result(
+    final_answer: str,
+    bundle: EvidenceBundle | None,
+    decision: SingleAgentDecision | None = None,
+) -> dict[str, Any]:
     """Build a lightweight output guardrail result for trace and artifact metadata."""
 
     warnings: list[str] = []
     if not final_answer.strip():
         warnings.append("final_answer_empty")
+    if decision is not None and decision.primary_task_type == "action_request":
+        if re.search(r"已(?:重启|停机|关闭告警|屏蔽告警|修改|改成|派发|下发|执行)", final_answer):
+            warnings.append("unsafe_action_execution_claim")
     quality_checks = bundle.quality_checks if bundle is not None else {}
     if quality_checks and not quality_checks.get("no_dangling_evidence_refs", True):
         warnings.append("dangling_evidence_refs")

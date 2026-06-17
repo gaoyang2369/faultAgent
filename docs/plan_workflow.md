@@ -1,301 +1,424 @@
-你的整体方向是对的：**单 agent 不代表一个自由发挥的大 workflow，而是“一个 agent + 多个固定 workflow + policy 约束 + evidence 驱动输出”**。
+下面是重新整理后的版本，建议你可以直接给 Codex 作为项目改进说明。
 
-我建议分类时不要按“要不要查 SQL / 要不要查知识库”来分，而是按**用户任务目标**来分。SQL、知识库、分析、报告只是每类任务里的可选步骤，由 policy 控制。
+核心调整是：
 
----
-
-## 一、推荐的任务分类体系
-
-可以分成两层：
-
-第一层是 **主任务类型 task_type**，决定走哪个固定 workflow。
-
-第二层是 **任务修饰信息 modifiers**，决定 workflow 里的工具、证据要求、风险等级和输出格式。
-
-### 1. 主任务类型
-
-| task_type                          | 典型用户问题                        | 核心目标                  |
-| ---------------------------------- | ----------------------------- | --------------------- |
-| `status_query` 状态查询                | “设备 A 现在正常吗？”“过去 1 小时温度是多少？”  | 查询当前状态、指标、告警、在线情况     |
-| `alarm_interpretation` 告警解释        | “这个 E102 告警是什么意思？”“为什么一直报高温？” | 解释告警含义、影响、可能原因        |
-| `fault_diagnosis` 故障诊断             | “设备 A 为什么停机？”“产线 3 压力异常，帮我诊断” | 基于证据推断可能原因            |
-| `root_cause_analysis` 根因分析 / 复盘    | “昨天那次停机根因是什么？”“生成 RCA”        | 还原事件链路，输出根因、影响和改进措施   |
-| `health_assessment` 健康评估 / 趋势异常    | “这台设备最近健康吗？”“有没有劣化趋势？”        | 基于长期趋势评估风险            |
-| `maintenance_advice` 维修建议 / 派单决策   | “要不要派工单？”“下一步怎么处理？”           | 判断是否需要人工介入、工单优先级、处理建议 |
-| `knowledge_qa` 知识问答 / 操作指导         | “这个型号怎么校准？”“更换滤芯步骤是什么？”       | 从手册、SOP、知识库回答         |
-| `report_generation` 报告生成           | “把这次诊断生成报告”                   | 基于已有 evidence 生成结构化报告 |
-| `config_change_impact` 配置 / 变更影响分析 | “刚改了阈值，会不会导致误报？”              | 分析配置变更、版本变更、参数变更的影响   |
-| `action_request` 操作请求              | “帮我重启设备”“关闭这个告警”              | 涉及写操作或控制操作，必须强权限与审批   |
-
-其中前 8 类是故障诊断 agent 的核心。`config_change_impact` 和 `action_request` 可以后续扩展，但建议一开始就预留，因为真实故障诊断里经常会涉及“最近有没有改过配置 / 参数 / 程序”。
+```text
+1. 不再把“维修建议 / 工单”作为一级任务分类。
+2. 工单相关逻辑统一作为 workflow 中的 workorder_decision 节点。
+3. 复合问题采用 primary_task_type + subgoals 的方式处理。
+4. 分类的目标不是给问题贴标签，而是选择 parent workflow、工具权限、证据要求和输出 schema。
+```
 
 ---
 
-## 二、Intent Router 不应该只输出 task_type
+# 一、最终推荐的任务分类
 
-你的 `Query Normalizer / Intent Router` 输出最好是一个**可执行任务 JSON**，而不是简单分类标签。
+建议一级任务类型分为 8 类：
 
-建议结构如下：
+```text
+1. status_query
+2. alarm_triage
+3. fault_diagnosis
+4. root_cause_analysis
+5. health_assessment
+6. knowledge_qa
+7. report_generation
+8. action_request
+```
+
+其中：
+
+```text
+resolution_recommendation
+workorder_decision
+workorder_draft_generation
+```
+
+不作为一级任务类型，而是作为 workflow 中的可选节点。
+
+---
+
+# 二、任务分类总览
+
+| task_type             | 说明                      | 典型问题                         | 是否默认启用工单决策 |
+| --------------------- | ----------------------- | ---------------------------- | ---------- |
+| `status_query`        | 查询设备当前状态、历史指标、告警状态      | “设备 A 现在正常吗？”“过去 1 小时温度是多少？” | 否，除非发现异常   |
+| `alarm_triage`        | 告警分诊：解释告警、判断当前状态、给处理建议  | “E102 是什么意思？现在还有故障吗？怎么处理？”   | 是，条件触发     |
+| `fault_diagnosis`     | 对明确异常进行故障诊断             | “设备 A 为什么高温？”“产线 3 为什么停机？”   | 是，条件触发     |
+| `root_cause_analysis` | 事故复盘、根因分析、RCA           | “昨天停机根因是什么？”“生成 RCA 报告”      | 可选         |
+| `health_assessment`   | 健康度、劣化趋势、风险评估           | “这台设备最近健康吗？”“有没有故障风险？”       | 可选         |
+| `knowledge_qa`        | 手册、SOP、告警码、操作步骤问答       | “E102 的定义是什么？”“这个型号怎么校准？”    | 否          |
+| `report_generation`   | 基于 evidence bundle 生成报告 | “把这次诊断生成报告”                  | 否，仅引用已有决策  |
+| `action_request`      | 涉及写操作、控制操作、确认派单等        | “帮我重启设备”“确认创建工单”             | 必须审批       |
+
+---
+
+# 三、统一任务路由输出结构
+
+Intent Router 不应该只输出一个字符串，而应该输出结构化任务 JSON。
+
+推荐格式：
 
 ```json
 {
-  "task_type": "fault_diagnosis",
-  "sub_type": "single_device_fault",
-  "user_goal": "diagnose_cause",
+  "primary_task_type": "alarm_triage",
+  "route_confidence": 0.88,
+  "user_goal": "explain_alarm_check_current_fault_and_recommend_solution",
   "objects": {
     "device_ids": ["pump_001"],
-    "system": "cooling_system",
-    "location": "line_3"
+    "alarm_codes": ["E102"],
+    "system": null,
+    "location": null
   },
-  "symptoms": [
-    {
-      "name": "temperature_high",
-      "raw_text": "温度过高"
-    }
-  ],
-  "alarms": [
-    {
-      "alarm_code": "E102",
-      "alarm_name": "high_temperature"
-    }
-  ],
   "time_window": {
-    "start": "2026-06-16T08:00:00",
-    "end": "2026-06-16T10:00:00",
-    "is_inferred": true
+    "start": null,
+    "end": null,
+    "is_inferred": false,
+    "default_strategy": "current_status"
   },
-  "requested_output": "diagnosis",
-  "urgency": "medium",
-  "risk_level": "read_only",
+  "subgoals": [
+    {
+      "id": "sg_001",
+      "type": "explain_alarm_code",
+      "required": true,
+      "status": "ready"
+    },
+    {
+      "id": "sg_002",
+      "type": "check_current_fault_status",
+      "required": true,
+      "status": "ready"
+    },
+    {
+      "id": "sg_003",
+      "type": "recommend_resolution_steps",
+      "required": true,
+      "status": "ready"
+    },
+    {
+      "id": "sg_004",
+      "type": "workorder_decision",
+      "required": false,
+      "status": "ready"
+    }
+  ],
   "missing_slots": [],
-  "route_confidence": 0.86,
-  "secondary_flags": {
+  "risk_level": "read_only",
+  "requested_output": "answer",
+  "flags": {
     "need_sql": true,
     "need_knowledge": true,
-    "need_trend_analysis": true,
+    "need_analysis": true,
     "need_workorder_decision": true,
     "need_report": false,
-    "may_involve_control_action": false
+    "may_involve_write_action": false
   }
 }
 ```
 
-这里最重要的是：**task_type 决定 workflow，secondary_flags 决定 workflow 内哪些节点启用。**
-
 ---
 
-## 三、每一类任务的 workflow 设计
+# 四、统一顶层 workflow
 
-你给的总体流程可以保留：
+所有任务都走统一框架，但不同 `task_type` 会选择不同的 policy 和 enabled nodes。
 
 ```text
 start
   -> understand / route
+      输出 primary_task_type、subgoals、objects、time_window、missing_slots
+
   -> select_workflow_policy
+      选择 parent policy
+      选择 subgoal policies
+      决定工具白名单、证据要求、输出 schema、风险约束
+
   -> initialize_evidence_bundle
+      初始化任务上下文
+      初始化每个 subgoal 的 evidence slots
+
   -> execute_workflow
+      -> collect_asset_context
       -> sql
       -> knowledge
       -> analysis
+      -> resolution_recommendation
       -> workorder_decision
       -> report
+
   -> evidence_validation
-  -> final_answer
+      对全局任务和每个 subgoal 分别验证
+      判断哪些结论证据充分，哪些只能输出不确定结论
+
+  -> answer_synthesis
+      只基于 evidence bundle 生成答案
+
+  -> output_guardrail
+      检查越权、幻觉、格式、风险操作、证据缺失
+
+  -> save_artifact
+      保存 evidence bundle、诊断结论、报告、工单草稿、审计日志
+
+  -> complete
+```
+
+注意顺序建议是：
+
+```text
+evidence_validation
+  -> answer_synthesis
+  -> output_guardrail
+  -> save_artifact
+```
+
+而不是先 `final_answer` 再做证据校验。
+
+---
+
+# 五、每类任务的 workflow
+
+---
+
+## 1. `status_query`：状态查询
+
+### 适用问题
+
+```text
+设备 A 现在正常吗？
+设备 A 当前温度是多少？
+过去 1 小时有没有告警？
+产线 3 当前是否在线？
+```
+
+### 目标
+
+回答设备或系统的**当前状态 / 历史状态 / 指标事实**，不主动进行复杂根因诊断。
+
+### workflow
+
+```text
+start
+  -> understand / route
+  -> slot_check
+      必需：device_id / system / location 至少一个
+      可选：metric、time_window
+      缺 time_window 时默认 current 或 last_1h
+
+  -> select_workflow_policy: status_query_policy
+
+  -> initialize_evidence_bundle
+
+  -> sql
+      查询设备基础信息
+      查询当前在线状态
+      查询最近心跳时间
+      查询最新关键指标
+      查询指标阈值
+      查询当前 active alarms
+      查询最近告警摘要
+
+  -> analysis
+      判断数据是否新鲜
+      判断设备是否在线
+      判断指标是否越阈
+      判断是否存在 active alarm
+      输出状态摘要
+      如果发现异常，标记可触发 followup_diagnosis 或 workorder_decision
+
+  -> evidence_validation
+      检查 device_id 是否明确
+      检查数据时间戳是否新鲜
+      检查指标单位和阈值是否存在
+      检查状态判断是否有数据支撑
+
+  -> answer_synthesis
   -> output_guardrail
   -> save_artifact
   -> complete
 ```
 
-但每类任务要有自己的固定子流程。
-
----
-
-# 1. 状态查询：`status_query`
-
-### 适用问题
-
-用户问：
-
-> “设备 A 正常吗？”
-> “现在压力多少？”
-> “过去 30 分钟有没有告警？”
-> “产线 3 当前运行状态？”
-
-### 主要风险
-
-这类任务看似简单，但容易出现两个问题：
-
-1. 用户没说时间窗；
-2. agent 把“当前状态”解释成“诊断结论”。
-
-状态查询只应该回答**状态事实**，不要过度诊断。
-
-### workflow
-
-```text
-start
-  -> understand / route
-  -> check_required_slots
-      必需：设备 / 系统 / 指标
-      可选：时间窗
-  -> select_workflow_policy: status_query_policy
-  -> initialize_evidence_bundle
-  -> sql
-      查询设备在线状态
-      查询关键实时指标
-      查询最近告警
-      查询最近心跳 / 数据更新时间
-  -> analysis
-      判断数据是否新鲜
-      判断指标是否越阈
-      汇总当前状态
-  -> evidence_validation
-      检查是否有设备
-      检查数据时间戳
-      检查单位和阈值来源
-  -> final_answer
-  -> output_guardrail
-  -> complete
-```
-
-### SQL 证据
-
-状态查询至少需要：
-
-```text
-device_status
-latest_metrics
-latest_alarm
-last_seen_time
-thresholds
-```
-
-### 输出 schema
+### 默认节点配置
 
 ```json
 {
-  "answer_type": "status_query",
-  "device": "pump_001",
-  "status": "abnormal",
-  "summary": "设备在线，但温度超过高阈值。",
-  "key_metrics": [
-    {
-      "name": "temperature",
-      "value": 92.5,
-      "unit": "°C",
-      "threshold": 85,
-      "status": "high",
-      "timestamp": "2026-06-16T10:00:00"
-    }
-  ],
-  "alarms": [],
-  "data_freshness": "fresh",
-  "limitations": []
+  "task_type": "status_query",
+  "enabled_nodes": {
+    "sql": true,
+    "knowledge": false,
+    "analysis": true,
+    "resolution_recommendation": false,
+    "workorder_decision": "conditional",
+    "report": false
+  }
 }
 ```
 
+### 工单触发逻辑
+
+`status_query` 默认不启用工单，但如果发现：
+
+```text
+设备离线
+关键指标严重越阈
+存在 active major/critical alarm
+异常持续时间超过阈值
+```
+
+则可以触发：
+
+```text
+workorder_decision = conditional
+```
+
+但只能建议或生成草稿，不能自动派发。
+
 ---
 
-# 2. 告警解释：`alarm_interpretation`
+## 2. `alarm_triage`：告警分诊
 
 ### 适用问题
 
-> “E102 是什么告警？”
-> “这个高温告警严重吗？”
-> “这个告警为什么频繁出现？”
+```text
+E102 是什么意思？
+E102 现在还在发生吗？
+这个告警严重吗？
+这个告警怎么处理？
+这个告警要不要派人？
+E102 是什么意思？是不是现在设备有故障？应该如何解决？
+```
 
-### 关键点
+### 目标
 
-告警解释有两种：
+对告警进行一站式分诊：
 
-| 类型     | 说明                    |
-| ------ | --------------------- |
-| 静态解释   | 只解释告警码、含义、等级、处理建议     |
-| 结合现场解释 | 结合设备当前数据、历史趋势、上下游状态分析 |
-
-所以这个 workflow 要由 policy 决定是否查 SQL。
+```text
+解释告警含义
+判断当前是否 active
+判断是否构成真实故障
+分析可能原因
+给处理建议
+判断是否需要工单草稿
+```
 
 ### workflow
 
 ```text
 start
   -> understand / route
-  -> check_required_slots
-      必需：alarm_code 或 alarm_name
-      可选：device_id、time_window
-  -> select_workflow_policy: alarm_interpretation_policy
+  -> slot_check
+      必需：alarm_code / alarm_name
+      条件必需：如果要判断当前状态，则需要 device_id
+      缺 device_id 时：
+        knowledge 部分可以继续
+        current_fault_check 和 workorder_decision 标记 blocked
+
+  -> select_workflow_policy: alarm_triage_policy
+
   -> initialize_evidence_bundle
+
   -> knowledge
       查询告警定义
       查询告警等级
+      查询触发条件
       查询可能原因
       查询推荐处理步骤
-  -> sql   如果有具体设备 / 时间窗
-      查询该告警发生时间
-      查询发生频率
-      查询告警前后关键指标
-      查询同时间段相关告警
+      查询相关 SOP / manual
+
+  -> sql
+      如果有 device_id：
+        查询该设备当前状态
+        查询该告警是否 active
+        查询告警发生时间、恢复时间、持续时长
+        查询告警前后关键指标
+        查询相关联告警
+        查询设备最近运行状态
+      如果无 device_id：
+        跳过实时状态查询
+
   -> analysis
-      静态解释
-      结合设备数据判断是否疑似真实故障 / 误报 / 传感器异常
+      解释告警含义
+      判断当前是否仍在发生
+      判断是否疑似真实故障
+      判断可能原因
+      判断严重程度
+      生成处理建议
+
+  -> resolution_recommendation
+      给出排查步骤
+      区分立即处理、继续观察、人工巡检
+
   -> workorder_decision
-      如果告警等级高或持续存在，则建议派单
+      如果证据满足条件：
+        输出 no_action / monitor / suggest_inspection / generate_workorder_draft / escalate
+      如果证据不足：
+        输出无法判断派单，需要补充哪些数据
+
   -> evidence_validation
-  -> final_answer
+      检查告警定义是否有知识库来源
+      检查当前故障判断是否有实时数据
+      检查处理建议是否匹配 SOP
+      检查工单建议是否有 active alarm 或严重异常支撑
+
+  -> answer_synthesis
+      按子问题合并答案
+
   -> output_guardrail
+  -> save_artifact
   -> complete
 ```
 
-### 证据要求
+### 默认节点配置
 
-```text
-alarm_definition 必须有
-alarm_severity 必须有
-recommended_actions 必须有
-device_context 有设备时必须有
-alarm_occurrence 有设备时必须有
+```json
+{
+  "task_type": "alarm_triage",
+  "enabled_nodes": {
+    "sql": "conditional",
+    "knowledge": true,
+    "analysis": true,
+    "resolution_recommendation": true,
+    "workorder_decision": "conditional",
+    "report": false
+  }
+}
 ```
 
-### 输出建议
+### 典型 subgoals
 
-```text
-告警含义
-严重程度
-当前是否仍在发生
-可能原因
-建议检查项
-是否建议派单
-证据来源
-不确定性说明
+```json
+[
+  "explain_alarm_code",
+  "check_current_alarm_status",
+  "check_current_fault_status",
+  "recommend_resolution_steps",
+  "workorder_decision"
+]
 ```
 
 ---
 
-# 3. 故障诊断：`fault_diagnosis`
-
-这是最核心的一类。
+## 3. `fault_diagnosis`：故障诊断
 
 ### 适用问题
 
-> “设备 A 为什么停机？”
-> “温度一直上升，帮我诊断。”
-> “产线 3 压力不稳定，可能是什么原因？”
-> “这个泵最近经常报警，分析一下。”
+```text
+设备 A 为什么高温？
+设备 A 为什么停机？
+产线 3 压力异常，帮我诊断。
+这个泵最近经常报警，可能是什么原因？
+```
 
-### 关键原则
+### 目标
 
-故障诊断 workflow 一定不能让 LLM 直接猜原因。
-
-应该走：
+基于证据进行故障诊断，输出：
 
 ```text
-症状识别
-  -> 证据采集
-  -> 候选原因生成
-  -> 候选原因验证
-  -> 置信度排序
-  -> 缺证据说明
-  -> 下一步建议
+故障现象
+关键证据
+可能原因
+置信度
+反证和缺失证据
+处理建议
+是否建议生成工单
 ```
 
 ### workflow
@@ -303,22 +426,33 @@ alarm_occurrence 有设备时必须有
 ```text
 start
   -> understand / route
-  -> check_required_slots
-      必需：设备 / 系统 / 故障现象 / 时间窗 至少满足其中关键组合
-      缺设备：追问或引导选择范围
-      缺时间窗：使用默认时间窗，但标记为 inferred
+  -> slot_check
+      必需：device_id / system / location 至少一个
+      必需：symptom / alarm / abnormal_metric 至少一个
+      可选：time_window
+      缺 time_window 时默认 last_2h 或围绕告警时间窗
+
   -> select_workflow_policy: fault_diagnosis_policy
+
   -> initialize_evidence_bundle
+
+  -> collect_asset_context
+      查询设备类型
+      查询设备型号
+      查询设备关键性
+      查询上下游关系
+      查询传感器列表
 
   -> sql
       查询故障时间窗内关键指标
       查询故障前后趋势
-      查询告警序列
+      查询 active / historical alarms
       查询事件日志
       查询设备状态变化
       查询上下游设备状态
       查询最近工单
-      查询最近配置 / 参数 / 版本变更
+      查询最近维护记录
+      查询最近参数 / 配置 / 版本变更
 
   -> knowledge
       查询设备手册
@@ -329,617 +463,495 @@ start
 
   -> analysis
       构建事件时间线
-      识别异常指标
+      识别 first abnormal signal
+      识别关键异常指标
       生成候选原因
-      针对每个候选原因匹配支持 / 反驳证据
-      计算置信度
-      输出最可能原因、备选原因、缺失证据
+      为每个候选原因匹配支持证据
+      为每个候选原因匹配反驳证据
+      计算或标注置信度
+      输出 primary cause 和 alternative causes
+      输出 missing evidence
+
+  -> resolution_recommendation
+      给出下一步排查建议
+      给出临时处置建议
+      给出需要人工检查的项目
 
   -> workorder_decision
-      判断是否需要派单
-      判断优先级
-      判断推荐处理动作
-      判断是否需要升级给专家
+      根据严重度、持续时间、影响范围、置信度、资产关键性判断是否建议生成工单草稿
 
-  -> report 可选
-      如果用户要求报告，生成结构化诊断报告
+  -> report
+      仅当用户要求报告时启用
 
   -> evidence_validation
-      检查每个诊断结论是否有 evidence 支撑
-      检查是否使用了过期数据
-      检查是否存在越权建议
+      检查每个诊断结论是否绑定 evidence
+      检查是否区分 symptom、cause、root cause
       检查是否把猜测说成事实
+      检查是否列出缺失证据
+      检查是否越权建议控制操作
 
-  -> final_answer
+  -> answer_synthesis
   -> output_guardrail
   -> save_artifact
   -> complete
 ```
 
-### 故障诊断 evidence bundle
-
-建议统一成这种结构：
+### 默认节点配置
 
 ```json
 {
-  "task": {
-    "task_type": "fault_diagnosis",
-    "device_ids": ["pump_001"],
-    "time_window": {
-      "start": "2026-06-16T08:00:00",
-      "end": "2026-06-16T10:00:00"
-    },
-    "symptom": "temperature_high"
-  },
-  "observations": [
-    {
-      "id": "obs_001",
-      "type": "metric",
-      "name": "temperature",
-      "value": "92.5°C",
-      "timestamp": "2026-06-16T09:45:00",
-      "source": "timeseries_db",
-      "quality": "good"
-    }
-  ],
-  "events": [
-    {
-      "id": "evt_001",
-      "type": "alarm",
-      "alarm_code": "E102",
-      "severity": "major",
-      "timestamp": "2026-06-16T09:47:00",
-      "source": "alarm_db"
-    }
-  ],
-  "knowledge": [
-    {
-      "id": "kb_001",
-      "type": "manual",
-      "title": "Pump high temperature troubleshooting",
-      "snippet": "High temperature may be caused by cooling failure, overload, bearing wear..."
-    }
-  ],
-  "hypotheses": [
-    {
-      "id": "h_001",
-      "cause": "冷却系统异常",
-      "supporting_evidence": ["obs_001", "evt_001", "kb_001"],
-      "contradicting_evidence": [],
-      "confidence": 0.78
-    }
-  ],
-  "evidence_gaps": [
-    {
-      "gap": "缺少冷却水流量数据",
-      "impact": "无法确认冷却系统是否为根因"
-    }
-  ]
+  "task_type": "fault_diagnosis",
+  "enabled_nodes": {
+    "sql": true,
+    "knowledge": true,
+    "analysis": true,
+    "resolution_recommendation": true,
+    "workorder_decision": true,
+    "report": "conditional"
+  }
 }
 ```
 
-### 诊断输出 schema
+### 诊断约束
 
-```json
-{
-  "answer_type": "fault_diagnosis",
-  "summary": "设备 pump_001 在 09:45 左右出现温度异常升高，最可能原因是冷却系统异常。",
-  "primary_cause": {
-    "name": "冷却系统异常",
-    "confidence": "medium_high",
-    "reasoning": "温度持续升高，同时出现高温告警，且故障手册中该模式与冷却不足高度相关。"
-  },
-  "alternative_causes": [
-    {
-      "name": "轴承磨损",
-      "confidence": "medium",
-      "missing_evidence": "缺少振动数据"
-    },
-    {
-      "name": "负载过高",
-      "confidence": "low",
-      "missing_evidence": "缺少负载电流趋势"
-    }
-  ],
-  "recommended_next_steps": [
-    "检查冷却水流量",
-    "检查散热风扇状态",
-    "查看轴承振动数据"
-  ],
-  "workorder_decision": {
-    "need_workorder": true,
-    "priority": "P2",
-    "reason": "温度持续超过阈值，存在停机风险。"
-  },
-  "limitations": [
-    "当前缺少冷却水流量和振动数据，因此根因置信度不能判定为 high。"
-  ]
-}
+```text
+不能直接说“根因是 X”，除非证据满足 root cause 条件。
+默认输出“最可能原因 / 疑似原因 / 备选原因”。
+每个原因必须绑定 supporting_evidence。
+如果缺关键数据，必须降低置信度或输出证据不足。
 ```
 
 ---
 
-# 4. 根因分析 / 复盘：`root_cause_analysis`
+## 4. `root_cause_analysis`：根因分析 / RCA
 
 ### 适用问题
 
-> “昨天停机的根因是什么？”
-> “生成这次事故的 RCA。”
-> “这次故障影响范围多大？”
-> “为什么恢复后又复发？”
+```text
+昨天停机的根因是什么？
+帮我复盘这次事故。
+生成这次故障的 RCA 报告。
+为什么恢复后又复发？
+```
 
-### 和故障诊断的区别
+### 目标
 
-`fault_diagnosis` 主要回答：
+不是只判断当前故障，而是还原完整事件链路：
 
-> 当前问题可能是什么原因？
-
-`root_cause_analysis` 回答：
-
-> 已发生事件的完整链路是什么？根因、诱因、影响、恢复、预防措施分别是什么？
-
-RCA 更强调时间线和责任链路。
+```text
+事件时间线
+影响范围
+直接原因
+根本原因
+诱因 / 放大因素
+恢复动作
+预防措施
+证据和不确定性
+```
 
 ### workflow
 
 ```text
 start
   -> understand / route
-  -> check_required_slots
-      必需：事件 / 时间窗 / 设备或系统范围
-  -> select_workflow_policy: rca_policy
+  -> slot_check
+      必需：event_id / device_id / system / time_window 至少有足够定位信息
+      RCA 通常必须有明确 time_window
+
+  -> select_workflow_policy: root_cause_analysis_policy
+
   -> initialize_evidence_bundle
 
   -> sql
-      查询事件开始 / 结束时间
+      查询事件开始和结束时间
       查询告警序列
-      查询状态变化
       查询指标趋势
+      查询状态变化
       查询上下游影响
       查询人工操作记录
-      查询配置变更记录
-      查询工单和恢复动作
+      查询参数 / 配置 / 版本变更记录
+      查询工单记录
+      查询恢复动作
+      查询复发记录
 
   -> knowledge
       查询故障模式库
-      查询历史相似事故
+      查询历史相似事件
       查询 SOP / 应急预案
-      查询 SLA / 影响等级定义
+      查询影响等级定义
+      查询恢复标准
 
   -> analysis
-      构建事件时间线
-      识别 first abnormal signal
-      区分直接原因、根本原因、诱因、放大因素
-      计算影响范围
-      评估恢复措施是否有效
+      构建完整事件时间线
+      识别 first abnormal event
+      区分 symptom、direct cause、root cause、contributing factor
+      评估影响范围
+      评估恢复动作是否有效
+      判断是否存在复发
       生成预防措施
 
+  -> resolution_recommendation
+      输出整改措施
+      输出预防性维护建议
+      输出监控 / 阈值 / 流程优化建议
+
+  -> workorder_decision
+      可选：如果仍有未关闭风险，建议创建整改工单或复查工单
+
   -> report
-      生成 RCA 报告
+      默认启用，生成 RCA 结构化报告
 
   -> evidence_validation
       检查时间线是否闭合
-      检查根因是否有证据
-      检查是否把相关性误写成因果性
-      检查是否缺少关键日志
+      检查 root cause 是否满足因果判断条件
+      检查是否把相关性写成因果性
+      检查是否列出未知项
+      检查影响范围是否有数据支撑
 
-  -> final_answer
+  -> answer_synthesis
   -> output_guardrail
   -> save_artifact
   -> complete
 ```
 
-### RCA 输出结构
+### 默认节点配置
 
-```text
-1. 事件摘要
-2. 影响范围
-3. 事件时间线
-4. 直接原因
-5. 根本原因
-6. 诱因 / 促成因素
-7. 已采取恢复动作
-8. 后续整改措施
-9. 未确认事项
-10. 证据清单
+```json
+{
+  "task_type": "root_cause_analysis",
+  "enabled_nodes": {
+    "sql": true,
+    "knowledge": true,
+    "analysis": true,
+    "resolution_recommendation": true,
+    "workorder_decision": "conditional",
+    "report": true
+  }
+}
 ```
 
-### RCA 的关键 guardrail
+### RCA 因果判断规则
 
-RCA 里最容易犯的错误是：
-
-> 看到 A 和 B 同时发生，就说 A 导致了 B。
-
-所以可以加一个规则：
+只有同时满足下面条件，才能写成 root cause：
 
 ```text
-只有当某个原因同时满足：
-1. 时间上早于故障；
-2. 机制上能解释故障；
-3. 数据上有支持；
-4. 没有强反证；
-才能被写成 root cause。
-否则只能写成 suspected cause 或 contributing factor。
+1. 时间上早于故障发生
+2. 机制上能解释故障
+3. 数据上有支持证据
+4. 没有强反证
+5. 能解释主要影响范围
+```
+
+否则只能写成：
+
+```text
+suspected cause
+contributing factor
+correlated event
+unverified hypothesis
 ```
 
 ---
 
-# 5. 健康评估 / 趋势异常：`health_assessment`
+## 5. `health_assessment`：健康评估 / 风险评估
 
 ### 适用问题
 
-> “这台设备最近健康吗？”
-> “有没有劣化趋势？”
-> “预测一下会不会故障。”
-> “哪些设备风险最高？”
+```text
+这台设备最近健康吗？
+有没有劣化趋势？
+未来几天有没有故障风险？
+哪些设备风险最高？
+```
 
-### 重点
+### 目标
 
-这类任务不一定有明确故障，而是做**风险评估**。
+基于长期趋势评估设备健康度和风险，而不是诊断一个已发生故障。
 
 ### workflow
 
 ```text
 start
   -> understand / route
-  -> check_required_slots
-      必需：设备 / 设备组 / 指标范围
-      可选：评估周期
+  -> slot_check
+      必需：device_id / device_group / system
+      可选：assessment_window
+      缺时间窗时默认 last_7d 或 last_30d
+
   -> select_workflow_policy: health_assessment_policy
+
   -> initialize_evidence_bundle
 
   -> sql
       查询长期指标趋势
       查询历史告警频次
-      查询维修记录
       查询运行时长
       查询启停次数
+      查询维修记录
       查询异常波动
       查询同类设备对比数据
+      查询近期工单和缺陷记录
 
   -> knowledge
       查询健康评分规则
-      查询阈值
+      查询指标阈值
       查询劣化模式
       查询维护周期
+      查询设备寿命模型或经验规则
 
   -> analysis
       趋势分析
       异常检测
-      同比 / 环比 / 同类设备对比
+      同比 / 环比分析
+      同类设备对比
       健康评分
       风险等级判断
+      识别主要风险因子
+
+  -> resolution_recommendation
+      输出继续观察 / 巡检 / 预防性维护建议
 
   -> workorder_decision
-      如果风险高，建议预防性维护
-      如果风险中，建议观察或补充检测
-      如果风险低，建议继续监控
+      如果风险高或关键指标持续劣化，则建议预防性维护工单草稿
 
-  -> report 可选
+  -> report
+      用户要求时启用
 
   -> evidence_validation
-  -> final_answer
+      检查健康评分是否有规则来源
+      检查趋势判断是否有足够数据点
+      检查预测性结论是否标注不确定性
+      检查是否误称为确定故障
+
+  -> answer_synthesis
   -> output_guardrail
+  -> save_artifact
   -> complete
 ```
 
-### 输出结构
+### 默认节点配置
 
 ```json
 {
-  "answer_type": "health_assessment",
-  "health_score": 68,
-  "risk_level": "medium",
-  "summary": "设备整体可运行，但温度和振动指标出现轻微劣化趋势。",
-  "risk_factors": [
-    {
-      "factor": "温度 7 日均值上升",
-      "severity": "medium",
-      "evidence": "过去 7 天均值从 73°C 上升到 81°C"
-    }
-  ],
-  "recommendation": "建议继续监控，并在下次巡检中检查冷却系统和轴承状态。",
-  "workorder_decision": {
-    "need_workorder": false,
-    "reason": "当前未超过停机阈值，建议观察。"
+  "task_type": "health_assessment",
+  "enabled_nodes": {
+    "sql": true,
+    "knowledge": "conditional",
+    "analysis": true,
+    "resolution_recommendation": true,
+    "workorder_decision": "conditional",
+    "report": "conditional"
   }
 }
 ```
 
 ---
 
-# 6. 维修建议 / 派单决策：`maintenance_advice`
+## 6. `knowledge_qa`：知识问答 / SOP 问答
 
 ### 适用问题
 
-> “要不要派单？”
-> “这个问题怎么处理？”
-> “下一步该检查什么？”
-> “是否需要停机？”
+```text
+E102 的定义是什么？
+这个型号怎么校准？
+如何更换滤芯？
+这个设备维护周期是多少？
+```
 
-### 关键点
+### 目标
 
-这类任务的核心不是“查原因”，而是**做决策**。
-
-但决策必须依赖诊断证据，不能凭空建议。
+基于知识库、手册、SOP 回答通用知识或操作步骤。
 
 ### workflow
 
 ```text
 start
   -> understand / route
-  -> check_required_slots
-      必需：设备 / 问题 / 当前状态
-  -> select_workflow_policy: maintenance_advice_policy
-  -> initialize_evidence_bundle
+  -> slot_check
+      必需：alarm_code / model / topic / operation 至少一个
+      如果用户绑定具体设备，则需要 device_id
 
-  -> sql
-      查询当前状态
-      查询故障严重度
-      查询告警持续时间
-      查询历史工单
-      查询 SLA / 影响范围
-
-  -> knowledge
-      查询维修 SOP
-      查询安全规则
-      查询派单规则
-      查询备件要求
-      查询停机条件
-
-  -> analysis
-      判断是否需要人工介入
-      判断是否需要立即处理
-      判断是否可以继续观察
-      判断是否需要停机
-      判断工单优先级
-
-  -> workorder_decision
-      输出 create / update / no_action / escalate
-      如果有写权限，只能生成草稿或等待确认
-
-  -> evidence_validation
-      决策必须有证据
-      高风险操作必须检查权限和审批
-  -> final_answer
-  -> output_guardrail
-  -> complete
-```
-
-### 派单决策规则示例
-
-```text
-P1：存在安全风险、设备停机、核心产线中断、关键指标严重越限
-P2：持续异常、可能导致停机、重复告警、高风险设备
-P3：轻微异常、短时恢复、建议巡检
-P4：信息记录、观察项、无需立即处理
-```
-
-### 输出结构
-
-```json
-{
-  "answer_type": "maintenance_advice",
-  "decision": "create_workorder",
-  "priority": "P2",
-  "reason": "高温告警持续 18 分钟，温度超过阈值 7.5°C，存在停机风险。",
-  "recommended_actions": [
-    "检查冷却水流量",
-    "检查风扇运行状态",
-    "确认温度传感器读数是否可信"
-  ],
-  "safety_notes": [
-    "如温度继续升高，应按 SOP 执行降载或停机流程。"
-  ],
-  "requires_confirmation": true
-}
-```
-
----
-
-# 7. 知识问答 / 操作指导：`knowledge_qa`
-
-### 适用问题
-
-> “这个型号怎么校准？”
-> “E102 的处理步骤是什么？”
-> “怎么更换滤芯？”
-> “这台设备维护周期是多少？”
-
-### 重点
-
-知识问答应该和实际设备诊断分开。
-
-如果用户只问手册知识，不要强行查 SQL。
-
-如果用户问“我的这台设备怎么处理”，则需要查 SQL。
-
-### workflow
-
-```text
-start
-  -> understand / route
-  -> check_required_slots
-      必需：设备型号 / 告警码 / 操作主题
   -> select_workflow_policy: knowledge_qa_policy
+
   -> initialize_evidence_bundle
 
   -> knowledge
       查询手册
       查询 SOP
-      查询告警说明
+      查询告警定义
+      查询操作步骤
       查询安全注意事项
-      查询版本适配信息
+      查询版本适配说明
 
-  -> sql 可选
-      如果问题绑定具体设备，则查询设备型号 / 当前状态 / 当前告警
+  -> sql
+      仅当用户问题绑定具体设备时启用：
+        查询设备型号
+        查询设备版本
+        查询当前状态
+        查询当前告警
 
   -> analysis
+      整理适用范围
       整理步骤
-      检查适用条件
+      检查前置条件
       检查安全风险
-      标出不可确认信息
+      标注版本 / 型号限制
+
+  -> resolution_recommendation
+      仅当用户问“怎么处理”时启用
+
+  -> workorder_decision
+      默认不启用
+
+  -> report
+      默认不启用
 
   -> evidence_validation
       检查知识来源
-      检查型号 / 版本是否匹配
-      高风险步骤加安全提示
-  -> final_answer
-  -> output_guardrail
-  -> complete
-```
+      检查型号和版本是否匹配
+      检查高风险操作是否有安全提示
+      检查是否误用不匹配手册
 
-### 输出结构
-
-```text
-适用对象
-操作前置条件
-操作步骤
-安全注意事项
-异常情况处理
-资料来源 / 版本
-```
-
----
-
-# 8. 报告生成：`report_generation`
-
-### 适用问题
-
-> “生成诊断报告。”
-> “把刚才的结果整理成报告。”
-> “输出日报 / 周报。”
-> “生成工单说明。”
-
-### 关键点
-
-报告生成不应该重新自由发挥，而应该**基于已有 evidence bundle**。
-
-如果 evidence 不完整，报告里必须写“不完整”。
-
-### workflow
-
-```text
-start
-  -> understand / route
-  -> select_workflow_policy: report_generation_policy
-  -> initialize_or_load_evidence_bundle
-
-  -> sql 可选
-      如果 evidence 过期或用户要求最新数据，则补充查询
-
-  -> knowledge 可选
-      如果需要引用 SOP / 手册 / 标准模板，则查询知识库
-
-  -> analysis
-      整理结论
-      整理证据
-      整理时间线
-      整理建议
-
-  -> report
-      按模板生成报告
-
-  -> evidence_validation
-      检查报告每个结论是否有证据
-      检查是否遗漏限制条件
-      检查是否混入未验证猜测
-
-  -> final_answer
+  -> answer_synthesis
   -> output_guardrail
   -> save_artifact
   -> complete
 ```
 
-### 报告模板
+### 默认节点配置
 
-```text
-1. 基本信息
-2. 问题描述
-3. 影响范围
-4. 数据时间窗
-5. 关键证据
-6. 分析过程
-7. 诊断结论
-8. 置信度
-9. 建议处理措施
-10. 是否建议派单
-11. 风险与限制
-12. 附录：指标、告警、日志、知识库引用
+```json
+{
+  "task_type": "knowledge_qa",
+  "enabled_nodes": {
+    "sql": "conditional",
+    "knowledge": true,
+    "analysis": true,
+    "resolution_recommendation": "conditional",
+    "workorder_decision": false,
+    "report": false
+  }
+}
 ```
 
 ---
 
-# 9. 配置 / 变更影响分析：`config_change_impact`
+## 7. `report_generation`：报告生成
 
 ### 适用问题
 
-> “刚改了阈值，会不会导致误报？”
-> “升级之后为什么告警变多了？”
-> “参数调整和故障有关吗？”
+```text
+把这次诊断生成报告。
+生成 RCA 报告。
+生成今天设备状态日报。
+把刚才的分析整理成工单说明。
+```
+
+### 目标
+
+基于已有 evidence bundle 或补充查询后的 evidence bundle 生成报告。
 
 ### workflow
 
 ```text
 start
   -> understand / route
-  -> check_required_slots
-      必需：变更对象 / 变更时间 / 设备范围
-  -> select_workflow_policy: change_impact_policy
-  -> initialize_evidence_bundle
+  -> slot_check
+      必需：report_type
+      条件必需：event_id / device_id / time_window / existing_evidence_bundle_id
+
+  -> select_workflow_policy: report_generation_policy
+
+  -> initialize_or_load_evidence_bundle
+      优先加载已有 evidence bundle
+      如果没有，则根据 report_type 决定是否补充查询
 
   -> sql
-      查询变更记录
-      查询变更前后指标
-      查询变更前后告警频次
-      查询操作人 / 版本 / 参数值
-      查询相关设备影响范围
+      条件启用：
+        如果用户要求最新数据
+        如果 evidence bundle 缺少必要数据
+        如果是日报 / 周报
 
   -> knowledge
-      查询参数含义
-      查询推荐范围
-      查询版本说明
-      查询已知问题
+      条件启用：
+        查询报告模板
+        查询 SOP
+        查询 RCA 模板
+        查询评级标准
 
   -> analysis
-      before-after 对比
-      判断告警变化是否与配置相关
-      判断是否可能误报
-      判断是否需要回滚或调整
+      整理结论
+      整理证据
+      整理时间线
+      整理影响范围
+      整理建议和限制
 
-  -> workorder_decision
-      是否建议变更回滚
-      是否建议人工复核
+  -> report
+      按模板生成结构化报告
 
   -> evidence_validation
-      检查是否满足因果判断条件
-  -> final_answer
+      检查报告里的每个关键结论是否有 evidence
+      检查是否遗漏限制条件
+      检查是否混入未验证猜测
+      检查报告时间窗是否明确
+
+  -> answer_synthesis
+      输出报告摘要和报告正文
+
   -> output_guardrail
+  -> save_artifact
+      保存 report artifact
   -> complete
+```
+
+### 默认节点配置
+
+```json
+{
+  "task_type": "report_generation",
+  "enabled_nodes": {
+    "sql": "conditional",
+    "knowledge": "conditional",
+    "analysis": true,
+    "resolution_recommendation": "conditional",
+    "workorder_decision": false,
+    "report": true
+  }
+}
 ```
 
 ---
 
-# 10. 操作请求：`action_request`
+## 8. `action_request`：操作请求 / 写操作请求
 
 ### 适用问题
 
-> “帮我重启设备。”
-> “关闭这个告警。”
-> “把阈值改成 90。”
-> “创建工单。”
-
-### 关键点
-
-这是最高风险类型。建议初期只支持：
-
 ```text
-生成建议
-生成工单草稿
-请求确认
+帮我重启设备。
+关闭这个告警。
+把阈值改成 90。
+确认创建工单。
+派发这个工单。
 ```
 
-不要直接执行控制动作。
+### 目标
+
+识别和处理涉及写操作、控制操作、状态变更的请求。
+
+### 重要原则
+
+`action_request` 是最高风险类型，必须走权限和审批。
+
+初期建议只支持：
+
+```text
+生成草稿
+请求确认
+输出审批提示
+拒绝高风险操作
+```
+
+不要直接执行设备控制。
 
 ### workflow
 
@@ -947,414 +959,585 @@ start
 start
   -> understand / route
   -> identify_action_type
+      action_type:
+        create_workorder
+        dispatch_workorder
+        update_config
+        acknowledge_alarm
+        restart_device
+        stop_device
+        close_alarm
+        other_write_action
+
   -> permission_check
+      检查用户身份
+      检查角色权限
+      检查是否允许该动作
+      检查是否需要审批
+
   -> risk_check
+      判断低 / 中 / 高 / 极高风险
+      高风险动作必须 human confirmation
+      极高风险动作直接拒绝或升级
+
   -> select_workflow_policy: action_request_policy
+
   -> initialize_evidence_bundle
 
   -> sql
       查询设备当前状态
-      查询是否允许操作
-      查询是否存在安全互锁
-      查询当前告警和影响范围
+      查询当前告警
+      查询是否已有工单
+      查询操作前置条件
+      查询安全状态
 
   -> knowledge
       查询 SOP
-      查询操作前置条件
       查询安全限制
+      查询操作前置条件
+      查询审批规则
 
   -> analysis
       判断操作是否合理
-      判断风险等级
+      判断是否满足前置条件
+      判断风险和影响
       判断是否需要审批
 
   -> action_decision
-      deny / require_confirmation / create_draft / execute
+      deny
+      require_more_evidence
+      require_confirmation
+      create_draft_only
+      escalate_to_human
+      execute_if_allowed
 
   -> evidence_validation
-      高风险操作必须有授权
-      缺少安全条件时不能执行
-  -> final_answer
+      检查是否有权限
+      检查是否有足够证据
+      检查是否违反安全规则
+      检查是否绕过审批
+
+  -> answer_synthesis
   -> output_guardrail
   -> audit_log
   -> complete
 ```
 
-### 建议规则
-
-```text
-低风险：查询、解释、生成报告
-中风险：创建工单草稿、建议巡检
-高风险：重启、停机、修改阈值、屏蔽告警
-极高风险：绕过保护、关闭安全联锁、强制运行
-```
-
-高风险和极高风险必须走审批。
-
----
-
-## 四、Task Policy Selector 怎么设计
-
-`Task Policy Selector` 的作用是把分类结果转成执行约束。
-
-建议每类任务配置一个 policy，而不是写死在代码里。
-
-例如：
+### 默认节点配置
 
 ```json
 {
-  "policy_id": "fault_diagnosis_v1",
-  "task_type": "fault_diagnosis",
-  "workflow_id": "wf_fault_diagnosis_v1",
-  "required_slots": [
-    "device_or_scope",
-    "symptom_or_alarm",
-    "time_window"
-  ],
-  "default_values": {
-    "time_window": "last_2_hours"
-  },
-  "allowed_tools": [
-    "asset_db.read",
-    "timeseries_db.read",
-    "alarm_db.read",
-    "event_log.read",
-    "topology_db.read",
-    "maintenance_db.read",
-    "knowledge_base.search"
-  ],
-  "forbidden_tools": [
-    "device_control.write",
-    "config.write"
-  ],
-  "evidence_requirements": {
-    "minimum_metric_points": 10,
-    "need_alarm_context": true,
-    "need_time_window": true,
-    "need_knowledge_reference": true,
-    "need_hypothesis_evidence_mapping": true
-  },
-  "llm_allowed_steps": [
-    "query_normalization",
-    "hypothesis_generation",
-    "evidence_to_answer_synthesis"
-  ],
-  "llm_forbidden_steps": [
-    "direct_tool_execution",
-    "unsupported_root_cause_assertion"
-  ],
-  "output_schema": "fault_diagnosis_answer_v1",
-  "on_missing_evidence": "ask_clarifying_question_or_return_insufficient_evidence",
-  "guardrails": [
-    "no_conclusion_without_evidence",
-    "no_control_action",
-    "show_uncertainty"
+  "task_type": "action_request",
+  "enabled_nodes": {
+    "sql": true,
+    "knowledge": true,
+    "analysis": true,
+    "resolution_recommendation": true,
+    "workorder_decision": "conditional",
+    "report": false,
+    "permission_check": true,
+    "risk_check": true,
+    "audit_log": true
+  }
+}
+```
+
+### 高风险限制
+
+```text
+重启设备
+停机
+修改阈值
+关闭告警
+屏蔽告警
+修改控制参数
+绕过联锁
+强制运行
+```
+
+这些操作不能由 agent 直接执行，必须走审批或人工确认。
+
+---
+
+# 六、工单逻辑统一作为 workflow node
+
+不建议把工单作为一级分类。
+
+推荐统一抽象为：
+
+```text
+workorder_decision
+```
+
+该节点只负责判断：
+
+```text
+是否需要工单
+是否需要巡检
+是否需要升级
+是否生成工单草稿
+工单优先级
+工单理由
+```
+
+不直接派发。
+
+---
+
+## `workorder_decision` 通用流程
+
+```text
+workorder_decision
+  -> check_fault_status
+      active / recovered / intermittent / unknown
+
+  -> check_severity
+      info / minor / major / critical
+
+  -> check_duration
+      异常持续时间
+
+  -> check_asset_criticality
+      普通设备 / 关键设备 / 安全相关设备
+
+  -> check_business_impact
+      是否影响产线 / 质量 / 安全 / SLA
+
+  -> check_confidence
+      诊断置信度是否足够
+
+  -> check_existing_workorder
+      是否已有未关闭工单
+
+  -> decide
+      no_action
+      monitor
+      suggest_inspection
+      suggest_workorder
+      generate_workorder_draft
+      escalate_to_human
+```
+
+---
+
+## 工单决策输出 schema
+
+```json
+{
+  "workorder_decision": {
+    "decision": "generate_workorder_draft",
+    "priority": "P2",
+    "requires_human_confirmation": true,
+    "reason": "设备 pump_001 的 E102 高温告警仍处于 active 状态，温度连续 18 分钟超过高阈值，且该设备属于关键产线设备。",
+    "evidence_ids": ["ev_alarm_001", "ev_metric_003", "ev_asset_002"],
+    "draft": {
+      "title": "pump_001 E102 高温告警检查",
+      "description": "设备 pump_001 在 09:42 触发 E102 高温告警，温度持续高于阈值，建议检查冷却系统、风扇、负载和温度传感器。",
+      "priority": "P2",
+      "recommended_assignee_role": "maintenance_engineer"
+    }
+  }
+}
+```
+
+---
+
+# 七、复合问题处理方式
+
+复合问题不要强行压成单个任务标签，而是：
+
+```text
+primary_task_type + subgoals
+```
+
+例如用户问：
+
+```text
+这个 E102 故障码是什么意思？是不是现在设备有故障？应该如何来解决？
+```
+
+应该解析成：
+
+```json
+{
+  "primary_task_type": "alarm_triage",
+  "subgoals": [
+    {
+      "id": "sg_001",
+      "type": "explain_alarm_code",
+      "status": "ready"
+    },
+    {
+      "id": "sg_002",
+      "type": "check_current_fault_status",
+      "status": "blocked",
+      "missing_slots": ["device_id"]
+    },
+    {
+      "id": "sg_003",
+      "type": "recommend_resolution_steps",
+      "status": "ready"
+    },
+    {
+      "id": "sg_004",
+      "type": "workorder_decision",
+      "status": "blocked",
+      "missing_slots": ["device_id", "current_alarm_status"]
+    }
   ]
 }
 ```
 
-重点是：**policy 不是 prompt，而是执行约束。**
+如果用户补充了设备：
 
----
+```text
+pump_001 的 E102 故障码是什么意思？是不是现在设备有故障？应该如何解决？
+```
 
-## 五、Evidence Store / Evidence Bundle 的核心设计
-
-你这个架构里最关键的是 evidence bundle。它应该成为所有诊断结论的唯一来源。
-
-建议 evidence item 统一结构：
+则变成：
 
 ```json
 {
-  "evidence_id": "ev_001",
-  "source_type": "timeseries_db",
-  "source_name": "temperature_sensor",
-  "device_id": "pump_001",
-  "time_range": {
-    "start": "2026-06-16T09:00:00",
-    "end": "2026-06-16T10:00:00"
+  "primary_task_type": "alarm_triage",
+  "objects": {
+    "device_ids": ["pump_001"],
+    "alarm_codes": ["E102"]
   },
-  "content": {
-    "metric": "temperature",
-    "max": 92.5,
-    "avg": 88.1,
-    "unit": "°C",
-    "threshold": 85
-  },
-  "quality": {
-    "freshness": "fresh",
-    "completeness": "complete",
-    "reliability": "high"
-  },
-  "supports": ["h_001"],
-  "refutes": [],
-  "notes": "温度持续超过高阈值"
+  "subgoals": [
+    {
+      "id": "sg_001",
+      "type": "explain_alarm_code",
+      "status": "ready"
+    },
+    {
+      "id": "sg_002",
+      "type": "check_current_fault_status",
+      "status": "ready"
+    },
+    {
+      "id": "sg_003",
+      "type": "recommend_resolution_steps",
+      "status": "ready"
+    },
+    {
+      "id": "sg_004",
+      "type": "workorder_decision",
+      "status": "ready"
+    }
+  ]
 }
 ```
 
-诊断结论必须引用 evidence id：
+---
+
+## 复合任务执行原则
+
+```text
+1. 选择一个 parent workflow。
+2. 在 parent workflow 下执行多个 subgoals。
+3. ready 的 subgoal 先执行。
+4. blocked 的 subgoal 不阻塞整个任务，但要说明缺什么。
+5. 不要简单合并多个 policy 的工具权限。
+6. 每个 subgoal 只允许使用自己的局部工具白名单。
+7. 最终答案按 subgoal 分段输出。
+```
+
+---
+
+# 八、Policy 设计建议
+
+每类任务对应一个 parent policy。
+
+示例：
 
 ```json
 {
-  "claim": "最可能原因是冷却系统异常",
-  "claim_type": "suspected_cause",
-  "confidence": 0.78,
-  "supporting_evidence": ["ev_001", "ev_002", "ev_007"],
-  "missing_evidence": ["cooling_flow_rate"],
-  "can_be_stated_as_fact": false
+  "policy_id": "alarm_triage_v1",
+  "task_type": "alarm_triage",
+  "workflow_id": "wf_alarm_triage_v1",
+  "required_slots": [
+    "alarm_code"
+  ],
+  "conditional_required_slots": {
+    "check_current_fault_status": ["device_id"],
+    "workorder_decision": ["device_id", "current_alarm_status"]
+  },
+  "allowed_tools": [
+    "knowledge_base.search",
+    "asset_db.read",
+    "timeseries_db.read",
+    "alarm_db.read",
+    "event_log.read",
+    "workorder_db.read"
+  ],
+  "forbidden_tools": [
+    "device_control.write",
+    "config.write",
+    "workorder.dispatch"
+  ],
+  "enabled_nodes": {
+    "knowledge": true,
+    "sql": "conditional",
+    "analysis": true,
+    "resolution_recommendation": true,
+    "workorder_decision": "conditional",
+    "report": false
+  },
+  "evidence_requirements": {
+    "need_alarm_definition": true,
+    "need_alarm_severity": true,
+    "need_recommended_actions": true,
+    "need_current_alarm_status_if_device_provided": true,
+    "need_metric_context_if_claiming_current_fault": true
+  },
+  "output_schema": "alarm_triage_answer_v1",
+  "on_missing_evidence": "answer_available_subgoals_and_mark_blocked_subgoals",
+  "guardrails": [
+    "no_current_fault_claim_without_realtime_data",
+    "no_workorder_dispatch_without_human_confirmation",
+    "show_uncertainty",
+    "cite_evidence_ids"
+  ]
 }
 ```
 
-这个设计可以极大降低幻觉。
-
 ---
 
-## 六、Evidence Validation 应该检查什么
+# 九、Evidence Bundle 结构建议
 
-建议把 validation 做成规则，而不是靠 LLM 自觉。
-
-### 通用检查
-
-```text
-1. 是否有设备 / 系统对象
-2. 是否有时间窗
-3. 数据是否新鲜
-4. 指标是否有单位
-5. 阈值是否有来源
-6. 告警是否有发生时间
-7. 结论是否绑定证据
-8. 是否存在缺失关键证据
-9. 是否把猜测说成确定事实
-10. 是否越权建议操作
-```
-
-### 针对诊断任务的检查
-
-```text
-1. 每个 root cause / suspected cause 是否有 supporting evidence
-2. 是否列出 alternative causes
-3. 是否列出 contradicting evidence
-4. 是否标明 confidence
-5. 是否说明 missing evidence
-6. 是否区分 symptom、direct cause、root cause
-```
-
-### 针对 RCA 的检查
-
-```text
-1. 是否有完整时间线
-2. 是否识别 first abnormal event
-3. 是否区分直接原因和根本原因
-4. 是否有恢复动作
-5. 是否有预防措施
-6. 是否避免把相关性写成因果性
-```
-
----
-
-## 七、最终建议的整体 workflow 模板
-
-你原来的流程可以微调成下面这样：
-
-```text
-start
-  -> query_normalize
-      输出 task_json
-
-  -> route
-      输出 task_type / sub_type / modifiers / confidence
-
-  -> slot_check
-      检查设备、时间窗、症状、告警码、输出目标
-
-  -> select_workflow_policy
-      根据 task_type + risk_level + modifiers 选择 policy
-
-  -> initialize_evidence_bundle
-      初始化任务上下文、证据清单、缺失项、约束
-
-  -> execute_workflow
-      -> collect_asset_context
-      -> collect_sql_evidence       按 policy 执行
-      -> collect_knowledge_evidence 按 policy 执行
-      -> perform_analysis           按 policy 执行
-      -> make_workorder_decision    按 policy 执行
-      -> generate_report            按 policy 执行
-
-  -> evidence_validation
-      不通过则：
-        - 补充查询
-        - 降低结论置信度
-        - 追问用户
-        - 输出证据不足
-
-  -> answer_synthesis
-      只基于 evidence bundle 生成
-
-  -> output_guardrail
-      检查格式、权限、风险、越权、幻觉
-
-  -> save_artifact
-      保存 evidence bundle、诊断结论、报告、审计日志
-
-  -> complete
-```
-
-我会把 `final_answer` 放在 `output_guardrail` 前面更准确：先生成答案，再检查答案。
-
-所以建议顺序是：
-
-```text
-evidence_validation
-  -> answer_synthesis
-  -> output_guardrail
-  -> save_artifact
-  -> complete
-```
-
----
-
-## 八、推荐的分类决策逻辑
-
-可以先用规则 + LLM 组合。
-
-### 第一层：强规则优先
-
-```text
-包含“报告 / 生成报告 / 总结成文档” -> report_generation
-包含“RCA / 根因分析 / 复盘 / 事故分析” -> root_cause_analysis
-包含“要不要派单 / 怎么处理 / 维修建议” -> maintenance_advice
-包含“什么意思 / 手册 / 步骤 / 怎么操作” -> knowledge_qa
-包含“现在状态 / 当前 / 多少 / 是否在线” -> status_query
-包含“告警码 / 报警什么意思” -> alarm_interpretation
-包含“为什么 / 诊断 / 原因 / 异常 / 故障” -> fault_diagnosis
-包含“趋势 / 健康 / 风险 / 劣化 / 预测” -> health_assessment
-包含“重启 / 停机 / 修改 / 关闭 / 执行” -> action_request
-```
-
-### 第二层：LLM 处理模糊场景
-
-比如：
-
-> “设备 A 高温了，看一下。”
-
-这个可能是状态查询，也可能是故障诊断。
-
-可以让 router 输出：
+所有 workflow 都应该写入统一 evidence bundle。
 
 ```json
 {
-  "task_type": "fault_diagnosis",
-  "route_confidence": 0.72,
-  "reason": "用户描述异常现象，并要求查看，默认需要诊断。",
-  "fallback_task_type": "status_query"
+  "bundle_id": "eb_20260617_001",
+  "task": {
+    "primary_task_type": "alarm_triage",
+    "subgoals": ["sg_001", "sg_002", "sg_003", "sg_004"],
+    "objects": {
+      "device_ids": ["pump_001"],
+      "alarm_codes": ["E102"]
+    },
+    "time_window": {
+      "start": "2026-06-17T09:00:00",
+      "end": "2026-06-17T10:00:00"
+    }
+  },
+  "evidence_items": [
+    {
+      "evidence_id": "ev_001",
+      "source_type": "knowledge_base",
+      "content_type": "alarm_definition",
+      "content": {
+        "alarm_code": "E102",
+        "meaning": "high_temperature_alarm",
+        "severity": "major"
+      },
+      "quality": {
+        "freshness": "static",
+        "reliability": "high"
+      },
+      "supports_subgoals": ["sg_001", "sg_003"]
+    },
+    {
+      "evidence_id": "ev_002",
+      "source_type": "alarm_db",
+      "content_type": "current_alarm_status",
+      "content": {
+        "device_id": "pump_001",
+        "alarm_code": "E102",
+        "status": "active",
+        "start_time": "2026-06-17T09:42:00"
+      },
+      "quality": {
+        "freshness": "fresh",
+        "reliability": "high"
+      },
+      "supports_subgoals": ["sg_002", "sg_004"]
+    }
+  ],
+  "claims": [
+    {
+      "claim_id": "claim_001",
+      "claim": "E102 表示高温告警。",
+      "claim_type": "alarm_explanation",
+      "supporting_evidence": ["ev_001"],
+      "confidence": "high"
+    },
+    {
+      "claim_id": "claim_002",
+      "claim": "pump_001 当前存在 active E102 告警。",
+      "claim_type": "current_fault_status",
+      "supporting_evidence": ["ev_002"],
+      "confidence": "high"
+    }
+  ],
+  "missing_evidence": [
+    {
+      "subgoal_id": "sg_002",
+      "missing": "temperature_timeseries",
+      "impact": "无法判断高温是否持续恶化"
+    }
+  ]
 }
 ```
 
-### 第三层：低置信度时走保守 workflow
+---
 
-如果 `route_confidence < 0.6`，不要直接诊断，可以先走轻量 workflow：
+# 十、Evidence Validation 通用规则
 
 ```text
-status_query + alarm_interpretation
+1. 所有结论必须绑定 evidence_id。
+2. 当前状态判断必须有实时数据或最近数据。
+3. 故障诊断结论必须有 supporting_evidence。
+4. RCA 根因必须满足因果判断条件。
+5. 工单建议必须有异常严重度、持续时间或风险证据。
+6. 缺少设备时不能判断当前设备是否故障。
+7. 缺少时间窗时不能做历史趋势或 RCA。
+8. 知识问答必须检查型号、版本、适用范围。
+9. 高风险操作必须检查权限和审批。
+10. 不允许把 suspected cause 写成 confirmed root cause。
 ```
-
-然后再决定是否升级到 `fault_diagnosis`。
 
 ---
 
-## 九、不同任务类型的默认 policy 总表
+# 十一、最终分类决策规则
 
-| task_type              | SQL | 知识库 | 分析 |    工单决策 | 报告 | 是否允许写操作 |
-| ---------------------- | --: | --: | -: | ------: | -: | ------: |
-| `status_query`         |  必需 |  可选 | 轻量 |       否 |  否 |       否 |
-| `alarm_interpretation` |  可选 |  必需 | 中等 |      可选 |  否 |       否 |
-| `fault_diagnosis`      |  必需 |  必需 | 必需 | 可选/建议开启 | 可选 |       否 |
-| `root_cause_analysis`  |  必需 |  必需 | 必需 |      可选 | 必需 |       否 |
-| `health_assessment`    |  必需 |  可选 | 必需 |      可选 | 可选 |       否 |
-| `maintenance_advice`   |  必需 |  必需 | 必需 |      必需 | 可选 |   只允许草稿 |
-| `knowledge_qa`         |  可选 |  必需 | 轻量 |       否 |  否 |       否 |
-| `report_generation`    |  可选 |  可选 | 中等 |      可选 | 必需 |       否 |
-| `config_change_impact` |  必需 |  必需 | 必需 |      可选 | 可选 |       否 |
-| `action_request`       |  必需 |  必需 | 必需 |      必需 | 可选 |    需要审批 |
+可以先使用规则 + LLM 混合路由。
+
+## 强规则优先
+
+```text
+包含“报告 / 生成报告 / 总结成文档”
+  -> report_generation
+
+包含“RCA / 根因分析 / 复盘 / 事故分析”
+  -> root_cause_analysis
+
+包含“重启 / 停机 / 修改 / 关闭 / 确认派发 / 创建工单”
+  -> action_request
+
+包含“健康 / 风险 / 劣化 / 趋势 / 预测”
+  -> health_assessment
+
+包含“故障码 / 告警码 / 报警 / 告警”
+  且包含“现在 / 是否故障 / 怎么处理 / 严重吗 / 要不要派人”
+  -> alarm_triage
+
+包含“故障码是什么意思 / 告警定义 / 手册 / SOP / 怎么操作”
+  且不绑定具体设备状态
+  -> knowledge_qa
+
+包含“为什么 / 原因 / 诊断 / 异常 / 故障”
+  -> fault_diagnosis
+
+包含“现在 / 当前 / 多少 / 是否在线 / 状态”
+  -> status_query
+```
+
+## 模糊问题处理
+
+如果路由置信度低：
+
+```text
+route_confidence < 0.6
+```
+
+不要直接进入完整诊断，优先进入轻量分诊：
+
+```text
+status_query 或 alarm_triage
+```
+
+并允许后续升级为：
+
+```text
+fault_diagnosis
+root_cause_analysis
+health_assessment
+```
 
 ---
 
-## 十、建议你优先落地的 MVP 分类
+# 十二、最终建议的工程结构
 
-如果现在还在初期，不建议一上来做 10 类。可以先做 6 类：
-
-```text
-1. status_query
-2. alarm_interpretation
-3. fault_diagnosis
-4. maintenance_advice
-5. knowledge_qa
-6. report_generation
-```
-
-然后把 `root_cause_analysis` 作为 `fault_diagnosis` 的增强版，把 `health_assessment` 作为后续版本。
-
-MVP 的核心闭环是：
+可以让 Codex 按下面结构改造：
 
 ```text
-查状态
-解释告警
-诊断原因
-给处理建议
-生成报告
-```
+src/
+  agent/
+    router/
+      query_normalizer.ts
+      intent_router.ts
+      subgoal_decomposer.ts
 
-这五件事已经覆盖大部分故障诊断 agent 的真实使用场景。
+    policies/
+      status_query.policy.ts
+      alarm_triage.policy.ts
+      fault_diagnosis.policy.ts
+      root_cause_analysis.policy.ts
+      health_assessment.policy.ts
+      knowledge_qa.policy.ts
+      report_generation.policy.ts
+      action_request.policy.ts
+
+    workflows/
+      workflow_executor.ts
+      status_query.workflow.ts
+      alarm_triage.workflow.ts
+      fault_diagnosis.workflow.ts
+      root_cause_analysis.workflow.ts
+      health_assessment.workflow.ts
+      knowledge_qa.workflow.ts
+      report_generation.workflow.ts
+      action_request.workflow.ts
+
+    evidence/
+      evidence_bundle.ts
+      evidence_store.ts
+      evidence_validator.ts
+      claim_validator.ts
+
+    nodes/
+      sql_node.ts
+      knowledge_node.ts
+      analysis_node.ts
+      resolution_recommendation_node.ts
+      workorder_decision_node.ts
+      report_node.ts
+      permission_check_node.ts
+      risk_check_node.ts
+
+    output/
+      answer_synthesizer.ts
+      output_guardrail.ts
+      schemas/
+        status_query_answer.schema.ts
+        alarm_triage_answer.schema.ts
+        fault_diagnosis_answer.schema.ts
+        rca_answer.schema.ts
+        health_assessment_answer.schema.ts
+        knowledge_qa_answer.schema.ts
+        report_answer.schema.ts
+        action_request_answer.schema.ts
+```
 
 ---
 
-## 十一、一个比较推荐的最终设计
+# 十三、最终一句话版本
 
-可以把你的系统抽象成：
-
-```text
-单 Agent = 任务理解器 + workflow 调度器 + 证据约束回答器
-```
-
-不要让 agent 自己决定“下一步做什么”，而是让它决定：
+新的分类方式可以总结为：
 
 ```text
-这个用户问题属于哪类任务？
-缺什么槽位？
-应该使用哪个 policy？
-最终如何基于 evidence bundle 表达？
+一级分类只负责选择 parent workflow：
+status_query、alarm_triage、fault_diagnosis、root_cause_analysis、
+health_assessment、knowledge_qa、report_generation、action_request。
+
+维修建议、解决方案、工单判断不作为一级分类，
+而是作为 resolution_recommendation 和 workorder_decision 节点，
+由诊断、告警分诊、状态评估、健康评估等 workflow 在证据满足时触发。
+
+复合问题不做单标签分类，
+而是解析成 primary_task_type + subgoals，
+ready 的子目标先执行，blocked 的子目标说明缺失信息，
+最终按子目标合成答案。
 ```
-
-真正的执行顺序由 workflow engine 控制。
-
-最终结构可以是：
-
-```text
-User Query
-  ↓
-Query Normalizer
-  ↓
-Intent Router
-  ↓
-Task JSON
-  ↓
-Policy Selector
-  ↓
-Workflow Executor
-  ↓
-Evidence Bundle
-  ↓
-Evidence Validator
-  ↓
-Answer Synthesizer
-  ↓
-Output Guardrail
-  ↓
-Artifact Store / Audit Log
-```
-
-最核心的设计原则是：
-
-> **分类决定 workflow，policy 决定工具和证据要求，evidence bundle 决定答案边界，guardrail 决定能不能输出。**
-
-这样做之后，即使你采用的是单 agent 架构，也不会变成“一个大模型自由推理到底”，而是变成**可控、可审计、可扩展的诊断系统**。
