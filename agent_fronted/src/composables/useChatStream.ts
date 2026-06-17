@@ -76,6 +76,9 @@ const createToolEventKey = (tool: string, type: string) =>
 const buildHistoryTitle = (threadId: string, source: 'server' | 'local-cache' = 'server') =>
   source === 'local-cache' ? `本地缓存 · 咨询 ${threadId.slice(-6)}` : `咨询 ${threadId.slice(-6)}`
 
+const PUBLIC_THINKING_STATUS = '思考中...'
+const THINKING_STREAM_STATES = new Set(['connecting', 'reasoning', 'streaming', 'tool_running'])
+
 const normalizeMessageForView = (message: Message) => normalizeChatMessage(message)
 const isRenderableMessage = (message: Message) => isRenderableChatMessage(normalizeMessageForView(message))
 
@@ -131,9 +134,12 @@ export const useChatStream = ({
   }
 
   const updateAssistantState = (streamState: string, statusText: string) => {
+    const publicStatusText = THINKING_STREAM_STATES.has(streamState)
+      ? PUBLIC_THINKING_STATUS
+      : statusText
     patchLastAssistantMessage({
       streamState,
-      statusText,
+      statusText: publicStatusText,
       isStreaming: ['connecting', 'reasoning', 'streaming', 'tool_running'].includes(streamState)
     })
   }
@@ -1040,7 +1046,7 @@ export const useChatStream = ({
             }
             if (toolData.type === 'tool_start') {
               activeToolCount += 1
-              updateAssistantState('tool_running', `正在调用工具：${toolData.tool}`)
+              updateAssistantState('tool_running', PUBLIC_THINKING_STATUS)
               if (toolData.tool === 'write_todos') {
                 updateAssistantTaskSnapshot(
                   createTaskSnapshot([], null, {
@@ -1054,13 +1060,7 @@ export const useChatStream = ({
               activeToolCount = Math.max(0, activeToolCount - 1)
               updateAssistantState(
                 hasVisibleToken ? 'streaming' : 'reasoning',
-                hasVisibleToken
-                  ? (
-                      toolData.truncated
-                        ? `工具 ${toolData.tool} 已完成，结果已截断`
-                        : `工具 ${toolData.tool} 已完成`
-                    )
-                  : `工具 ${toolData.tool} 已完成，模型正在整理结果...`
+                PUBLIC_THINKING_STATUS
               )
 
               if (toolData.tool === 'write_todos') {
@@ -1077,6 +1077,28 @@ export const useChatStream = ({
             persistConversationCache(
               typeof currentChatId.value === 'string' ? currentChatId.value : requestedThreadId,
               localCacheOnly.value ? 'local-cache' : 'server'
+            )
+            await scrollToBottom()
+          },
+          onTaskUpdate: async (taskData: any) => {
+            if (!isCurrentRequest()) return
+            const taskSnapshot = {
+              ...assignTodosState(taskData.todos || [], taskData.summary || null),
+              statusHint: taskData.status_hint || '',
+              lifecycleState: '',
+              isLoading: false
+            }
+            updateAssistantTaskSnapshot(taskSnapshot)
+            updateWorkflowProgress({
+              currentWorkflowStage: taskData.current_stage || null
+            })
+            persistConversationCache(
+              typeof currentChatId.value === 'string' ? currentChatId.value : requestedThreadId,
+              localCacheOnly.value ? 'local-cache' : 'server',
+              {
+                todos: taskSnapshot.todos,
+                summary: taskSnapshot.summary
+              }
             )
             await scrollToBottom()
           },

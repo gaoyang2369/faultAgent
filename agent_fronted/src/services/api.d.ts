@@ -51,6 +51,7 @@ export interface StreamCallbacks {
   onToken?: (data: { type: string; content: string; fullContent: string }) => void
   onMessage?: (data: { type: string; content: string; fullContent: string }) => void
   onToolCall?: (data: { type: string; tool: string; input?: any; result?: any; result_preview?: any; truncated?: boolean; action_guard?: any; thread_id?: string | null; run_id?: string; stage?: string; current_stage?: string; stage_duration_ms?: number; evidence?: any[]; evidence_count?: number; evidence_ids?: string[] }) => void
+  onTaskUpdate?: (data: { type: string; thread_id?: string | null; trace_id?: string | null; current_stage?: string | null; todos: any[]; summary?: any; status_hint?: string; timestamp?: string | null }) => void
   onComplete?: (data: {
     type: string
     content: string

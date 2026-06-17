@@ -390,6 +390,22 @@ export const chatAPI = {
         })
       })
 
+      eventSource.addEventListener('task_update', (event) => {
+        if (!isActive()) return
+        const data = parseEventPayload(event, 'task_update')
+        if (!data) return
+        callbacks.onTaskUpdate?.({
+          type: 'task_update',
+          thread_id: data.thread_id || activeThreadId,
+          trace_id: data.trace_id || null,
+          current_stage: data.current_stage || null,
+          todos: Array.isArray(data.todos) ? data.todos : [],
+          summary: data.summary || null,
+          status_hint: data.status_hint || '',
+          timestamp: data.timestamp || null
+        })
+      })
+
       eventSource.addEventListener('complete', (event) => {
         if (!isActive()) return
         const data = parseEventPayload(event, 'complete')

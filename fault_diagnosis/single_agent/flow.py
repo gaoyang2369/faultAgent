@@ -172,6 +172,11 @@ class SingleAgentFlowMixin:
                     f"启用节点 {', '.join(name for name, enabled in decision.enabled_nodes.items() if enabled) or '无工具节点'}"
                 ),
             )
+            self._configure_workflow_tasks(decision)
+            task_frame = self._build_workflow_task_update_frame(current_stage="initialize_evidence_bundle")
+            if task_frame:
+                yield task_frame
+                event_count += 1
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
                 return
@@ -188,6 +193,10 @@ class SingleAgentFlowMixin:
                 stage_started,
                 message=f"证据账本已初始化：{self.evidence_bundle.bundle_id}",
             )
+            task_frame = self._build_workflow_task_update_frame(completed_stage="initialize_evidence_bundle")
+            if task_frame:
+                yield task_frame
+                event_count += 1
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
                 return
@@ -203,6 +212,10 @@ class SingleAgentFlowMixin:
                     status="warning",
                     message=permission_check_result.get("reason", ""),
                 )
+                task_frame = self._build_workflow_task_update_frame(completed_stage="permission_check")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
                 if self._is_cancelled():
                     yield self._build_cancel_complete_frame()
                     return
@@ -218,6 +231,10 @@ class SingleAgentFlowMixin:
                     status="warning",
                     message=risk_check_result.get("reason", ""),
                 )
+                task_frame = self._build_workflow_task_update_frame(completed_stage="risk_check")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
                 if self._is_cancelled():
                     yield self._build_cancel_complete_frame()
                     return
@@ -229,8 +246,20 @@ class SingleAgentFlowMixin:
                     event_count += 1
                 final_answer, report_artifact = self._last_step_result
                 self._finish_stage("report", stage_started, message=report_artifact.save_result)
+                task_frame = self._build_workflow_task_update_frame(completed_stage="report")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
                 stage_started = self._start_stage("final_answer", "整理报告生成结果")
                 self._finish_stage("final_answer", stage_started, message="最终回答已生成")
+                task_frame = self._build_workflow_task_update_frame(completed_stage="final_answer")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
+                task_frame = self._complete_remaining_workflow_tasks(status_hint="本轮回答已完成")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
                 self.trace.finish(status="completed", final_answer=final_answer)
                 self._finish_open_stage_observations(status="completed")
                 self._finalize_trace_run(
@@ -257,6 +286,7 @@ class SingleAgentFlowMixin:
                         "report_filename": report_artifact.report_filename,
                         "report_url": extract_report_url(report_artifact.save_result),
                         "decision": decision.model_dump(),
+                        "todos": self._current_workflow_todos_payload(status_hint="本轮回答已完成").get("todos", []),
                         "workflow_route": {
                             "primary_task_type": decision.primary_task_type,
                             "subgoals": decision.subgoals,
@@ -264,7 +294,6 @@ class SingleAgentFlowMixin:
                         },
                         "workflow_policy": decision.workflow_policy,
                         "trace": self.trace.model_dump(exclude_none=True),
-                        "todos": [],
                         "event_count": event_count,
                         "timestamp": datetime.now().isoformat(),
                     },
@@ -287,10 +316,18 @@ class SingleAgentFlowMixin:
                     event_count += 1
                 sql_artifact = self._last_step_result
                 self._finish_stage("sql", stage_started, message=sql_artifact.summary)
+                task_frame = self._build_workflow_task_update_frame(completed_stage="sql")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
             else:
                 stage_started = self._start_stage("sql", "判断后跳过 SQL 查询")
                 sql_artifact = self._build_skipped_sql_artifact("本次请求不需要查询设备数据库")
                 self._finish_stage("sql", stage_started, status="skipped", message=sql_artifact.summary)
+                task_frame = self._build_workflow_task_update_frame(skipped_stage="sql")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
                 return
@@ -320,10 +357,18 @@ class SingleAgentFlowMixin:
                     event_count += 1
                 knowledge_artifact = self._last_step_result
                 self._finish_stage("knowledge", stage_started, message="知识库检索完成")
+                task_frame = self._build_workflow_task_update_frame(completed_stage="knowledge")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
             else:
                 stage_started = self._start_stage("knowledge", "判断后跳过知识库检索")
                 knowledge_artifact = self._build_skipped_knowledge_artifact("本次请求不需要查询知识库")
                 self._finish_stage("knowledge", stage_started, status="skipped", message=knowledge_artifact.error or "")
+                task_frame = self._build_workflow_task_update_frame(skipped_stage="knowledge")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
                 return
@@ -337,6 +382,10 @@ class SingleAgentFlowMixin:
                 yield ping
             analysis_artifact = self._last_step_result
             self._finish_stage("analysis", stage_started, message=analysis_artifact.conclusion)
+            task_frame = self._build_workflow_task_update_frame(completed_stage="analysis")
+            if task_frame:
+                yield task_frame
+                event_count += 1
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
                 return
@@ -358,6 +407,10 @@ class SingleAgentFlowMixin:
                     stage_started,
                     message=f"已整理 {len(resolution_recommendation.get('recommendations', []))} 条处置建议",
                 )
+                task_frame = self._build_workflow_task_update_frame(completed_stage="resolution_recommendation")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
                 if self._is_cancelled():
                     yield self._build_cancel_complete_frame()
                     return
@@ -375,6 +428,10 @@ class SingleAgentFlowMixin:
                     stage_started,
                     message=workorder_suggestion.reason,
                 )
+                task_frame = self._build_workflow_task_update_frame(completed_stage="workorder_decision")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
             else:
                 stage_started = self._start_stage("workorder_decision", "当前 workflow 未启用工单决策")
                 workorder_suggestion = self._build_skipped_workorder_suggestion(
@@ -386,6 +443,10 @@ class SingleAgentFlowMixin:
                     status="skipped",
                     message=workorder_suggestion.reason,
                 )
+                task_frame = self._build_workflow_task_update_frame(skipped_stage="workorder_decision")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
                 return
@@ -404,10 +465,18 @@ class SingleAgentFlowMixin:
                     event_count += 1
                 report_artifact = self._last_step_result
                 self._finish_stage("report", stage_started, message=report_artifact.save_result)
+                task_frame = self._build_workflow_task_update_frame(completed_stage="report")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
             else:
                 stage_started = self._start_stage("report", "判断后跳过报告生成")
                 report_artifact = self._build_skipped_report_artifact()
                 self._finish_stage("report", stage_started, status="skipped", message=report_artifact.save_result)
+                task_frame = self._build_workflow_task_update_frame(skipped_stage="report")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
                 return
@@ -432,6 +501,10 @@ class SingleAgentFlowMixin:
                     f"{len(self.evidence_bundle.claims)} 条判断"
                 ),
             )
+            task_frame = self._build_workflow_task_update_frame(completed_stage="evidence_validation")
+            if task_frame:
+                yield task_frame
+                event_count += 1
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
                 return
@@ -444,6 +517,10 @@ class SingleAgentFlowMixin:
                 yield ping
             final_answer = self._last_step_result
             self._finish_stage("final_answer", stage_started, message="最终回答已生成")
+            task_frame = self._build_workflow_task_update_frame(completed_stage="final_answer")
+            if task_frame:
+                yield task_frame
+                event_count += 1
 
             stage_started = self._start_stage("output_guardrail", "检查最终回答和证据链一致性")
             self.output_guardrail_result = build_output_guardrail_result(final_answer, self.evidence_bundle, decision)
@@ -454,6 +531,10 @@ class SingleAgentFlowMixin:
                 status="completed" if self.output_guardrail_result.get("passed") else "warning",
                 message="输出校验通过" if self.output_guardrail_result.get("passed") else "输出校验存在提示",
             )
+            task_frame = self._build_workflow_task_update_frame(completed_stage="output_guardrail")
+            if task_frame:
+                yield task_frame
+                event_count += 1
 
             audit_log_result: dict[str, Any] = {}
             if workflow_node_enabled(decision, "audit_log"):
@@ -470,6 +551,10 @@ class SingleAgentFlowMixin:
                     stage_started,
                     message="动作请求审计信息已记录",
                 )
+                task_frame = self._build_workflow_task_update_frame(completed_stage="audit_log")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
 
             stage_started = self._start_stage("save_artifact", "保存诊断产物与证据链")
             saved_envelope = self.save_artifact_envelope(
@@ -492,6 +577,13 @@ class SingleAgentFlowMixin:
             )
             diagnosis_contract_payload = build_diagnosis_contract_payload(saved_envelope)
             self._finish_stage("save_artifact", stage_started, message="诊断产物与证据链已保存")
+            task_frame = self._build_workflow_task_update_frame(
+                completed_stage="save_artifact",
+                status_hint="本轮回答已完成",
+            )
+            if task_frame:
+                yield task_frame
+                event_count += 1
             self.trace.finish(status="completed", final_answer=final_answer)
 
             if final_answer.strip():
@@ -546,9 +638,9 @@ class SingleAgentFlowMixin:
                     "requested_output": decision.requested_output,
                 },
                 "workflow_policy": decision.workflow_policy,
+                "todos": self._current_workflow_todos_payload(status_hint="本轮回答已完成").get("todos", []),
                 "artifact": saved_envelope.model_dump(exclude_none=True),
                 "trace": self.trace.model_dump(exclude_none=True),
-                "todos": [],
                 "event_count": event_count,
                 "timestamp": datetime.now().isoformat(),
             }

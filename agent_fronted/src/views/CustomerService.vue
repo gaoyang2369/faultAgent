@@ -164,6 +164,29 @@
         </div>
       </div>
 
+      <aside
+        v-if="shouldShowWorkflowTaskSidebar"
+        class="workflow-task-sidebar"
+        aria-label="Agent 任务清单"
+      >
+        <div class="workflow-task-sidebar__header">
+          <div>
+            <div class="workflow-task-sidebar__eyebrow">Workflow</div>
+            <h2 class="workflow-task-sidebar__title">任务清单</h2>
+          </div>
+          <span class="workflow-task-sidebar__badge">
+            {{ workflowTaskBadgeText }}
+          </span>
+        </div>
+        <TaskPanel
+          v-if="workflowSidebarTaskSnapshot"
+          :task-snapshot="workflowSidebarTaskSnapshot"
+        />
+        <div v-else class="workflow-task-sidebar__empty">
+          等待任务
+        </div>
+      </aside>
+
     </div>
 
     <!-- 预约成功弹窗 -->
@@ -193,6 +216,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import ChatMessage from '../components/ChatMessage.vue'
 import ChatSidebar from '../components/ChatSidebar.vue'
+import TaskPanel from '../components/TaskPanel.vue'
 import { questionTemplates } from '@/config/questionTemplates'
 import { useUserIdentityStore } from '@/stores/userIdentity'
 import { useTodosPanel } from '@/composables/useTodosPanel'
@@ -214,6 +238,7 @@ import {
   shouldAutoScrollOnUpdate,
   shouldKeepAutoFollowOnScroll
 } from '@/utils/chatScrollStrategy.js'
+import { hasVisibleTaskSnapshot } from '@/utils/taskState'
 
 // 引入外部CSS文件
 import '@/assets/CustomerService.css'
@@ -635,6 +660,70 @@ const {
   },
   onAssistantToken: appendStreamingTtsToken,
   onAssistantComplete: finishStreamingTts
+})
+
+const activeWorkflowTaskSnapshot = computed(() => {
+  for (let index = currentMessages.value.length - 1; index >= 0; index -= 1) {
+    const message = currentMessages.value[index]
+    if (message?.role !== 'assistant') {
+      continue
+    }
+    const snapshot = message?.taskSnapshot
+    return hasVisibleTaskSnapshot(snapshot) ? snapshot : null
+  }
+  return null
+})
+
+const workflowSidebarTaskSnapshot = computed(() => {
+  if (activeWorkflowTaskSnapshot.value) {
+    return activeWorkflowTaskSnapshot.value
+  }
+  if (isStreaming.value || voiceProcessing.value) {
+    return {
+      todos: [],
+      summary: {
+        total: 0,
+        pending: 0,
+        in_progress: 0,
+        completed: 0,
+        interrupted: 0
+      },
+      isLoading: true,
+      statusHint: '规划中',
+      lifecycleState: 'active',
+      updatedAt: new Date().toISOString()
+    }
+  }
+  return null
+})
+
+const shouldShowWorkflowTaskSidebar = computed(() => {
+  if (!isStreaming.value && !voiceProcessing.value) {
+    return false
+  }
+  const snapshot = workflowSidebarTaskSnapshot.value
+  if (!snapshot) {
+    return false
+  }
+  if (snapshot.isLoading) {
+    return true
+  }
+  const summary = snapshot.summary
+  const hasActiveTodo = Array.isArray(snapshot.todos)
+    && snapshot.todos.some((todo: Record<string, any>) => (
+      ['pending', 'in_progress'].includes(todo?.status)
+    ))
+  return Boolean(summary?.pending || summary?.in_progress || hasActiveTodo)
+})
+
+const workflowTaskBadgeText = computed(() => {
+  const snapshot = workflowSidebarTaskSnapshot.value
+  const summary = snapshot?.summary
+  if (snapshot?.isLoading && !summary?.total) return '规划中'
+  if (!summary?.total) return '执行中'
+  if (summary.interrupted) return '已停止'
+  if (summary.pending + summary.in_progress === 0) return '完成'
+  return '执行中'
 })
 
 const handleRenameChat = async ({ id, title }: { id: string; title: string }) => {

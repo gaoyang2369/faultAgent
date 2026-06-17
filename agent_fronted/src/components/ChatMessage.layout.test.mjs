@@ -92,13 +92,23 @@ assert.match(
 )
 assert.match(
   source,
-  /const shouldShowFinalProcessToggle = computed\(\(\) => \([\s\S]*!hasDiagnosisResultCard\.value/,
-  'process details toggle should not render when the diagnosis card exists'
+  /const visibleAssistantStatusText = computed\(\(\) => \{[\s\S]*return '思考中\.\.\.';/,
+  'streaming assistant status should hide internal tool and workflow details'
 )
 assert.match(
   source,
-  /toolEvents\.length && shouldShowToolDetails/,
-  'tool execution details should stay hidden in diagnosis card mode'
+  /const shouldShowProcessDetails = computed\(\(\) => \(\s*false\s*\)\);/,
+  'inline process panels should stay hidden in assistant messages'
+)
+assert.match(
+  source,
+  /const shouldShowFinalProcessToggle = computed\(\(\) => \(\s*false\s*\)\);/,
+  'process details toggle should stay hidden in assistant messages'
+)
+assert.match(
+  source,
+  /const shouldShowToolDetails = computed\(\(\) => \(\s*false\s*\)\);/,
+  'tool execution details should stay hidden in assistant messages'
 )
 assert.match(
   styles,

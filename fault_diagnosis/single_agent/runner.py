@@ -27,6 +27,7 @@ from .flow import SingleAgentFlowMixin
 from .json_utils import build_json_repair_prompt, extract_json_text, loads_json_object
 from .stages import SingleAgentStagesMixin
 from .serialization import preview, sanitize_for_json, stringify
+from .workflow.todos import build_workflow_todos, summarize_workflow_todos, workflow_stage_sequence
 
 _log = get_logger("single_agent.runner")
 
@@ -73,6 +74,10 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self.evidence_bundle: Any | None = None
         self.output_guardrail_result: dict[str, Any] | None = None
         self._active_allowed_tools: tuple[str, ...] | None = None
+        self._workflow_task_decision: Any | None = None
+        self._workflow_completed_stages: set[str] = set()
+        self._workflow_skipped_stages: set[str] = set()
+        self._workflow_current_stage: str | None = None
 
     def _console_trace(self, message: str, **fields: Any) -> None:
         if not AGENT_TRACE_CONSOLE:
@@ -153,6 +158,10 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self.evidence_bundle = None
         self.output_guardrail_result = None
         self._active_allowed_tools = None
+        self._workflow_task_decision = None
+        self._workflow_completed_stages = set()
+        self._workflow_skipped_stages = set()
+        self._workflow_current_stage = None
 
     def _finalize_trace_run(
         self,
@@ -325,6 +334,80 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             status="created",
             summary=f"{artifact_type}: {self._console_preview(payload)}",
         )
+
+    def _configure_workflow_tasks(self, decision: Any) -> None:
+        self._workflow_task_decision = decision
+        self._workflow_completed_stages = {"understand", "select_workflow_policy"}
+        self._workflow_skipped_stages = set()
+        self._workflow_current_stage = None
+
+    def _build_workflow_task_payload(
+        self,
+        *,
+        completed_stage: str | None = None,
+        skipped_stage: str | None = None,
+        current_stage: str | None = None,
+        status_hint: str = "",
+    ) -> dict[str, Any]:
+        if completed_stage:
+            self._workflow_completed_stages.add(completed_stage)
+            self._workflow_current_stage = None
+        if skipped_stage:
+            self._workflow_skipped_stages.add(skipped_stage)
+            self._workflow_completed_stages.add(skipped_stage)
+            self._workflow_current_stage = None
+        if current_stage:
+            self._workflow_current_stage = current_stage
+
+        todos = build_workflow_todos(
+            self._workflow_task_decision,
+            completed_stages=self._workflow_completed_stages,
+            skipped_stages=self._workflow_skipped_stages,
+            current_stage=self._workflow_current_stage,
+        )
+        summary = summarize_workflow_todos(todos)
+        if not status_hint:
+            status_hint = "全部完成" if summary.get("pending", 0) + summary.get("in_progress", 0) == 0 else "执行中"
+        return {
+            "type": "task_update",
+            "thread_id": self.thread_id,
+            "trace_id": self.trace_id,
+            "current_stage": self._workflow_current_stage,
+            "todos": todos,
+            "summary": summary,
+            "status_hint": status_hint,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    def _build_workflow_task_update_frame(
+        self,
+        *,
+        completed_stage: str | None = None,
+        skipped_stage: str | None = None,
+        current_stage: str | None = None,
+        status_hint: str = "",
+    ) -> str | None:
+        if self._workflow_task_decision is None:
+            return None
+        payload = self._build_workflow_task_payload(
+            completed_stage=completed_stage,
+            skipped_stage=skipped_stage,
+            current_stage=current_stage,
+            status_hint=status_hint,
+        )
+        return encode_sse_event("task_update", payload, trace_id=self.trace_id)
+
+    def _current_workflow_todos_payload(self, *, status_hint: str = "") -> dict[str, Any]:
+        return self._build_workflow_task_payload(status_hint=status_hint)
+
+    def _complete_remaining_workflow_tasks(self, *, status_hint: str = "本轮回答已完成") -> str | None:
+        if self._workflow_task_decision is None:
+            return None
+        for stage in workflow_stage_sequence(self._workflow_task_decision):
+            self._workflow_completed_stages.add(stage)
+        self._workflow_current_stage = None
+        payload = self._build_workflow_task_payload(status_hint=status_hint)
+        return encode_sse_event("task_update", payload, trace_id=self.trace_id)
 
     def _build_ping_frame(self, stage: str) -> str:
         payload = {

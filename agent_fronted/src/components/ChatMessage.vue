@@ -70,7 +70,7 @@
         class="stream-status"
         :class="`stream-status--${props.message.streamState || 'idle'}`"
       >
-        {{ props.message.statusText }}
+        {{ visibleAssistantStatusText }}
       </div>
 
       <!-- 轻量图片预览 -->
@@ -1416,6 +1416,13 @@ const editHistoryItems = computed(() => {
 });
 const toolEvents = computed(() => Array.isArray(props.message?.toolEvents) ? props.message.toolEvents : []);
 const hasTaskSnapshot = computed(() => hasVisibleTaskSnapshot(props.message?.taskSnapshot));
+const visibleAssistantStatusText = computed(() => {
+  const state = String(props.message?.streamState || '');
+  if (['connecting', 'reasoning', 'streaming', 'tool_running'].includes(state)) {
+    return '思考中...';
+  }
+  return props.message?.statusText || '';
+});
 const currentWorkflowStage = computed(() => props.message?.currentWorkflowStage || null);
 const workflowStages = computed(() => {
   const stages = Array.isArray(props.message?.workflowStages) ? props.message.workflowStages : [];
@@ -3898,16 +3905,16 @@ const hasAssistantProcessDetails = computed(() => (
   hasAssistantDetails.value
 ));
 const shouldShowProcessDetails = computed(() => (
-  !hasFinalAnswerContent.value || assistantDetailsExpanded.value
+  false
 ));
 const shouldShowFinalProcessToggle = computed(() => (
-  !isUser.value && !hasDiagnosisResultCard.value && hasFinalAnswerContent.value && hasAssistantProcessDetails.value
+  false
 ));
 const shouldShowInlineAssistantDetailsToggle = computed(() => (
-  !hasDiagnosisResultCard.value && hasAssistantDetails.value && !hasFinalAnswerContent.value
+  false
 ));
 const shouldShowToolDetails = computed(() => (
-  !hasDiagnosisResultCard.value
+  false
 ));
 const finalProcessToggleHint = computed(() => {
   const sections = [];

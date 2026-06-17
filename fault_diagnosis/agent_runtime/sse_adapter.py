@@ -18,6 +18,7 @@ _TRACE_EVENT_NAMES = {
     "tool_end",
     "tool_progress",
     "tool_stream",
+    "task_update",
     "complete",
     "server_error",
 }

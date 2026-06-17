@@ -196,6 +196,70 @@
   position: relative;
 }
 
+.customer-service .workflow-task-sidebar {
+  width: 330px;
+  flex: 0 0 330px;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+}
+
+.customer-service .workflow-task-sidebar__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.customer-service .workflow-task-sidebar__eyebrow {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.customer-service .workflow-task-sidebar__title {
+  margin: 0.15rem 0 0;
+  font-size: 1.05rem;
+  line-height: 1.25;
+  color: #0f172a;
+}
+
+.customer-service .workflow-task-sidebar__badge {
+  flex-shrink: 0;
+  padding: 0.22rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.customer-service .workflow-task-sidebar .task-panel {
+  min-height: 0;
+  flex: 1;
+  box-shadow: none;
+}
+
+.customer-service .workflow-task-sidebar .task-panel__list {
+  max-height: none;
+}
+
+.customer-service .workflow-task-sidebar__empty {
+  margin-top: 0.9rem;
+  padding: 1rem;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  border-radius: 0.75rem;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
 .customer-service .task-panel {
   display: flex;
   flex-direction: column;
@@ -705,6 +769,24 @@
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
 }
 
+.dark .customer-service .workflow-task-sidebar {
+  background: rgba(40, 40, 40, 0.95);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+}
+
+.dark .customer-service .workflow-task-sidebar__eyebrow,
+.dark .customer-service .workflow-task-sidebar__empty {
+  color: #94a3b8;
+}
+
+.dark .customer-service .workflow-task-sidebar__title {
+  color: #e2e8f0;
+}
+
+.dark .customer-service .workflow-task-sidebar__empty {
+  border-color: rgba(148, 163, 184, 0.25);
+}
+
 .dark .customer-service .chat-main .scroll-to-latest {
   background: rgba(59, 130, 246, 0.92);
   color: #eff6ff;
@@ -1194,6 +1276,10 @@
     display: none;
   }
 
+  .customer-service .workflow-task-sidebar {
+    display: none;
+  }
+
   .customer-service .chat-main {
     border-radius: 0;
   }
@@ -1219,6 +1305,10 @@
 }
 
 @media (min-width: 769px) and (max-width: 1280px) {
+  .customer-service .workflow-task-sidebar {
+    display: none;
+  }
+
   .template-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
