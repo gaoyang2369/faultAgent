@@ -48,14 +48,14 @@ from .reporting import (
     build_analysis_evidence_summary,
     build_structured_analysis_artifact,
     build_report_payload,
-    build_workorder_suggestion,
     extract_report_filename,
     extract_report_url,
 )
-from .serialization import preview, stringify
+from .support.serialization import preview, stringify
 from .sql_safety import build_fallback_sql_query, build_sql_prompt, has_unknown_sql_table, is_readonly_sql
 from .sql_safety import build_fast_sql_plan
-from .tool_access import get_knowledge_tool, get_report_tool
+from .support.tool_access import get_knowledge_tool, get_report_tool
+from .workorder_suggestions import build_workorder_suggestion
 
 _log = get_logger("single_agent.stages")
 

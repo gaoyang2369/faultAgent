@@ -93,7 +93,6 @@ MODEL_NAME=your-model
 HOST=127.0.0.1
 MYSQL_USER=root
 MYSQL_PW=your_password
-DB_NAME=agent
 PORT=3306
 DCMA_DB_NAME=dcma
 

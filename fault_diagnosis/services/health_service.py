@@ -29,6 +29,7 @@ from ..config import (
     HAS_EXPLICIT_SESSION_SECRET,
     HAS_STABLE_SESSION_SECRET,
     HEALTHCHECK_TIMEOUT_SECONDS,
+    MYSQL_DATABASE,
     MYSQL_USER,
     OLLAMA_BASE_URL,
     SESSION_SECRET_FINGERPRINT,
@@ -91,7 +92,7 @@ async def _with_timeout(label: str, timeout_seconds: float, coro):
 
 
 async def _check_mysql(timeout_seconds: float, deep: bool) -> dict[str, Any]:
-    configured = bool(MYSQL_USER.strip()) and _configured("HOST", "MYSQL_PW", "DB_NAME", "PORT")
+    configured = bool(MYSQL_USER.strip() and MYSQL_DATABASE.strip()) and _configured("HOST", "MYSQL_PW", "PORT")
     if not configured:
         return _check_result("not_configured", configured=False)
     if not deep:
@@ -99,7 +100,7 @@ async def _check_mysql(timeout_seconds: float, deep: bool) -> dict[str, Any]:
             "available",
             configured=True,
             host=_mask_host(os.getenv("HOST")),
-            database=os.getenv("DB_NAME", ""),
+            database=MYSQL_DATABASE,
         )
 
     async def probe():
@@ -121,7 +122,7 @@ async def _check_mysql(timeout_seconds: float, deep: bool) -> dict[str, Any]:
             "available" if ok else "failed",
             configured=True,
             host=_mask_host(os.getenv("HOST")),
-            database=os.getenv("DB_NAME", ""),
+            database=MYSQL_DATABASE,
         )
 
     return await _with_timeout("MySQL 健康检查", timeout_seconds, probe())

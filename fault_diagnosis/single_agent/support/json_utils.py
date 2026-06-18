@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any
 
-from .errors import SingleAgentExecutionError
+from ..errors import SingleAgentExecutionError
 from .serialization import preview
 
 _JSON_BLOCK_RE = re.compile(r"```json\s*(.*?)```", re.DOTALL | re.IGNORECASE)

@@ -24,9 +24,9 @@ from .contracts import AgentTrace, SingleAgentLimits
 from .evidence import build_tool_evidence_preview
 from .errors import SingleAgentExecutionError
 from .flow import SingleAgentFlowMixin
-from .json_utils import build_json_repair_prompt, extract_json_text, loads_json_object
+from .support.json_utils import build_json_repair_prompt, extract_json_text, loads_json_object
 from .stages import SingleAgentStagesMixin
-from .serialization import preview, sanitize_for_json, stringify
+from .support.serialization import preview, sanitize_for_json, stringify
 from .workflow.todos import build_workflow_todos, summarize_workflow_todos, workflow_stage_sequence
 
 _log = get_logger("single_agent.runner")

@@ -28,7 +28,7 @@ fault_diagnosis/
   auth/                  session、管理员身份、thread 归属
   infrastructure/        CORS、lifespan、模型、静态资源、数据库池
   agent_runtime/         SSE 编码、流调度、取消控制、错误分类
-  single_agent/          单 agent 编排、阶段处理、prompt、策略与序列化 helper
+  single_agent/          单 agent 编排、阶段处理、workflow、输出、证据链
   diagnosis/             诊断域合同、step helper、artifact store
   tools/                 SQL、知识库、HTML 报告工具
   knowledge/             FAISS/Ollama 知识库与上传 PDF 知识库
@@ -37,6 +37,15 @@ fault_diagnosis/
   common/                日志、路径、编码、通用工具
   integrations/          OCR 等外部集成
 ```
+
+按企业分层归属：
+
+- 接口层：`api/`，只处理 HTTP/SSE 入参、响应和状态码。
+- 应用层：`services/`，编排用户用例，负责会话、权限、历史、停止流等应用动作。
+- Agent 层：`agent_runtime/` 和 `single_agent/`。前者是流式协议、取消、错误分类等运行时适配；后者是单 Agent 的业务编排、workflow policy、阶段实现、输出契约和证据链。
+- 诊断领域层：`diagnosis/`，保存请求、证据、artifact 等领域合同和 artifact store；这些不是 agent 私有实现，后续多入口也可以复用。
+- 能力与外部资源层：`tools/`、`knowledge/`、`integrations/`，分别承载工具封装、知识库索引/检索、OCR 等外部集成。
+- 基础设施层：`infrastructure/`、`repositories/`、`observability/`、`auth/`、`runtime/`、`common/`，分别承载启动、持久化、trace、身份、运行态兼容和通用能力。
 
 ## 请求链路
 
@@ -77,8 +86,12 @@ SQL 阶段只允许访问 `real_data_01`、`real_data_02`、`real_data_03`、`de
 - `runner.py`：对外入口、运行状态、模型调用、工具调用白名单与错误封装。
 - `flow.py`：SSE 状态机与阶段编排顺序。
 - `stages.py`：understand、SQL、knowledge、analysis、report、final answer 阶段实现。
+- `workflow/`：任务分类、workflow policy、节点开关和任务清单。
+- `output/`：`complete` 事件与前端兼容输出字段构建，后续输出模板优先从这里扩展。
+- `evidence/`：EvidenceBundle 门面、SQL/知识库来源证据、Claim 和质量校验。
+- `support/`：序列化、JSON 修复、工具懒加载等 agent 内部支撑能力。
+- `workorder_suggestions.py`：把诊断产物转换为工单草稿建议，`reporting.py` 仅保留兼容入口。
 - `intent.py`、`sql_safety.py`、`reporting.py`、`artifacts.py`：可单测的业务 helper。
-- `serialization.py`、`json_utils.py`、`tool_access.py`：通用序列化、JSON 修复与工具懒加载。
 
 ## 诊断产物
 
@@ -134,5 +147,5 @@ start -> ping* -> tool_start/tool_end* -> token -> complete
 1. 新 HTTP 能力放在 `api/`，用例编排放在 `services/`。
 2. 新持久化能力放在 `repositories/`，不要在路由里直接写文件。
 3. 新单 agent 工具必须显式加入 `RestrictedSingleAgentRunner` 的白名单和对应阶段。
-4. 修改诊断流程顺序优先改 `single_agent/flow.py`，修改单个阶段优先改 `single_agent/stages.py`，不要把阶段细节重新塞回 `runner.py`。
+4. 修改诊断流程顺序优先改 `single_agent/flow.py`，修改单个阶段优先改 `single_agent/stages.py`，修改最终输出字段优先改 `single_agent/output/`，不要把阶段细节重新塞回 `runner.py`。
 5. 外部依赖健康检查只保留当前运行链路会使用的依赖。

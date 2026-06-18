@@ -9,32 +9,12 @@ from ..services.chat_service import (
     AgentChatPayload,
     ChatService,
     StopStreamPayload,
-    build_visual_action_from_stream_event,
-    history_message_content,
-    history_message_role,
-    parse_sse_payloads,
-    summarize_session_id,
-    summarize_thread_id,
-    to_langchain_history_message,
-    to_langchain_history_messages,
-    truncate_history_before_user_turn,
 )
 from ..agent_runtime.streaming import token_stream_events
 from ._shared import json_response_with_scope
 
 router = APIRouter()
 _log = get_logger("api.chat")
-
-_summarize_session_id = summarize_session_id
-_summarize_thread_id = summarize_thread_id
-_parse_sse_payloads = parse_sse_payloads
-_build_visual_action_from_stream_event = build_visual_action_from_stream_event
-_history_message_role = history_message_role
-_history_message_content = history_message_content
-_truncate_history_before_user_turn = truncate_history_before_user_turn
-_to_langchain_history_message = to_langchain_history_message
-_to_langchain_history_messages = to_langchain_history_messages
-
 
 def _chat_service() -> ChatService:
     return ChatService(stream_events=token_stream_events, logger=_log)

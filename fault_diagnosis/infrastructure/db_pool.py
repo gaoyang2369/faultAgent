@@ -8,7 +8,7 @@
 import os
 import aiomysql
 from dotenv import load_dotenv
-from ..config import MYSQL_USER
+from ..config import MYSQL_DATABASE, MYSQL_USER
 from ..common.logger import get_logger
 
 _log = get_logger("db_pool")
@@ -34,7 +34,7 @@ async def init_pool() -> aiomysql.Pool:
 
     load_dotenv(override=False)
     host = os.getenv("HOST", "localhost")
-    db_name = os.getenv("DB_NAME", "")
+    db_name = MYSQL_DATABASE
     _pool = await aiomysql.create_pool(
         host=host,
         user=MYSQL_USER,

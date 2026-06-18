@@ -116,7 +116,12 @@ KB_EMBED_CACHE_PATH = os.getenv(
 HEALTHCHECK_TIMEOUT_SECONDS = float(os.getenv("HEALTHCHECK_TIMEOUT_SECONDS", "5"))
 
 # === Database ===
-DCMA_DB_NAME = os.getenv("DCMA_DB_NAME", "dcma")
+MYSQL_DATABASE = (
+    os.getenv("DCMA_DB_NAME", "").strip()
+    or os.getenv("DB_NAME", "").strip()
+    or "dcma"
+)
+DCMA_DB_NAME = MYSQL_DATABASE
 MYSQL_USER = (
     os.getenv("MYSQL_USER", "").strip()
     or _project_dotenv_value("USER")

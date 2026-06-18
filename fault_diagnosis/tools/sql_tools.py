@@ -17,14 +17,14 @@ def _get_db():
         from dotenv import load_dotenv
         from langchain_community.utilities import SQLDatabase
 
-        from ..config import DCMA_DB_NAME, MYSQL_USER
+        from ..config import MYSQL_DATABASE, MYSQL_USER
 
         load_dotenv(override=False)
         host = os.getenv("HOST")
         mysql_pw = os.getenv("MYSQL_PW")
         port = os.getenv("PORT")
         _db = SQLDatabase.from_uri(
-            f"mysql+pymysql://{MYSQL_USER}:{mysql_pw}@{host}:{port}/{DCMA_DB_NAME}"
+            f"mysql+pymysql://{MYSQL_USER}:{mysql_pw}@{host}:{port}/{MYSQL_DATABASE}"
         )
     return _db
 

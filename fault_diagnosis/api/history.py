@@ -7,32 +7,14 @@ from fastapi import APIRouter, HTTPException, Request
 from ..common.logger import get_logger
 from ..services.history_service import (
     HistoryService,
-    build_history_page_payload,
-    empty_todos_payload,
-    filter_todos_by_status,
-    history_title,
     parse_history_cursor,
     parse_history_limit,
-    summarize_session_id,
-    summarize_thread_id,
-    summarize_todos,
 )
 from ..auth.session_scope import resolve_request_scope
 from ._shared import json_response_with_scope
 
 router = APIRouter()
 _log = get_logger("api.history")
-
-_summarize_session_id = summarize_session_id
-_summarize_thread_id = summarize_thread_id
-_history_title = history_title
-_parse_history_limit = parse_history_limit
-_parse_history_cursor = parse_history_cursor
-_build_history_page_payload = build_history_page_payload
-_empty_todos_payload = empty_todos_payload
-_summarize_todos = summarize_todos
-_filter_todos_by_status = filter_todos_by_status
-
 
 def _history_service(request: Request) -> HistoryService:
     session_manager, session_id, _, legacy_bindings = resolve_request_scope(request)

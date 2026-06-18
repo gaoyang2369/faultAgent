@@ -9,11 +9,14 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator
 from ..agent_runtime.sse_adapter import encode_sse_event
 from ..common.logger import get_logger
 from ..diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
-from ..runtime.diagnosis_contract_adapter import build_diagnosis_contract_payload
 from .contracts import SingleAgentDecision
 from .evidence import build_evidence_bundle, build_output_guardrail_result, initialize_evidence_bundle
 from .intent import build_lightweight_conversation_reply
-from .reporting import extract_report_url
+from .output.payloads import (
+    build_diagnosis_complete_payload,
+    build_direct_complete_payload,
+    build_report_handoff_complete_payload,
+)
 from .workflow.nodes import (
     build_audit_log_result,
     build_permission_check_result,
@@ -108,21 +111,15 @@ class SingleAgentFlowMixin:
                 )
                 yield encode_sse_event(
                     "complete",
-                    {
-                        "type": "chat_complete",
-                        "thread_id": self.thread_id,
-                        "trace_id": self.trace_id,
-                        "request_id": self.request_id,
-                        "runtime": "restricted_single_agent",
-                        "final_content": direct_answer,
-                        "report_filename": None,
-                        "report_url": None,
-                        "decision": decision.model_dump(),
-                        "trace": self.trace.model_dump(exclude_none=True),
-                        "todos": [],
-                        "event_count": event_count,
-                        "timestamp": datetime.now().isoformat(),
-                    },
+                    build_direct_complete_payload(
+                        thread_id=self.thread_id,
+                        trace_id=self.trace_id,
+                        request_id=self.request_id,
+                        final_answer=direct_answer,
+                        decision=decision,
+                        trace=self.trace,
+                        event_count=event_count,
+                    ),
                     trace_id=self.trace_id,
                 )
                 _log.info(
@@ -276,27 +273,17 @@ class SingleAgentFlowMixin:
                 token_count += 1
                 yield encode_sse_event(
                     "complete",
-                    {
-                        "type": "chat_complete",
-                        "thread_id": self.thread_id,
-                        "trace_id": self.trace_id,
-                        "request_id": self.request_id,
-                        "runtime": "restricted_single_agent",
-                        "final_content": final_answer,
-                        "report_filename": report_artifact.report_filename,
-                        "report_url": extract_report_url(report_artifact.save_result),
-                        "decision": decision.model_dump(),
-                        "todos": self._current_workflow_todos_payload(status_hint="本轮回答已完成").get("todos", []),
-                        "workflow_route": {
-                            "primary_task_type": decision.primary_task_type,
-                            "subgoals": decision.subgoals,
-                            "missing_slots": decision.missing_slots,
-                        },
-                        "workflow_policy": decision.workflow_policy,
-                        "trace": self.trace.model_dump(exclude_none=True),
-                        "event_count": event_count,
-                        "timestamp": datetime.now().isoformat(),
-                    },
+                    build_report_handoff_complete_payload(
+                        thread_id=self.thread_id,
+                        trace_id=self.trace_id,
+                        request_id=self.request_id,
+                        final_answer=final_answer,
+                        report_artifact=report_artifact,
+                        decision=decision,
+                        todos=self._current_workflow_todos_payload(status_hint="本轮回答已完成").get("todos", []),
+                        trace=self.trace,
+                        event_count=event_count,
+                    ),
                     trace_id=self.trace_id,
                 )
                 _log.info(
@@ -575,7 +562,6 @@ class SingleAgentFlowMixin:
                     "audit_log": audit_log_result,
                 },
             )
-            diagnosis_contract_payload = build_diagnosis_contract_payload(saved_envelope)
             self._finish_stage("save_artifact", stage_started, message="诊断产物与证据链已保存")
             task_frame = self._build_workflow_task_update_frame(
                 completed_stage="save_artifact",
@@ -606,47 +592,28 @@ class SingleAgentFlowMixin:
                 },
             )
 
-            complete_payload = {
-                "type": "chat_complete",
-                "thread_id": self.thread_id,
-                "trace_id": self.trace_id,
-                "request_id": self.request_id,
-                "runtime": "restricted_single_agent",
-                "final_content": final_answer,
-                "report_filename": report_artifact.report_filename,
-                "report_url": extract_report_url(report_artifact.save_result),
-                "decision": decision.model_dump(),
-                "sql_artifact": sql_artifact.model_dump(exclude_none=True),
-                "knowledge_artifact": knowledge_artifact.model_dump(exclude_none=True),
-                "analysis_artifact": analysis_artifact.model_dump(exclude_none=True),
-                "permission_check": permission_check_result,
-                "risk_check": risk_check_result,
-                "resolution_recommendation": resolution_recommendation,
-                "audit_log": audit_log_result,
-                "workorder_decision": workorder_suggestion.model_dump(exclude_none=True),
-                "report_artifact": report_artifact.model_dump(exclude_none=True),
-                "evidence_bundle": self.evidence_bundle.model_dump(exclude_none=True) if self.evidence_bundle else None,
-                "output_guardrail": self.output_guardrail_result or {},
-                "workflow_route": {
-                    "primary_task_type": decision.primary_task_type,
-                    "route_confidence": decision.route_confidence,
-                    "objects": decision.objects,
-                    "time_window": decision.time_window,
-                    "subgoals": decision.subgoals,
-                    "missing_slots": decision.missing_slots,
-                    "risk_level": decision.risk_level,
-                    "requested_output": decision.requested_output,
-                },
-                "workflow_policy": decision.workflow_policy,
-                "todos": self._current_workflow_todos_payload(status_hint="本轮回答已完成").get("todos", []),
-                "artifact": saved_envelope.model_dump(exclude_none=True),
-                "trace": self.trace.model_dump(exclude_none=True),
-                "event_count": event_count,
-                "timestamp": datetime.now().isoformat(),
-            }
-            for key, value in diagnosis_contract_payload.items():
-                if key not in complete_payload or complete_payload.get(key) in (None, [], {}):
-                    complete_payload[key] = value
+            complete_payload = build_diagnosis_complete_payload(
+                thread_id=self.thread_id,
+                trace_id=self.trace_id,
+                request_id=self.request_id,
+                final_answer=final_answer,
+                decision=decision,
+                sql_artifact=sql_artifact,
+                knowledge_artifact=knowledge_artifact,
+                analysis_artifact=analysis_artifact,
+                permission_check_result=permission_check_result,
+                risk_check_result=risk_check_result,
+                resolution_recommendation=resolution_recommendation,
+                audit_log_result=audit_log_result,
+                workorder_suggestion=workorder_suggestion,
+                report_artifact=report_artifact,
+                evidence_bundle=self.evidence_bundle,
+                output_guardrail=self.output_guardrail_result or {},
+                saved_envelope=saved_envelope,
+                trace=self.trace,
+                todos=self._current_workflow_todos_payload(status_hint="本轮回答已完成").get("todos", []),
+                event_count=event_count,
+            )
 
             yield encode_sse_event(
                 "complete",
