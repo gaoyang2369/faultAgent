@@ -27,7 +27,7 @@
 当前缺口：
 
 - 传入 Agent 的身份只是 `"游客"` / `"管理员"` 字符串，不足以表达设备范围、知识库范围、数据权限。
-- workflow 入口没有真正的 RBAC/ABAC 授权。游客也可能进入实时状态查询类流程。
+- workflow 入口没有真正的 RBAC/ABAC 授权，无法区分“游客可做受限数据查询”和“工程师可做故障诊断”。
 - 工具调用只检查工具名是否在白名单内，没有结合用户角色和资源范围。
 - SQL 只做全局表白名单和只读校验，没有设备级、字段级、时间窗口级 ACL。
 - RAG 检索没有按文档可见性、角色、设备/系统范围过滤。
@@ -76,9 +76,9 @@
 
 | 角色 | role | 能力范围 |
 | --- | --- | --- |
-| 游客 | `guest` | 只能问公开知识库、能力说明、普通故障码含义。不能查实时设备数据，不能生成包含设备数据的报告。 |
-| 维修工程师 | `engineer` | 可查询自己负责设备/系统的数据，可做诊断、告警分诊、健康评估，可生成授权范围内报告和工单草稿。 |
-| 管理员 | `admin` | 全局读权限、PDF/RAG 管理权限、审计查看权限。写操作仍不直接执行，只允许草稿或审批提示。 |
+| 游客 | `guest` | 可查询公开故障码及公开处理意见；可查询、聚合和可视化 `real_data_01` 最近 1 小时数据；不能做故障诊断、根因分析、健康评估、工单生成或诊断报告。 |
+| 维修工程师 | `engineer` | 继承游客能力；可对自己负责的设备和数据表做故障诊断、告警分诊、健康评估，并生成未派发工单和诊断报告。 |
+| 管理员 | `admin` | 继承工程师能力；可查询所有授权业务表和所有设备，并管理 PDF 文档/知识库、查看审计信息。设备控制、告警关闭和工单派发仍需独立审批。 |
 
 角色不要直接散落在业务代码里，应集中定义权限码。
 
@@ -97,7 +97,10 @@ workflow.action_request
 tool.sql.read
 tool.kb.search
 tool.report.write_draft
-tool.workorder.write_draft
+tool.workorder.create
+tool.workorder.dispatch
+
+output.chart.generate
 
 data.runtime.read
 data.runtime.read_all
@@ -119,17 +122,24 @@ admin.audit.read
 | 权限 | guest | engineer | admin |
 | --- | --- | --- | --- |
 | `workflow.knowledge_qa` | 是 | 是 | 是 |
-| `workflow.status_query` | 否 | 是，限授权设备 | 是 |
-| `workflow.alarm_triage` | 降级为知识解释 | 是，限授权设备 | 是 |
-| `workflow.fault_diagnosis` | 否 | 是，限授权设备 | 是 |
-| `workflow.root_cause_analysis` | 否 | 是，限授权设备 | 是 |
-| `workflow.health_assessment` | 否 | 是，限授权设备 | 是 |
-| `workflow.report_generation` | 否 | 是，限授权设备 | 是 |
-| `workflow.action_request` | 否 | 只生成草稿/审批提示 | 只生成草稿/审批提示 |
-| `tool.sql.read` | 否 | 是，限授权设备 | 是 |
+| `workflow.status_query` | 是，仅 `real_data_01` 最近 1 小时 | 是，限负责设备/数据表 | 是 |
+| `workflow.alarm_triage` | 是，公开故障码、处理意见和最近状态 | 是，限负责设备/数据表 | 是 |
+| `workflow.fault_diagnosis` | 否 | 是，限负责设备/数据表 | 是 |
+| `workflow.root_cause_analysis` | 否 | 是，限负责设备/数据表 | 是 |
+| `workflow.health_assessment` | 否 | 是，限负责设备/数据表 | 是 |
+| `workflow.report_generation` | 否 | 是，限负责设备/数据表 | 是 |
+| `workflow.action_request` | 否 | 可为负责设备生成未派发工单；其他动作仅审批提示 | 可生成未派发工单；其他动作仅审批提示 |
+| `tool.sql.read` | 是，仅 `real_data_01` 最近 1 小时 | 是，限负责设备/数据表 | 是 |
 | `tool.kb.search` | 公开知识 | 公开 + 内部知识 | 全部知识 |
-| `tool.report.write_draft` | 否 | 是，限授权设备 | 是 |
+| `tool.report.write_draft` | 否 | 是，限负责设备/数据表 | 是 |
+| `tool.workorder.create` | 否 | 是，限负责设备 | 是 |
+| `tool.workorder.dispatch` | 否 | 否 | 否，第一版仍需独立审批 |
+| `output.chart.generate` | 是，基于已授权查询结果 | 是 | 是 |
 | `admin.pdf.manage` | 否 | 否 | 是 |
+
+游客的“可视化数据”属于 `status_query` 的一种输出形式，不等于 `report_generation`。第一版可使用 `requested_output=chart` 或 `flags.need_visualization=true` 表达，无需增加新的一级任务类型。
+
+`permissions.py` 应给游客生成固定的有效数据范围 `allowed_tables=["real_data_01"]` 和 `max_lookback_hours=1`。该范围来自服务端角色策略，不要求游客账号持久化 `table_scope`。
 
 ---
 
@@ -158,6 +168,7 @@ class AuthContext(BaseModel):
     role: Literal["guest", "engineer", "admin"] = "guest"
     permissions: set[str] = Field(default_factory=set)
     asset_scope: list[str] = Field(default_factory=list)
+    table_scope: list[str] = Field(default_factory=list)
     system_scope: list[str] = Field(default_factory=list)
     location_scope: list[str] = Field(default_factory=list)
     kb_scopes: list[str] = Field(default_factory=list)
@@ -189,10 +200,12 @@ class AuthorizationDecision(BaseModel):
 ```python
 class ResourceScope(BaseModel):
     asset_ids: list[str] = Field(default_factory=list)
+    allowed_tables: list[str] = Field(default_factory=list)
     systems: list[str] = Field(default_factory=list)
     locations: list[str] = Field(default_factory=list)
     max_rows: int = 50
     max_time_window_days: int = 7
+    max_lookback_hours: int | None = None
     allowed_kb_visibility: list[str] = Field(default_factory=list)
 ```
 
@@ -227,6 +240,7 @@ trash/run/users.json
     "password_hash": "...",
     "role": "engineer",
     "asset_scope": ["J1号机", "pump_001"],
+    "table_scope": ["real_data_01", "device_alarm", "device_metric"],
     "system_scope": ["DCMA_LINE_1"],
     "display_name": "维修工程师01"
   }
@@ -248,6 +262,7 @@ trash/run/users.json
   "is_admin": false,
   "permissions": ["workflow.status_query", "tool.sql.read"],
   "asset_scope": ["J1号机"],
+  "table_scope": ["real_data_01", "device_alarm", "device_metric"],
   "system_scope": ["DCMA_LINE_1"],
   "auth_method": "password"
 }
@@ -306,9 +321,11 @@ def authorize_workflow(
 基本规则：
 
 - 没有 workflow 权限：`deny`。
-- 可以回答部分内容但不能查实时数据：`degrade`。
-- 缺少设备范围或请求设备超范围：`deny` 或 `clarify`。
-- `action_request`：所有角色都禁止直接执行，只允许草稿/审批提示。工程师和管理员可以进入受限动作 workflow，游客拒绝。
+- 可以执行受限查询但不能做故障诊断时：`degrade`，把诊断请求降级为状态查询 + 公开知识回答。
+- 工程师缺少设备/数据表范围，或请求资源超出其范围：`deny` 或 `clarify`。
+- 游客 `status_query`：允许，但 SQL 必须被限制为 `real_data_01` 最近 1 小时。
+- 游客 `alarm_triage`：允许公开故障码、公开处理意见和 `real_data_01` 最近 1 小时状态查询，但不能输出故障诊断结论。
+- `action_request`：工程师和管理员可为授权设备生成状态为 draft/pending 的未派发工单；设备控制、配置修改、告警关闭和工单派发仍只返回审批提示。游客拒绝。
 
 ### 降级示例
 
@@ -320,25 +337,40 @@ E102 是什么意思？现在 pump_001 还故障吗？
 
 期望处理：
 
-- `knowledge` 节点允许，仅查公开知识。
-- `sql` 节点拒绝。
-- 实时状态相关 subgoal 标记 blocked。
-- 最终回答说明：可以解释故障码，但当前身份不能查询 pump_001 实时状态。
+- `knowledge` 节点允许，仅查公开故障码和公开处理意见。
+- `sql` 节点允许，但只能查询 `real_data_01` 且强制限制最近 1 小时。
+- 可以回答当前状态、故障码是否出现、指标值及时间，但不能推断根因或形成故障诊断结论。
+- 可根据已授权查询结果输出简单表格或图表。
 
-### 拒绝示例
+### 查询与可视化示例
 
 游客问：
 
 ```text
-J1号机当前运行状态怎么样？
+把 J1号机最近一小时的电流变化画出来
 ```
 
 期望处理：
 
-- 不调用 SQL。
-- 不泄露任何设备数据。
-- 返回权限说明和登录提示。
-- complete payload 中包含 `authorization.allowed=false`。
+- 允许进入 `status_query`。
+- SQL 只能访问 `real_data_01`，自动添加最近 1 小时时间条件和 `LIMIT`。
+- 结果只能用于数据展示、统计摘要和可视化，不能输出故障原因判断。
+- 不调用 `save_report`，图表属于普通查询输出而不是诊断报告。
+
+### 诊断降级示例
+
+游客问：
+
+```text
+诊断一下 J1号机为什么过热，并生成维修方案
+```
+
+期望处理：
+
+- 不允许执行 `fault_diagnosis`、`root_cause_analysis` 或报告生成。
+- 可以降级为查询 `real_data_01` 最近 1 小时温度数据，并检索公开过热处理意见。
+- 最终回答必须明确“当前身份只能提供数据现状和公开处理建议，不能给出故障诊断结论”。
+- complete payload 中包含 `authorization.mode=degrade` 和被禁用的诊断节点。
 
 ### 修改点
 
@@ -408,6 +440,8 @@ def authorize_tool_call(
 | `query_knowledge_base` | `tool.kb.search` |
 | `save_report` | `tool.report.write_draft` |
 
+数据可视化如果只是前端消费查询结果生成 chart payload，可以使用 `output.chart.generate` 控制，不必调用 `save_report`。如果后续增加独立图表工具，再为该工具映射同一权限。
+
 执行原则：
 
 - 先检查工具名白名单。
@@ -424,6 +458,33 @@ def authorize_tool_call(
 
 - `fault_diagnosis/single_agent/stages.py`
   - SQL、knowledge、report 阶段在调用工具前可以先检查 authorization，便于生成 skipped artifact。
+
+### 工单创建边界
+
+当前工单通过 `/api/workorders` 创建，不是单 Agent 硬白名单中的 LangChain 工具，因此不能只改 `_invoke_restricted_tool()`。HTTP 接口也必须执行相同权限策略。
+
+修改点：
+
+- `fault_diagnosis/api/workorders.py`
+  - `POST /api/workorders`：游客返回 403；工程师只能为 `asset_scope` 内设备创建；管理员可为任意设备创建。
+  - `GET /api/workorders` 和详情接口：工程师只能查看负责设备/自己创建的工单；管理员可查看全部。
+  - `POST /api/workorders/update`：第一版禁止通过普通更新接口把工单变成已派发/执行中，派发需要后续独立审批权限。
+
+- `fault_diagnosis/services/workorder_service.py`
+  - service 方法增加 `auth_context`，不能只在 API 路由校验。
+  - 创建时强制初始状态为 `待派单` 或 `draft`，忽略前端伪造的已派发状态。
+  - 校验 `equipment_object` 属于工程师 `asset_scope`。
+  - 保存 `created_by`、`created_by_role`、`authorized_asset_scope` 和来源 trace。
+
+- `fault_diagnosis/repositories/workorder_repository.py`
+  - 列表和详情查询支持按 `created_by`、设备范围过滤。
+
+验收要求：
+
+- 游客不能直接调用 HTTP API 绕过 Agent 创建工单。
+- 工程师不能为非负责设备创建或查看工单。
+- 工程师生成工单后状态为未派发。
+- 管理员可以查询所有工单，但第一版仍不能绕过审批直接派发。
 
 ---
 
@@ -457,12 +518,23 @@ class SqlAclResult(BaseModel):
 
 第一版规则：
 
-1. 管理员
-   - 仍必须满足只读、表白名单、LIMIT。
-   - 不强制设备过滤。
+1. 游客
+   - 允许执行运行数据查询，但只允许访问 `real_data_01`。
+   - 强制添加最近 1 小时条件：
+
+```sql
+create_time >= NOW() - INTERVAL 1 HOUR
+```
+
+   - 不允许访问 `real_data_02`、`real_data_03`、`device_alarm`、`device_metric`、`device_fault_data`、`fault_records`。
+   - 允许按设备名称、指标、状态、故障码进行筛选、聚合和排序。
+   - 允许基于结果生成表格、统计摘要和图表。
+   - 限制最大 `LIMIT 50`，禁止无界查询。
+   - SQL 结果只能用于状态查询和数据展示，不能据此生成故障诊断、根因判断、健康评分、工单或诊断报告。
 
 2. 工程师
    - 必须有 `asset_scope` 或 `system_scope`。
+   - 必须有 `table_scope`，查询表必须同时属于系统全局表白名单和该工程师的 `table_scope`。
    - 查询设备必须在授权范围内。
    - 如果 SQL 没有设备条件，自动注入：
 
@@ -473,9 +545,12 @@ class SqlAclResult(BaseModel):
    - 禁止 `WHERE 1=1` 全局查询。
    - 限制最大 `LIMIT 50`。
    - 默认最大时间窗口 7 天。
+   - 诊断、工单草稿和报告中的全部数据都必须来自该工程师的 `asset_scope + table_scope` 交集。
 
-3. 游客
-   - 不允许执行运行数据 SQL。
+3. 管理员
+   - 可以访问当前系统 `ALLOWED_SQL_TABLES` 中的全部表和全部设备。
+   - 不强制设备过滤。
+   - 仍必须满足只读、表白名单、时间范围和 `LIMIT` 等基础安全限制。
 
 4. 所有角色
    - 继续执行现有 `is_readonly_sql()` 和 `has_unknown_sql_table()`。
@@ -487,6 +562,8 @@ class SqlAclResult(BaseModel):
 - 后续如果 SQL 复杂度增加，改用 `sqlglot` 这类 SQL AST 工具做解析和重写。
 - SQL ACL 必须在 `sql_db_query` 真正执行前运行。
 - checker 返回修正 SQL 后，还要再次执行 SQL ACL。
+- 权限约束必须由后端重写或校验，不能只在 SQL prompt 中提示模型。
+- 如果游客请求超出最近 1 小时，应该缩窄到最近 1 小时并披露限制；如果请求其他表，直接拒绝或提示登录工程师账号。
 
 修改点：
 
@@ -494,6 +571,7 @@ class SqlAclResult(BaseModel):
   - `stream_sql_step()` 在生成 SQL 后调用 `apply_sql_acl()`。
   - checker 后再次调用 `apply_sql_acl()`。
   - ACL 拒绝时生成 `SqlStepArtifact(success=False, error=...)`，不调用 SQL 工具。
+  - 游客查询成功后，将授权用途标记为 `status_or_visualization_only`，供 analysis/output guardrail 使用。
 
 - `fault_diagnosis/single_agent/sql_safety.py`
   - 保留表白名单、只读校验、fallback 查询。
@@ -595,7 +673,9 @@ query_knowledge_base_with_acl(query: str, auth: AuthContext, decision: SingleAge
     "visibility": "internal",
     "access_scope": {
       "role": "engineer",
-      "asset_scope": ["J1号机"]
+      "asset_scope": ["J1号机"],
+      "table_scope": ["real_data_01"],
+      "authorized_purpose": "diagnosis"
     }
   }
 }
@@ -616,6 +696,9 @@ no_unauthorized_evidence_refs
 no_denied_tool_content_in_answer
 report_uses_authorized_evidence_only
 permission_denial_disclosed
+guest_uses_real_data_01_only
+guest_uses_last_one_hour_only
+guest_has_no_diagnosis_claims
 ```
 
 最终回答和报告要求：
@@ -623,7 +706,8 @@ permission_denial_disclosed
 - 不能出现未授权 SQL 原始结果。
 - 不能出现未授权知识库片段。
 - 不能把“权限不足”包装成“没有故障”。
-- 对降级回答必须明示限制，例如“当前身份不能查询实时运行数据”。
+- 游客回答可以展示最近 1 小时状态、指标、故障码、统计值和图表，但不能出现根因、故障模式、健康评分或诊断结论。
+- 对降级回答必须明示限制，例如“当前身份可查看最近一小时数据和公开处理意见，但不能进行故障诊断”。
 
 ### artifact 保存
 
@@ -634,7 +718,8 @@ permission_denial_disclosed
   "auth": {
     "user_id": "engineer_01",
     "role": "engineer",
-    "asset_scope": ["J1号机"]
+    "asset_scope": ["J1号机"],
+    "table_scope": ["real_data_01", "device_alarm"]
   },
   "authorization": {
     "mode": "allow",
@@ -645,6 +730,15 @@ permission_denial_disclosed
 ```
 
 注意不要保存密码、cookie、完整 token。
+
+### 报告访问控制
+
+工程师只能生成和查看自己负责设备/数据表范围内的报告，管理员可以查看全部报告。当前 `/reports/*.html` 是静态访问路径，如果继续公开挂载，知道 URL 的用户可能绕过角色校验。因此实现报告权限时至少选择一种方案：
+
+- 推荐：报告写入私有目录，通过 `/api/reports/{report_id}` 校验 `AuthContext` 后返回。
+- 兼容方案：保留静态报告，但使用短时签名 URL，并在过期后失效。
+
+游客普通图表不写入诊断报告目录，直接作为本轮授权查询结果的 chart payload 返回。
 
 ---
 
@@ -665,9 +759,15 @@ permission_denial_disclosed
   "authorization": {
     "allowed": true,
     "mode": "degrade",
-    "reason": "当前身份不能查询实时设备数据，已降级为知识库回答。",
+    "reason": "当前身份可查询 real_data_01 最近一小时数据和公开处理意见，但不能进行故障诊断。",
     "denied_nodes": {
-      "sql": "missing_tool_permission"
+      "fault_diagnosis": "missing_workflow_permission",
+      "report": "missing_report_permission"
+    },
+    "data_scope": {
+      "allowed_tables": ["real_data_01"],
+      "max_lookback_hours": 1,
+      "authorized_purpose": "status_or_visualization_only"
     }
   }
 }
@@ -678,6 +778,7 @@ permission_denial_disclosed
 - 权限拒绝不显示为系统错误。
 - 权限降级显示为普通提示。
 - 工作流任务清单中，被权限拒绝的阶段标记 skipped/blocked。
+- 游客数据查询可正常展示表格或图表，不应因为没有报告权限而隐藏可视化结果。
 
 ---
 
@@ -706,11 +807,12 @@ permission_denial_disclosed
 - 新增 `security/policy_engine.py`。
 - `flow.py` 加 `access_authorization` 阶段。
 - `SingleAgentDecision` 增加 authorization 字段。
-- guest 对实时查询被拒绝或降级。
+- guest 允许受限状态查询和可视化；故障诊断请求降级为状态查询 + 公开知识。
 
 验收：
 
-- 游客问实时设备状态，不触发 SQL tool_start。
+- 游客问设备状态或指标变化，可以触发 SQL，但 SQL 只能访问 `real_data_01` 最近 1 小时。
+- 游客请求故障诊断时，不执行诊断节点，只返回受限数据现状和公开处理意见。
 - 游客问公开故障码含义，可以走知识库。
 - 工程师问授权设备状态，可以进入 SQL。
 - 工程师问非授权设备，拒绝或要求切换授权范围。
@@ -721,11 +823,16 @@ permission_denial_disclosed
 
 - 新增 `security/tool_gateway.py`。
 - `_invoke_restricted_tool()` 前增加工具级授权。
+- `api/workorders.py` 和 `WorkOrderService` 接入同一 `AuthContext`/策略引擎。
 - 拒绝结果进入 trace 和 complete payload。
 
 验收：
 
-- 即使误把 `sql` 节点打开，游客仍不能执行 `sql_db_query`。
+- 游客可以执行符合 `real_data_01 + 最近 1 小时` 约束的 `sql_db_query`。
+- 游客不能执行 `save_report` 或工单工具。
+- 游客不能通过 `/api/workorders` 绕过 Agent 创建工单。
+- 工程师只能为负责设备创建未派发工单。
+- 即使 workflow 误开放其他数据表，工具网关/SQL ACL 仍会拒绝。
 - 未授权工具不会产生真实工具输出。
 
 ### 阶段 4：SQL ACL
@@ -734,11 +841,16 @@ permission_denial_disclosed
 
 - 新增 `security/sql_acl.py`。
 - `stream_sql_step()` 在执行 SQL 前应用 ACL。
+- 游客 SQL 强制限制为 `real_data_01` 最近 1 小时。
 - 工程师 SQL 自动注入设备范围或拒绝。
 
 验收：
 
+- 游客可以查询和可视化 `real_data_01` 最近 1 小时数据。
+- 游客查询 `real_data_02` 或超过 1 小时时间范围时，被拒绝或自动缩窄并披露限制。
+- 游客 SQL 结果不能进入故障诊断、工单或诊断报告生成。
 - 工程师只能查 `asset_scope` 中设备。
+- 工程师只能查 `table_scope` 中数据表。
 - 无设备范围的工程师不能全表查最近 50 条。
 - 管理员仍能查全局，但仍受只读、表白名单、LIMIT 限制。
 
@@ -783,17 +895,27 @@ tests/test_tool_gateway.py
 tests/test_sql_acl.py
 tests/test_rag_acl.py
 tests/test_agent_authorization_flow.py
+tests/test_workorder_authorization.py
+tests/test_report_authorization.py
 ```
 
 必须覆盖：
 
 - `guest` 默认权限生成。
 - `admin` 兼容旧管理员 cookie。
-- `engineer` 带设备范围。
+- `engineer` 带设备范围和数据表范围。
 - workflow 授权 allow/degrade/deny。
 - `action_request` 不直接执行写操作。
-- 工具网关拒绝游客 SQL。
+- 游客 SQL 仅允许 `real_data_01`。
+- 游客 SQL 强制最近 1 小时条件。
+- 游客可以基于授权结果生成图表。
+- 游客不能生成诊断结论、工单或诊断报告。
+- 游客直接调用 `/api/workorders` 仍被拒绝。
+- 工程师只能为 `asset_scope` 内设备创建未派发工单。
+- 工程师不能读取其他设备的工单和报告。
+- 管理员可以读取全部工单和报告并管理 PDF。
 - SQL ACL 注入设备过滤。
+- SQL ACL 校验工程师数据表范围。
 - SQL ACL 拒绝越权设备。
 - RAG ACL 过滤 internal/restricted 文档。
 - complete payload 包含 authorization。
@@ -837,10 +959,11 @@ npm run build
 ```text
 1. AuthContext
 2. workflow 入口授权
-3. 工具网关拒绝游客 SQL/报告
-4. SQL ACL 限制 engineer 设备范围
-5. complete payload 暴露 authorization
-6. 单测覆盖 guest/admin/engineer 三类身份
+3. 工具网关允许游客受限 SQL，但拒绝游客诊断、工单和报告
+4. SQL ACL 强制 guest 使用 real_data_01 最近 1 小时，并限制 engineer 设备/数据表范围
+5. 工单 HTTP API 和报告访问执行同一 AuthContext/资源范围校验
+6. complete payload 暴露 authorization
+7. 单测覆盖 guest/admin/engineer 三类身份
 ```
 
 RAG 文档可见性和报告 evidence 授权可以作为第二轮，但 SQL 数据级 ACL 必须放在第一轮。
