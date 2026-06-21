@@ -9,6 +9,7 @@ from ..contracts import SingleAgentDecision
 
 WORKFLOW_STAGE_ORDER = [
     "understand",
+    "access_authorization",
     "select_workflow_policy",
     "initialize_evidence_bundle",
     "permission_check",
@@ -42,7 +43,7 @@ WORKFLOW_TODO_GROUPS = (
         group_id="plan",
         title="理解与规划",
         description="识别任务类型、执行路径和证据要求",
-        stages=("understand", "select_workflow_policy", "initialize_evidence_bundle"),
+        stages=("understand", "access_authorization", "select_workflow_policy", "initialize_evidence_bundle"),
     ),
     WorkflowTodoGroup(
         group_id="evidence",
@@ -95,7 +96,9 @@ def workflow_stage_sequence(decision: SingleAgentDecision | None) -> list[str]:
     }
     sequence: list[str] = []
     for stage in WORKFLOW_STAGE_ORDER:
-        if stage in always_visible or enabled_nodes.get(stage):
+        if stage == "access_authorization" and decision.authorization:
+            sequence.append(stage)
+        elif stage in always_visible or enabled_nodes.get(stage):
             sequence.append(stage)
     return sequence
 

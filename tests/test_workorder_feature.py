@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from fault_diagnosis.diagnosis.contracts import (
     AnalysisStepArtifact,
     DiagnosisRequest,
@@ -8,6 +10,7 @@ from fault_diagnosis.diagnosis.contracts import (
 )
 from fault_diagnosis.repositories.workorder_repository import FileWorkOrderRepository
 from fault_diagnosis.services.workorder_service import CreateWorkOrderPayload, UpdateWorkOrderPayload, WorkOrderService
+from fault_diagnosis.security.permissions import build_auth_context
 from fault_diagnosis.single_agent.report_sections import build_workorder_todo_markdown
 from fault_diagnosis.single_agent.reporting import build_workorder_suggestion
 
@@ -139,6 +142,7 @@ def test_workorder_todo_markdown_is_compact_and_grouped() -> None:
 
 def test_file_workorder_repository_creates_trace_bound_record(tmp_path) -> None:
     service = WorkOrderService(repository=FileWorkOrderRepository(root_dir=tmp_path))
+    admin = build_auth_context(user_id="admin", role="admin")
     response = service.create_work_order(
         CreateWorkOrderPayload(
             title="DCMA-G120电机1 A07089 事件及速度偏差排查",
@@ -162,7 +166,8 @@ def test_file_workorder_repository_creates_trace_bound_record(tmp_path) -> None:
             thread_id="thread_demo",
             trace_id="trace_demo",
             request_id="req_demo",
-        )
+        ),
+        auth_context=admin,
     )
 
     record = response["work_order"]
@@ -174,19 +179,29 @@ def test_file_workorder_repository_creates_trace_bound_record(tmp_path) -> None:
     assert record["task_mappings"][0]["evidence"] == "A07089 持续出现 50 条"
     assert any(log["action"] == "绑定诊断链路" for log in record["operation_logs"])
 
+    with pytest.raises(PermissionError):
+        service.update_work_order(
+            UpdateWorkOrderPayload(
+                work_order_id=record["work_order_id"],
+                status="已派单",
+                operator="演示用户",
+                note="派单",
+            ),
+            auth_context=admin,
+        )
+
     updated = service.update_work_order(
         UpdateWorkOrderPayload(
             work_order_id=record["work_order_id"],
-            status="已派单",
+            assignee="张工",
             operator="演示用户",
-            note="派单",
-        )
+        ),
+        auth_context=admin,
     )
-    assert updated and updated["work_order"]["status"] == "已派单"
-    assert updated["work_order"]["operation_logs"][-1]["action"] == "状态流转"
-    assert "工单派发给" in updated["work_order"]["operation_logs"][-1]["detail"]
+    assert updated and updated["work_order"]["status"] == "待派单"
+    assert updated["work_order"]["operation_logs"][-1]["action"] == "更新负责人"
 
-    listed = service.list_work_orders(trace_id="trace_demo")
+    listed = service.list_work_orders(trace_id="trace_demo", auth_context=admin)
     assert listed["summary"]["total"] == 1
     assert listed["items"][0]["work_order_id"] == record["work_order_id"]
-    assert listed["items"][0]["status"] == "已派单"
+    assert listed["items"][0]["status"] == "待派单"

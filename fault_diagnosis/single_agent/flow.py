@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator
 from ..agent_runtime.sse_adapter import encode_sse_event
 from ..common.logger import get_logger
 from ..diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
+from ..security.audit import get_security_audit_logger
+from ..security.policy_engine import apply_authorization_to_decision, authorize_workflow
 from .contracts import SingleAgentDecision
 from .evidence import build_evidence_bundle, build_output_guardrail_result, initialize_evidence_bundle
 from .intent import build_lightweight_conversation_reply
@@ -140,6 +142,59 @@ class SingleAgentFlowMixin:
             self._finish_stage("understand", stage_started, message=decision.reason)
             if self._is_cancelled():
                 yield self._build_cancel_complete_frame()
+                return
+
+            stage_started = self._start_stage("access_authorization", "校验身份、任务权限和资源范围")
+            self.authorization_decision = authorize_workflow(self.auth_context, decision)
+            decision = apply_authorization_to_decision(decision, self.authorization_decision)
+            get_security_audit_logger().record(
+                event_type="workflow_authorization",
+                auth=self.auth_context,
+                decision=self.authorization_decision,
+                trace_id=self.trace_id,
+                resource={"task_type": decision.primary_task_type},
+            )
+            self._record_artifact(
+                "authorization",
+                self.authorization_decision,
+                stage="access_authorization",
+            )
+            authorization_status = (
+                "completed" if self.authorization_decision.mode == "allow" else self.authorization_decision.mode
+            )
+            self._finish_stage(
+                "access_authorization",
+                stage_started,
+                status=authorization_status,
+                message=self.authorization_decision.reason,
+            )
+            if not self.authorization_decision.allowed:
+                final_answer = self.authorization_decision.user_message or "当前身份无权执行该任务。"
+                stage_started = self._start_stage("final_answer", "生成权限提示")
+                self._finish_stage("final_answer", stage_started, message="权限提示已生成")
+                self.trace.finish(status="denied", final_answer=final_answer)
+                yield encode_sse_event("token", {"type": "token", "content": final_answer}, trace_id=self.trace_id)
+                token_count += 1
+                event_count += 1
+                self._finish_open_stage_observations(status="completed")
+                self._finalize_trace_run(
+                    status="denied",
+                    final_answer=final_answer,
+                    metadata={"event_count": event_count, "token_count": token_count, "decision": decision.model_dump()},
+                )
+                yield encode_sse_event(
+                    "complete",
+                    build_direct_complete_payload(
+                        thread_id=self.thread_id,
+                        trace_id=self.trace_id,
+                        request_id=self.request_id,
+                        final_answer=final_answer,
+                        decision=decision,
+                        trace=self.trace,
+                        event_count=event_count,
+                    ),
+                    trace_id=self.trace_id,
+                )
                 return
 
             stage_started = self._start_stage("select_workflow_policy", "选择任务 workflow policy 和工具白名单")
@@ -332,6 +387,7 @@ class SingleAgentFlowMixin:
                 and "query_knowledge_base" not in self._active_allowed_tools
             ):
                 self._active_allowed_tools = (*self._active_allowed_tools, "query_knowledge_base")
+                decision.runtime_tools = [*decision.runtime_tools, "query_knowledge_base"]
             if needs_knowledge:
                 knowledge_message = (
                     f"执行知识库检索（故障码：{', '.join(sql_fault_codes)}）"
@@ -479,6 +535,17 @@ class SingleAgentFlowMixin:
                 workorder_suggestion=workorder_suggestion,
                 report_artifact=report_artifact,
             )
+            access_metadata = {
+                "role": self.auth_context.role,
+                "asset_scope": list(self.auth_context.asset_scope),
+                "table_scope": list(self.auth_context.table_scope),
+                "authorized_purpose": decision.access_scope.get("authorized_purpose", "diagnosis"),
+            }
+            for evidence_item in self.evidence_bundle.evidence_items:
+                evidence_item.metadata.update({"authorized": True, "access_scope": access_metadata})
+            self.evidence_bundle.quality_checks["no_unauthorized_evidence_refs"] = all(
+                item.metadata.get("authorized") is True for item in self.evidence_bundle.evidence_items
+            )
             self._record_artifact("evidence_bundle", self.evidence_bundle, stage="evidence_validation")
             self._finish_stage(
                 "evidence_validation",
@@ -556,6 +623,7 @@ class SingleAgentFlowMixin:
                 evidence_bundle=self.evidence_bundle,
                 output_guardrail=self.output_guardrail_result,
                 workflow_artifacts={
+                    "authorization": self.authorization_decision.model_dump(),
                     "permission_check": permission_check_result,
                     "risk_check": risk_check_result,
                     "resolution_recommendation": resolution_recommendation,

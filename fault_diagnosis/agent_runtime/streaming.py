@@ -21,6 +21,7 @@ from ..runtime.session_store import clear_namespace, set_namespace
 from .stream_control import StreamCancellationHandle, clear_stream_handle
 from ..common.utils import summarize_identifier_for_log
 from ..single_agent import RestrictedSingleAgentRunner
+from ..security.contracts import AuthContext
 
 _log = get_logger("streaming")
 
@@ -85,6 +86,7 @@ async def token_stream_events(
     cancel_handle: StreamCancellationHandle | None = None,
     history_messages: list[Any] | None = None,
     replace_history: bool = False,
+    auth_context: AuthContext | None = None,
 ) -> AsyncGenerator[str, None]:
     """聊天 SSE 兼容入口：dev mock 或限制型单 Agent。"""
 
@@ -114,6 +116,7 @@ async def token_stream_events(
             request_id=request_id,
             stream_id=stream_id,
             trace_id=trace_id,
+            auth_context=auth_context,
         )
         async for chunk in single_agent.stream_events(
             app,

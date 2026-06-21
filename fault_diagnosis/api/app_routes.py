@@ -9,6 +9,7 @@ from .governance import router as governance_router
 from .health import router as health_router
 from .history import router as history_router
 from .meta import router as meta_router
+from .reports import router as reports_router
 from .tts import router as tts_router
 from .workorders import router as workorders_router
 
@@ -17,6 +18,7 @@ def include_app_routes(app: FastAPI) -> None:
     app.include_router(meta_router)
     app.include_router(auth_router)
     app.include_router(admin_pdfs_router)
+    app.include_router(reports_router)
     app.include_router(chat_router)
     app.include_router(tts_router)
     app.include_router(health_router)

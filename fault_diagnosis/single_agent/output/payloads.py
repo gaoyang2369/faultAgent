@@ -43,6 +43,7 @@ def build_direct_complete_payload(
         "report_filename": None,
         "report_url": None,
         "decision": decision.model_dump(),
+        "authorization": decision.authorization,
         "trace": trace.model_dump(exclude_none=True),
         "todos": [],
         "event_count": event_count,
@@ -74,6 +75,7 @@ def build_report_handoff_complete_payload(
         "report_filename": report_artifact.report_filename,
         "report_url": extract_report_url(report_artifact.save_result),
         "decision": decision.model_dump(),
+        "authorization": decision.authorization,
         "todos": todos,
         "workflow_route": {
             "primary_task_type": decision.primary_task_type,
@@ -122,6 +124,7 @@ def build_diagnosis_complete_payload(
         "report_filename": report_artifact.report_filename,
         "report_url": extract_report_url(report_artifact.save_result),
         "decision": decision.model_dump(),
+        "authorization": decision.authorization,
         "sql_artifact": sql_artifact.model_dump(exclude_none=True),
         "knowledge_artifact": knowledge_artifact.model_dump(exclude_none=True),
         "analysis_artifact": analysis_artifact.model_dump(exclude_none=True),

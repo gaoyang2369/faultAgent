@@ -20,6 +20,11 @@ from ..config import (
 )
 from ..observability import NoopTraceRun, TraceRunContext, get_trace_exporter, write_local_trace
 from ..diagnosis.adapters import invoke_tool
+from ..security.audit import get_security_audit_logger
+from ..security.contracts import AuthContext
+from ..security.permissions import build_auth_context
+from ..security.runtime_context import reset_current_auth_context, set_current_auth_context
+from ..security.tool_gateway import authorize_tool_call
 from .contracts import AgentTrace, SingleAgentLimits
 from .evidence import build_tool_evidence_preview
 from .errors import SingleAgentExecutionError
@@ -46,10 +51,16 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         trace_id: str,
         limits: SingleAgentLimits | None = None,
         model: Any | None = None,
+        auth_context: AuthContext | None = None,
     ) -> None:
         self.message = message
         self.thread_id = thread_id
         self.user_identity = user_identity
+        self.auth_context = auth_context or build_auth_context(
+            user_id="legacy_admin" if user_identity == "管理员" else "guest",
+            display_name=user_identity,
+            role="admin" if user_identity == "管理员" else "guest",
+        )
         self.request_id = request_id
         self.stream_id = (stream_id or "").strip()
         self.trace_id = trace_id
@@ -73,6 +84,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self._last_step_result: Any = None
         self.evidence_bundle: Any | None = None
         self.output_guardrail_result: dict[str, Any] | None = None
+        self.authorization_decision: Any | None = None
         self._active_allowed_tools: tuple[str, ...] | None = None
         self._workflow_task_decision: Any | None = None
         self._workflow_completed_stages: set[str] = set()
@@ -157,6 +169,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self._stage_observations = {}
         self.evidence_bundle = None
         self.output_guardrail_result = None
+        self.authorization_decision = None
         self._active_allowed_tools = None
         self._workflow_task_decision = None
         self._workflow_completed_stages = set()
@@ -182,6 +195,12 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             "stream_id": self.stream_id,
             "round_count": self._round_count,
             "tool_call_count": self._tool_call_count,
+            "auth": self.auth_context.audit_summary(),
+            "authorization": (
+                self.authorization_decision.model_dump()
+                if self.authorization_decision is not None
+                else {}
+            ),
         }
         if metadata:
             trace_metadata.update(metadata)
@@ -337,7 +356,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
 
     def _configure_workflow_tasks(self, decision: Any) -> None:
         self._workflow_task_decision = decision
-        self._workflow_completed_stages = {"understand", "select_workflow_policy"}
+        self._workflow_completed_stages = {"understand", "access_authorization", "select_workflow_policy"}
         self._workflow_skipped_stages = set()
         self._workflow_current_stage = None
 
@@ -523,6 +542,29 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         allowed_tools = self._active_allowed_tools if self._active_allowed_tools is not None else self.limits.allowed_tools
         if tool_name not in allowed_tools:
             raise SingleAgentExecutionError(f"工具不在单 Agent 白名单内：{tool_name}")
+        tool_authorization = authorize_tool_call(
+            self.auth_context,
+            tool_name,
+            tool_input,
+            self._workflow_task_decision,
+        )
+        if not tool_authorization.allowed:
+            get_security_audit_logger().record(
+                event_type="tool_denied",
+                auth=self.auth_context,
+                decision=tool_authorization,
+                trace_id=self.trace_id,
+                resource={"tool": tool_name, "stage": stage},
+            )
+            self.trace.add_event(
+                "tool_call",
+                stage=stage,
+                status="denied",
+                tool=tool_name,
+                input=sanitize_for_json(tool_input),
+                error=tool_authorization.reason,
+            )
+            raise SingleAgentExecutionError(f"工具权限拒绝：{tool_authorization.reason}")
         self._tool_call_count += 1
         if self._tool_call_count > self.limits.max_tool_calls:
             message = f"超过单 Agent 最大工具调用次数限制：{self.limits.max_tool_calls}"
@@ -639,7 +681,11 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
                 "trace_id": self.trace_id,
             },
         ) as observation:
-            result = await invoke_tool(tool, tool_input)
+            context_token = set_current_auth_context(self.auth_context)
+            try:
+                result = await invoke_tool(tool, tool_input)
+            finally:
+                reset_current_auth_context(context_token)
             self._last_step_result = result
             observation.update(
                 output={"tool": tool_name, "result": result},

@@ -4,9 +4,12 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from ..auth.admin_auth import ADMIN_USERNAME, is_valid_admin_credentials
+from ..repositories.user_repository import FileUserRepository
+from ..security.permissions import build_auth_context
 from ._shared import (
     json_response_with_scope,
     json_response_with_scope_and_admin,
+    json_response_with_scope_and_user,
     resolve_request_identity,
 )
 
@@ -18,11 +21,45 @@ class AdminLoginPayload(BaseModel):
     password: str
 
 
+class LoginPayload(BaseModel):
+    username: str
+    password: str
+
+
 @router.get("/auth/identity")
 async def get_current_identity(request: Request):
     """返回当前会话的管理员身份状态。"""
     _, _, _, identity = resolve_request_identity(request)
     return json_response_with_scope(request, identity)
+
+
+@router.post("/auth/login")
+async def login(request: Request, payload: LoginPayload):
+    """Authenticate a file-backed engineer account and issue a signed cookie."""
+
+    user = FileUserRepository().authenticate(payload.username, payload.password)
+    if user is None:
+        return json_response_with_scope(
+            request,
+            {"detail": "用户名或密码错误。"},
+            status_code=401,
+        )
+    auth_context = build_auth_context(
+        user_id=user.user_id,
+        display_name=user.display_name,
+        role=user.role,
+        asset_scope=user.asset_scope,
+        table_scope=user.table_scope,
+        system_scope=user.system_scope,
+        location_scope=user.location_scope,
+        kb_scopes=user.kb_scopes,
+        auth_method="password",
+    )
+    return json_response_with_scope_and_user(
+        request,
+        auth_context.identity_payload(),
+        user_id=user.user_id,
+    )
 
 
 @router.post("/auth/admin/login")
@@ -37,13 +74,12 @@ async def admin_login(request: Request, payload: AdminLoginPayload):
             status_code=401,
         )
 
-    response_payload = {
-        "user_id": ADMIN_USERNAME,
-        "user_role": "管理员",
-        "is_admin": True,
-        "auth_method": "password",
-        "available_auth_methods": ["password", "voice_pending"],
-    }
+    response_payload = build_auth_context(
+        user_id=ADMIN_USERNAME,
+        display_name="管理员",
+        role="admin",
+        auth_method="password",
+    ).identity_payload()
     return json_response_with_scope_and_admin(
         request,
         response_payload,
@@ -53,16 +89,10 @@ async def admin_login(request: Request, payload: AdminLoginPayload):
 
 @router.post("/auth/logout")
 async def admin_logout(request: Request):
-    """退出当前管理员态，仅清理管理员认证 cookie。"""
-    response_payload = {
-        "user_id": "guest",
-        "user_role": "访客",
-        "is_admin": False,
-        "auth_method": None,
-        "available_auth_methods": ["password", "voice_pending"],
-    }
-    return json_response_with_scope_and_admin(
+    """Clear both legacy admin and common user authentication cookies."""
+    response_payload = build_auth_context(user_id="guest", display_name="访客").identity_payload()
+    return json_response_with_scope_and_user(
         request,
         response_payload,
-        clear_admin_cookie_after_response=True,
+        clear_auth_cookies_after_response=True,
     )

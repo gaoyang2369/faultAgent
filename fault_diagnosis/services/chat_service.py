@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
-from ..auth.admin_auth import resolve_identity_payload
+from ..auth.admin_auth import resolve_auth_context, resolve_identity_payload
 from ..runtime.dev_mode import get_dev_messages
 from ..common.logger import ensure_request_id, get_logger
 from ..repositories.history_index import get_history_index_repository
@@ -173,7 +173,8 @@ class ChatService:
         stream_id: str | None = None,
     ):
         session_manager, session_id, legacy_bindings, identity = resolve_request_identity(request)
-        trusted_user_identity = "管理员" if identity.get("is_admin") else "游客"
+        auth_context = resolve_auth_context(request, session_id)
+        trusted_user_identity = str(identity.get("user_role") or "访客")
         request_id = ensure_request_id()
         try:
             if not message:
@@ -250,6 +251,7 @@ class ChatService:
                     request_id=request_id,
                     stream_id=stream_id,
                     cancel_handle=cancel_handle,
+                    auth_context=auth_context,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -291,7 +293,8 @@ class ChatService:
         stream_id: str | None = None,
     ):
         session_manager, session_id, legacy_bindings, identity = resolve_request_identity(request)
-        trusted_user_identity = "管理员" if identity.get("is_admin") else "游客"
+        auth_context = resolve_auth_context(request, session_id)
+        trusted_user_identity = str(identity.get("user_role") or "访客")
         request_id = ensure_request_id()
         resolved_thread_id = session_manager.resolve_history_thread_id(session_id, thread_id, legacy_bindings)
         stream_id = (stream_id or "").strip() or str(uuid4())
@@ -363,6 +366,7 @@ class ChatService:
                     cancel_handle=cancel_handle,
                     history_messages=to_langchain_history_messages(kept_messages),
                     replace_history=True,
+                    auth_context=auth_context,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -403,7 +407,8 @@ class ChatService:
 
         metadata = payload.metadata or {}
         _, request_session_id, _, identity = resolve_request_identity(request)
-        trusted_user_identity = "管理员" if identity.get("is_admin") else "游客"
+        auth_context = resolve_auth_context(request, request_session_id)
+        trusted_user_identity = str(identity.get("user_role") or "访客")
         requested_identity = metadata.get("user_identity") or metadata.get("identity") or "游客"
         if requested_identity in ("游客", "管理员") and requested_identity != trusted_user_identity:
             self._log.info(
@@ -437,6 +442,7 @@ class ChatService:
                 thread_id,
                 user_identity,
                 request_id=request_id,
+                auth_context=auth_context,
             ):
                 for event in parse_sse_payloads(chunk):
                     msg_type = event.get("type")

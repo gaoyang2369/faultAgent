@@ -107,6 +107,9 @@ class FileWorkOrderRepository:
                 "trace_id": str(payload.get("trace_id") or "").strip() or None,
                 "request_id": str(payload.get("request_id") or "").strip() or None,
                 "source": payload.get("source") if isinstance(payload.get("source"), dict) else {},
+                "created_by": str(payload.get("created_by") or "").strip() or None,
+                "created_by_role": str(payload.get("created_by_role") or "").strip() or None,
+                "authorized_asset_scope": self._text_list(payload.get("authorized_asset_scope")),
             }
             record["operation_logs"] = self._initial_operation_logs(record, now)
             records.append(record)

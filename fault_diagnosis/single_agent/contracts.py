@@ -13,7 +13,7 @@ TraceEventType = Literal["stage", "decision", "tool_call", "tool_result", "artif
 class SingleAgentLimits(BaseModel):
     """Hard limits for one deterministic single-agent run."""
 
-    max_rounds: int = Field(default=16, ge=1)
+    max_rounds: int = Field(default=18, ge=1)
     max_tool_calls: int = Field(default=4, ge=0)
     allowed_tools: tuple[str, ...] = (
         "sql_db_query_checker",
@@ -46,6 +46,9 @@ class SingleAgentDecision(BaseModel):
     runtime_tools: list[str] = Field(default_factory=list)
     output_schema: str = ""
     guardrails: list[str] = Field(default_factory=list)
+    authorization: dict[str, Any] = Field(default_factory=dict)
+    access_scope: dict[str, Any] = Field(default_factory=dict)
+    denied_nodes: dict[str, str] = Field(default_factory=dict)
     reason: str = ""
 
 

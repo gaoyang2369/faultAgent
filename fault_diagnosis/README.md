@@ -25,7 +25,8 @@ fault_diagnosis/
   config.py              环境变量与集中配置
   api/                   HTTP/SSE 路由层
   services/              应用服务层
-  auth/                  session、管理员身份、thread 归属
+  auth/                  session、签名身份 cookie、thread 归属
+  security/              权限合同、RBAC/ABAC、SQL/RAG ACL、工具网关与审计
   infrastructure/        CORS、lifespan、模型、静态资源、数据库池
   agent_runtime/         SSE 编码、流调度、取消控制、错误分类
   single_agent/          单 agent 编排、阶段处理、workflow、输出、证据链
@@ -64,6 +65,8 @@ api/chat.py
 
 ```text
 understand
+  -> access_authorization
+  -> select_workflow_policy
   -> sql（按 decision 可跳过）
   -> knowledge（按 decision 可跳过）
   -> analysis
@@ -149,3 +152,42 @@ start -> ping* -> tool_start/tool_end* -> token -> complete
 3. 新单 agent 工具必须显式加入 `RestrictedSingleAgentRunner` 的白名单和对应阶段。
 4. 修改诊断流程顺序优先改 `single_agent/flow.py`，修改单个阶段优先改 `single_agent/stages.py`，修改最终输出字段优先改 `single_agent/output/`，不要把阶段细节重新塞回 `runner.py`。
 5. 外部依赖健康检查只保留当前运行链路会使用的依赖。
+
+## 身份与权限（RBAC + ABAC）
+
+权限实现位于 `fault_diagnosis/security/`，身份、workflow、工具、SQL、知识库、工单和报告访问分别校验，前端传入的 `user_identity` 不参与授权。
+
+接口：
+
+- `POST /auth/login`：工程师/文件用户登录。
+- `POST /auth/admin/login`：兼容现有管理员登录。
+- `POST /auth/logout`：清理普通用户与管理员 cookie。
+- `GET /auth/identity`：返回兼容身份字段以及 `role`、`permissions` 和资源范围。
+
+普通用户默认从 `trash/run/users.json` 读取，也可通过 `USER_STORE_PATH` 指定。密码只接受 PBKDF2-SHA256 哈希，不接受明文。可用以下方式生成哈希：
+
+```bash
+python -c "from getpass import getpass; from fault_diagnosis.repositories.user_repository import hash_password; print(hash_password(getpass()))"
+```
+
+用户文件示例：
+
+```json
+[
+  {
+    "user_id": "engineer_01",
+    "username": "engineer_01",
+    "password_hash": "pbkdf2_sha256$600000$...$...",
+    "role": "engineer",
+    "display_name": "维修工程师01",
+    "asset_scope": ["J1号机", "pump_001"],
+    "table_scope": ["real_data_01", "device_alarm", "device_metric"],
+    "system_scope": ["DCMA_LINE_1"],
+    "enabled": true
+  }
+]
+```
+
+部署时应将用户文件权限设为仅服务账号可读，并显式配置稳定的 `SESSION_SECRET`。安全审计默认写入 `trash/run/security-audit.jsonl`，可用 `SECURITY_AUDIT_PATH` 调整。
+
+诊断报告现写入私有的 `trash/run/reports/`，通过受保护的 `/reports/{filename}` 返回；旧的公共静态报告目录不再挂载。工程师只能查看当前设备/数据表范围内的报告，管理员可查看全部报告。

@@ -129,7 +129,15 @@ export interface TodosResponse {
 export interface IdentityResponse {
   user_id: string
   user_role: string
+  display_name?: string
+  role?: 'guest' | 'engineer' | 'admin'
   is_admin: boolean
+  permissions?: string[]
+  asset_scope?: string[]
+  table_scope?: string[]
+  system_scope?: string[]
+  location_scope?: string[]
+  kb_scopes?: string[]
   auth_method?: string | null
   available_auth_methods?: string[]
 }

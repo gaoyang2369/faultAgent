@@ -144,6 +144,8 @@ class SqlStepArtifact(BaseModel):
     result_preview: str = ""
     raw_output: str = ""
     error: str | None = None
+    access_scope: dict[str, Any] = Field(default_factory=dict)
+    filters_applied: list[str] = Field(default_factory=list)
 
 
 class KnowledgeStepArtifact(BaseModel):

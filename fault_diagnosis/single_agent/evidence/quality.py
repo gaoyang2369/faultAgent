@@ -62,6 +62,14 @@ def build_output_guardrail_result(
         warnings.append("dangling_evidence_refs")
     if quality_checks and not quality_checks.get("all_claims_have_evidence", True):
         warnings.append("claim_without_supporting_evidence")
+    if quality_checks and not quality_checks.get("no_unauthorized_evidence_refs", True):
+        warnings.append("unauthorized_evidence_reference")
+    authorization = decision.authorization if decision is not None else {}
+    if authorization.get("mode") == "degrade" and "权限" not in final_answer:
+        warnings.append("permission_denial_not_disclosed")
+    guest_status_only = (decision.access_scope or {}).get("authorized_purpose") == "status_or_visualization_only" if decision else False
+    if guest_status_only and re.search(r"(?:根因|诊断结论|健康评分)[：:]", final_answer):
+        warnings.append("guest_diagnosis_claim")
     return {
         "passed": not warnings,
         "warnings": warnings,

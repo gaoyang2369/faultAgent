@@ -10,6 +10,7 @@ from html import escape
 from pydantic import BaseModel, Field
 
 from ..common.paths import REPORTS_DIR
+from ..security.runtime_context import get_current_auth_context
 
 try:
     from langchain_core.tools import tool
@@ -1231,6 +1232,18 @@ def save_report(
         web_path = _build_report_web_path(final_filename)
         with open(report_path, "w", encoding="utf-8") as handle:
             handle.write(report_content)
+        auth_context = get_current_auth_context()
+        if auth_context is not None:
+            access_path = f"{report_path}.access.json"
+            access_payload = {
+                "created_by": auth_context.user_id,
+                "created_by_role": auth_context.role,
+                "authorized_asset_scope": list(auth_context.asset_scope),
+                "authorized_table_scope": list(auth_context.table_scope),
+                "diagnosis_object": diagnosis_object,
+            }
+            with open(access_path, "w", encoding="utf-8") as handle:
+                json.dump(access_payload, handle, ensure_ascii=False, indent=2)
         return f"报告已保存至：{web_path}"
     except Exception as exc:
         return f"报告保存失败：{str(exc)}"

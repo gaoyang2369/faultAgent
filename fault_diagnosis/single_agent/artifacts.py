@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from ..diagnosis.contracts import (
     AnalysisStepArtifact,
@@ -34,6 +35,8 @@ def build_diagnosis_artifact_envelope(
     evidence_bundle: EvidenceBundle | None = None,
     output_guardrail: dict[str, object] | None = None,
     workflow_artifacts: dict[str, object] | None = None,
+    auth: dict[str, Any] | None = None,
+    authorization: dict[str, Any] | None = None,
 ) -> DiagnosisArtifactEnvelope:
     evidence = (
         evidence_bundle.evidence_items
@@ -71,6 +74,8 @@ def build_diagnosis_artifact_envelope(
         "trace": trace.model_dump(exclude_none=True),
         "output_guardrail": output_guardrail or {},
         "workflow_artifacts": workflow_artifacts or {},
+        "auth": auth or {},
+        "authorization": authorization or {},
     }
     if evidence_bundle is not None:
         payload["evidence_bundle"] = evidence_bundle.model_dump(exclude_none=True)

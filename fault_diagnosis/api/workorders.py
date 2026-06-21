@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..auth.session_scope import resolve_request_scope
 from ..common.logger import ensure_request_id, get_logger
 from ..common.utils import summarize_identifier_for_log
 from ..services.workorder_service import (
@@ -12,7 +11,7 @@ from ..services.workorder_service import (
     UpdateWorkOrderPayload,
     WorkOrderService,
 )
-from ._shared import json_response_with_scope
+from ._shared import json_response_with_scope, resolve_request_auth_context
 
 router = APIRouter()
 _log = get_logger("api.workorders")
@@ -28,7 +27,7 @@ def _summarize(value: str | None, *, keep: int = 10) -> str:
 
 @router.post("/api/workorders")
 async def create_work_order(request: Request, payload: CreateWorkOrderPayload):
-    _, session_id, _, _ = resolve_request_scope(request)
+    _, session_id, _, auth_context = resolve_request_auth_context(request)
     request_id = ensure_request_id()
     _log.info(
         "收到维修工单创建请求",
@@ -40,7 +39,9 @@ async def create_work_order(request: Request, payload: CreateWorkOrderPayload):
         priority=payload.priority,
     )
     try:
-        response_payload = _workorder_service().create_work_order(payload)
+        response_payload = _workorder_service().create_work_order(payload, auth_context=auth_context)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -64,7 +65,7 @@ async def list_work_orders(
     status: str | None = None,
     limit: int = 20,
 ):
-    _, session_id, _, _ = resolve_request_scope(request)
+    _, session_id, _, auth_context = resolve_request_auth_context(request)
     _log.info(
         "收到维修工单列表请求",
         path="/api/workorders",
@@ -74,27 +75,32 @@ async def list_work_orders(
         status=status,
         limit=limit,
     )
-    return json_response_with_scope(
-        request,
-        _workorder_service().list_work_orders(
+    try:
+        payload = _workorder_service().list_work_orders(
             thread_id=thread_id,
             trace_id=trace_id,
             status=status,
             limit=limit,
-        ),
-    )
+            auth_context=auth_context,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return json_response_with_scope(request, payload)
 
 
 @router.get("/api/workorders/{work_order_id}")
 async def get_work_order(request: Request, work_order_id: str):
-    _, session_id, _, _ = resolve_request_scope(request)
+    _, session_id, _, auth_context = resolve_request_auth_context(request)
     _log.info(
         "收到维修工单详情请求",
         path="/api/workorders/:work_order_id",
         session_id=_summarize(session_id, keep=8),
         work_order_id=work_order_id,
     )
-    record = _workorder_service().get_work_order(work_order_id)
+    try:
+        record = _workorder_service().get_work_order(work_order_id, auth_context=auth_context)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     if record is None:
         raise HTTPException(status_code=404, detail="work order not found")
     return json_response_with_scope(request, {"ok": True, "work_order": record})
@@ -102,14 +108,17 @@ async def get_work_order(request: Request, work_order_id: str):
 
 @router.post("/api/workorders/update")
 async def update_work_order(request: Request, payload: UpdateWorkOrderPayload):
-    _, session_id, _, _ = resolve_request_scope(request)
+    _, session_id, _, auth_context = resolve_request_auth_context(request)
     _log.info(
         "收到维修工单更新请求",
         path="/api/workorders/update",
         session_id=_summarize(session_id, keep=8),
         work_order_id=payload.work_order_id,
     )
-    record = _workorder_service().update_work_order(payload)
+    try:
+        record = _workorder_service().update_work_order(payload, auth_context=auth_context)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     if record is None:
         raise HTTPException(status_code=404, detail="work order not found")
     return json_response_with_scope(request, record)

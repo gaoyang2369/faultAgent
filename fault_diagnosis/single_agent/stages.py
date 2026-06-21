@@ -28,6 +28,7 @@ from ..diagnosis.steps import (
     build_sql_plan,
 )
 from ..diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
+from ..security.sql_acl import apply_sql_acl
 from .artifacts import build_diagnosis_artifact_envelope
 from .contracts import SingleAgentDecision
 from .errors import SingleAgentExecutionError
@@ -133,6 +134,25 @@ class SingleAgentStagesMixin:
                 sql_query = build_fallback_sql_query(request)
                 summary = "已使用受限 fallback 查询最近设备故障与关键指标数据"
 
+        acl_result = apply_sql_acl(
+            sql_query,
+            auth=self.auth_context,
+            request=request,
+            decision=self._workflow_task_decision,
+        )
+        if not acl_result.allowed:
+            artifact = SqlStepArtifact(
+                success=False,
+                summary="SQL 查询被数据权限策略拦截",
+                error=acl_result.reason,
+                access_scope=dict(getattr(self._workflow_task_decision, "access_scope", {}) or {}),
+            )
+            self._record_artifact("sql", artifact, stage="sql")
+            self._last_step_result = artifact
+            return
+        sql_query = acl_result.sql_query
+        filters_applied = list(acl_result.filters_applied)
+
         tools_map = build_sql_tools_map()
         checker_tool = find_sql_tool(tools_map, "sql_db_query_checker", False)
         if checker_tool is not None and not skip_checker:
@@ -149,7 +169,24 @@ class SingleAgentStagesMixin:
                 and is_readonly_sql(checked_query_text)
                 and not has_unknown_sql_table(checked_query_text)
             ):
-                sql_query = checked_query_text
+                checked_acl_result = apply_sql_acl(
+                    checked_query_text,
+                    auth=self.auth_context,
+                    request=request,
+                    decision=self._workflow_task_decision,
+                )
+                if not checked_acl_result.allowed:
+                    artifact = SqlStepArtifact(
+                        success=False,
+                        summary="SQL checker 返回结果未通过数据权限复检",
+                        error=checked_acl_result.reason,
+                        access_scope=dict(getattr(self._workflow_task_decision, "access_scope", {}) or {}),
+                    )
+                    self._record_artifact("sql", artifact, stage="sql")
+                    self._last_step_result = artifact
+                    return
+                sql_query = checked_acl_result.sql_query
+                filters_applied = list(dict.fromkeys([*filters_applied, *checked_acl_result.filters_applied]))
 
         query_tool = find_sql_tool(tools_map, "sql_db_query", True)
         async for chunk in self._invoke_restricted_tool(
@@ -166,6 +203,8 @@ class SingleAgentStagesMixin:
             sql_used=[sql_query],
             result_preview=preview(raw_output),
             raw_output=stringify(raw_output),
+            access_scope=dict(getattr(self._workflow_task_decision, "access_scope", {}) or {}),
+            filters_applied=filters_applied,
         )
         self._record_artifact("sql", artifact, stage="sql")
         self._last_step_result = artifact
@@ -211,6 +250,36 @@ class SingleAgentStagesMixin:
         knowledge_artifact: KnowledgeStepArtifact,
         current_time: str,
     ) -> AnalysisStepArtifact:
+        decision = self._workflow_task_decision
+        authorization = dict(getattr(decision, "authorization", {}) or {})
+        task_type = str(getattr(decision, "primary_task_type", "") or "")
+        if self.auth_context.role == "guest" and task_type != "knowledge_qa":
+            is_degraded = authorization.get("mode") == "degrade"
+            recommendations = list(knowledge_artifact.snippets[:2]) if task_type == "alarm_triage" else []
+            if is_degraded:
+                recommendations.append("如需故障诊断、健康评估或诊断报告，请使用具备设备权限的工程师账号。")
+            artifact = AnalysisStepArtifact(
+                success=True,
+                conclusion=(
+                    "当前身份仅提供最近一小时运行状态与公开处理意见，不形成故障诊断或根因结论。"
+                    if is_degraded
+                    else "已按当前身份范围整理最近一小时运行状态；该结果仅表示数据现状。"
+                ),
+                basis=[
+                    item
+                    for item in [sql_artifact.summary, sql_artifact.result_preview, knowledge_artifact.error]
+                    if item
+                ][:3],
+                probable_causes=[],
+                verification_items=[],
+                recommendations=recommendations,
+                missing_information=(
+                    ["故障诊断权限与更完整的授权数据窗口"] if is_degraded else []
+                ),
+                confidence="low",
+            )
+            self._record_artifact("analysis", artifact, stage="analysis")
+            return artifact
         structured_artifact = build_structured_analysis_artifact(
             request=request,
             sql_artifact=sql_artifact,
@@ -498,6 +567,14 @@ class SingleAgentStagesMixin:
             return answer
 
         prefixes: list[str] = []
+        authorization = decision.authorization or {}
+        if authorization.get("mode") == "degrade":
+            prefixes.append(
+                "【权限范围】当前身份只能查看 real_data_01 最近一小时数据和公开处理意见；"
+                "以下内容不是故障诊断、根因判断或健康评估。"
+            )
+        elif self.auth_context.role == "guest" and decision.primary_task_type == "alarm_triage":
+            prefixes.append("【权限范围】当前身份仅提供公开故障码说明、处理意见和最近一小时数据现状。")
         if decision.primary_task_type == "action_request":
             prefixes.append(
                 "【动作审批】本次请求识别为写操作/控制操作意图；"
@@ -597,5 +674,7 @@ class SingleAgentStagesMixin:
             evidence_bundle=evidence_bundle,
             output_guardrail=output_guardrail,
             workflow_artifacts=workflow_artifacts,
+            auth=self.auth_context.audit_summary(),
+            authorization=decision.authorization,
         )
         return save_thread_artifact(envelope)

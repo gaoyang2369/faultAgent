@@ -21,6 +21,9 @@ except ImportError:  # pragma: no cover - local unit tests may not install LangC
 
 from ..common.paths import PDFS_DIR
 from ..config import KB_QUERY_TIMEOUT_SECONDS
+from ..security.rag_acl import filter_kb_documents
+from ..security.runtime_context import get_current_auth_context
+from ..security.permissions import build_auth_context
 
 _FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{4,})(?![A-Z0-9])", re.IGNORECASE)
 _FAULT_CODE_LINE_RE = re.compile(r"^\s*([A-Z]\d{4,})(?:\s*\([A-Z]\))?\s+(.+?)\s*$", re.IGNORECASE)
@@ -318,6 +321,9 @@ def query_knowledge_base(query: str) -> str:
             seen_keys.add(key)
             combined.append(doc)
 
+        auth_context = get_current_auth_context() or build_auth_context(role="guest")
+        combined = filter_kb_documents(combined, auth=auth_context)
+
         if not combined:
             if direct_fault_code_result:
                 return direct_fault_code_result
@@ -325,7 +331,7 @@ def query_knowledge_base(query: str) -> str:
                 return uploaded_error
             if base_error and not uploaded_docs:
                 return base_error
-            return "未检索到相关知识片段，请尝试缩小问题范围或更换关键词。"
+            return "未检索到当前权限范围内可用知识片段。"
 
         rendered = [direct_fault_code_result] if direct_fault_code_result else []
         for idx, doc in enumerate(combined[:4], start=1):
