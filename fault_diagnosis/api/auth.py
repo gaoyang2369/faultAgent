@@ -56,7 +56,7 @@ async def login(request: Request, payload: LoginPayload):
         display_name=user.display_name,
         role=user.role,
         asset_scope=user.asset_scope,
-        table_scope=user.table_scope,
+        table_scope=user.allowed_tables,
         system_scope=user.system_scope,
         location_scope=user.location_scope,
         kb_scopes=user.kb_scopes,

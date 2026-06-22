@@ -1,4 +1,4 @@
-"""Read-only file user repository with PBKDF2 password verification."""
+"""Read-only file user repository for password and voice identity lookup."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..common.paths import RUN_STATE_DIR
 from ..security.contracts import Role
@@ -27,16 +27,30 @@ _DUMMY_PASSWORD_HASH = (
 
 class UserRecord(BaseModel):
     user_id: str
-    username: str
-    password_hash: str
+    username: str = ""
+    password_hash: str = ""
+    voice_name: str = ""
     role: Role = "engineer"
     display_name: str = ""
+    permissions: set[str] = Field(default_factory=set)
     asset_scope: list[str] = Field(default_factory=list)
+    allowed_tables: list[str] = Field(default_factory=list)
     table_scope: list[str] = Field(default_factory=list)
     system_scope: list[str] = Field(default_factory=list)
     location_scope: list[str] = Field(default_factory=list)
     kb_scopes: list[str] = Field(default_factory=list)
     enabled: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_table_names(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        tables = normalized.get("allowed_tables") or normalized.get("table_scope") or []
+        normalized["allowed_tables"] = tables
+        normalized["table_scope"] = tables
+        return normalized
 
 
 def hash_password(password: str, *, iterations: int = DEFAULT_ITERATIONS, salt: bytes | None = None) -> str:
@@ -99,11 +113,31 @@ class FileUserRepository:
 
     def find_by_username(self, username: str) -> UserRecord | None:
         normalized = (username or "").strip().casefold()
+        if not normalized:
+            return None
         return next((user for user in self._load() if user.username.casefold() == normalized), None)
 
     def find_by_user_id(self, user_id: str) -> UserRecord | None:
         normalized = (user_id or "").strip()
         return next((user for user in self._load() if user.user_id == normalized), None)
+
+    def find_by_voice_name(self, voice_name: str) -> UserRecord | None:
+        normalized = (voice_name or "").strip().casefold()
+        if not normalized:
+            return None
+        return next(
+            (
+                user
+                for user in self._load()
+                if normalized
+                in {
+                    user.voice_name.strip().casefold(),
+                    user.display_name.strip().casefold(),
+                    user.username.strip().casefold(),
+                }
+            ),
+            None,
+        )
 
     def authenticate(self, username: str, password: str) -> UserRecord | None:
         user = self.find_by_username(username)

@@ -62,7 +62,7 @@ class AuthContext(BaseModel):
             "location_scope": list(self.location_scope),
             "kb_scopes": list(self.kb_scopes),
             "auth_method": self.auth_method,
-            "available_auth_methods": ["password", "voice_pending"],
+            "available_auth_methods": ["password", "voice_signed"],
         }
 
 

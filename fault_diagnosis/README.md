@@ -188,15 +188,35 @@ python -c "from getpass import getpass; from fault_diagnosis.repositories.user_r
     "user_id": "engineer_01",
     "username": "engineer_01",
     "password_hash": "pbkdf2_sha256$600000$...$...",
+    "voice_name": "维修工程师01",
     "role": "engineer",
     "display_name": "维修工程师01",
+    "permissions": [],
     "asset_scope": ["J1号机", "pump_001"],
-    "table_scope": ["real_data_01", "device_alarm", "device_metric"],
+    "allowed_tables": ["real_data_01", "device_alarm", "device_metric"],
     "system_scope": ["DCMA_LINE_1"],
     "enabled": true
   }
 ]
 ```
+
+同一份用户文件也用于语音身份映射。语音后端认证完成后调用 `POST /agent/chat`，每次请求携带：
+
+故障诊断后端与语音后端需配置相同的强随机 `VOICE_AUTH_SHARED_SECRET`；可选用 `VOICE_AUTH_MAX_AGE_SECONDS` 调整默认 60 秒窗口。
+
+- `X-Voice-User`
+- `X-Voice-Role`
+- `X-Voice-Timestamp`（Unix 秒，默认仅 60 秒内有效）
+- `X-Voice-Nonce`（每次请求唯一）
+- `X-Voice-Signature`
+
+签名为 `HMAC-SHA256(VOICE_AUTH_SHARED_SECRET, payload)` 的小写十六进制结果，其中：
+
+```text
+payload = trim(user) + "\n" + trim(role) + "\n" + trim(timestamp) + "\n" + trim(nonce)
+```
+
+用户记录可额外配置 `voice_name`，并使用 `allowed_tables` 作为数据表范围；为兼容旧文件，`display_name`、`username` 和 `table_scope` 仍可读取。服务端会核对签名中的 role 与用户记录角色，权限仍由服务端角色策略生成，不信任请求体中的 `user_identity` 或用户文件中的自定义 `permissions`。当前 nonce 防重放缓存为单进程内存实现，多 worker 部署前应替换为 Redis 等共享存储。
 
 部署时应将用户文件权限设为仅服务账号可读，并显式配置稳定的 `SESSION_SECRET`。安全审计默认写入 `trash/run/security-audit.jsonl`，可用 `SECURITY_AUDIT_PATH` 调整。
 

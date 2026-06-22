@@ -31,6 +31,7 @@ from .. import config
 from ..repositories.user_repository import FileUserRepository
 from ..security.contracts import AuthContext
 from ..security.permissions import build_auth_context, build_dev_auth_context
+from ..security.voice_auth import VoiceNonceCache, verify_voice_signed_request
 
 
 ADMIN_AUTH_COOKIE_NAME = "fd_admin_auth"
@@ -115,7 +116,7 @@ def verify_admin_auth_token(token: str | None, session_id: str) -> dict[str, str
         "user_role": "管理员",
         "is_admin": True,
         "auth_method": auth_method,
-        "available_auth_methods": ["password", "voice_pending"],
+        "available_auth_methods": ["password", "voice_signed"],
     }
 
 
@@ -259,6 +260,7 @@ def resolve_auth_context(
     session_id: str,
     *,
     user_repository: FileUserRepository | None = None,
+    voice_nonce_cache: VoiceNonceCache | None = None,
 ) -> AuthContext:
     """Resolve a trusted identity; client role fields never participate."""
 
@@ -295,6 +297,24 @@ def resolve_auth_context(
                 kb_scopes=user.kb_scopes,
                 session_id=session_id,
                 auth_method=token_payload.get("auth_method"),
+            )
+
+    voice_identity = verify_voice_signed_request(request, nonce_cache=voice_nonce_cache)
+    if voice_identity:
+        repository = user_repository or FileUserRepository()
+        user = repository.find_by_voice_name(voice_identity.voice_name)
+        if user is not None and voice_identity.role == user.role:
+            return build_auth_context(
+                user_id=user.user_id,
+                display_name=user.display_name or voice_identity.voice_name,
+                role=user.role,
+                asset_scope=user.asset_scope,
+                table_scope=user.allowed_tables,
+                system_scope=user.system_scope,
+                location_scope=user.location_scope,
+                kb_scopes=user.kb_scopes,
+                session_id=session_id,
+                auth_method="voice",
             )
     return build_auth_context(user_id="guest", display_name="访客", role="guest", session_id=session_id)
 

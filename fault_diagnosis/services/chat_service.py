@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
-from ..auth.admin_auth import resolve_auth_context, resolve_identity_payload
+from ..auth.admin_auth import resolve_auth_context
 from ..runtime.dev_mode import get_dev_messages
 from ..common.logger import ensure_request_id, get_logger
 from ..repositories.history_index import get_history_index_repository
@@ -150,12 +150,6 @@ def to_langchain_history_messages(messages: list[dict[str, Any]]) -> list:
     return converted
 
 
-def resolve_request_identity(request: Request):
-    session_manager, session_id, _, legacy_bindings = resolve_request_scope(request)
-    identity = resolve_identity_payload(request, session_id)
-    return session_manager, session_id, legacy_bindings, identity
-
-
 class ChatService:
     """封装聊天流、编辑重生成、语音 Agent 聚合和停止流用例。"""
 
@@ -172,8 +166,9 @@ class ChatService:
         user_identity: str = "游客",
         stream_id: str | None = None,
     ):
-        session_manager, session_id, legacy_bindings, identity = resolve_request_identity(request)
+        session_manager, session_id, _, legacy_bindings = resolve_request_scope(request)
         auth_context = resolve_auth_context(request, session_id)
+        identity = auth_context.identity_payload()
         trusted_user_identity = str(identity.get("user_role") or "访客")
         request_id = ensure_request_id()
         try:
@@ -292,8 +287,9 @@ class ChatService:
         user_identity: str = "游客",
         stream_id: str | None = None,
     ):
-        session_manager, session_id, legacy_bindings, identity = resolve_request_identity(request)
+        session_manager, session_id, _, legacy_bindings = resolve_request_scope(request)
         auth_context = resolve_auth_context(request, session_id)
+        identity = auth_context.identity_payload()
         trusted_user_identity = str(identity.get("user_role") or "访客")
         request_id = ensure_request_id()
         resolved_thread_id = session_manager.resolve_history_thread_id(session_id, thread_id, legacy_bindings)
@@ -406,8 +402,9 @@ class ChatService:
             raise HTTPException(status_code=400, detail="message is required")
 
         metadata = payload.metadata or {}
-        _, request_session_id, _, identity = resolve_request_identity(request)
+        _, request_session_id, _, _ = resolve_request_scope(request)
         auth_context = resolve_auth_context(request, request_session_id)
+        identity = auth_context.identity_payload()
         trusted_user_identity = str(identity.get("user_role") or "访客")
         requested_identity = metadata.get("user_identity") or metadata.get("identity") or "游客"
         if requested_identity in ("游客", "管理员") and requested_identity != trusted_user_identity:
