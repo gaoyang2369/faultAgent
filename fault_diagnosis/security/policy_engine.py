@@ -35,17 +35,21 @@ def _scope_key(value: str) -> str:
     return "".join(str(value or "").casefold().split())
 
 
+def _asset_aliases(value: str) -> set[str]:
+    aliases = {_scope_key(part) for part in str(value or "").replace("／", "/").split("/")}
+    for alias in list(aliases):
+        for suffix in ("号机", "设备"):
+            if alias.endswith(suffix) and len(alias) > len(suffix):
+                aliases.add(alias[: -len(suffix)])
+    return {alias for alias in aliases if alias}
+
+
 def asset_is_in_scope(asset: str, assigned_assets: list[str]) -> bool:
-    requested = _scope_key(asset)
-    if not requested:
+    requested_aliases = _asset_aliases(asset)
+    if not requested_aliases:
         return True
     for assigned in assigned_assets:
-        candidate = _scope_key(assigned)
-        if requested == candidate:
-            return True
-        assigned_parts = {_scope_key(part) for part in str(assigned).replace("／", "/").split("/")}
-        requested_parts = {_scope_key(part) for part in str(asset).replace("／", "/").split("/")}
-        if requested in assigned_parts or candidate in requested_parts:
+        if requested_aliases.intersection(_asset_aliases(assigned)):
             return True
     return False
 

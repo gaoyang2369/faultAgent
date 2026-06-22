@@ -176,4 +176,13 @@ python rebuild_kb.py --incremental --no-force-rebuild
 LOCAL_DEV_MODE=true
 ```
 
-该模式使用 `fault_diagnosis/runtime/dev_mode.py` 的模拟 SSE 和本地状态。
+该模式使用 `fault_diagnosis/runtime/dev_mode.py` 的模拟 SSE 和本地状态；模拟流同样经过正式的 workflow 权限策略，并在 `complete.authorization` 中返回授权结果。
+
+本地权限验收可直接运行：
+
+```bash
+LOCAL_DEV_MODE=true python -m uvicorn fault_diagnosis.app:app --host 127.0.0.1 --port 8000
+scripts/auth_acceptance_test.sh
+```
+
+如需在非 `LOCAL_DEV_MODE` 的开发进程中单独开放开发身份接口，可设置 `ENABLE_DEV_AUTH=true`。`POST /auth/dev-login` 仅在这两个开关之一启用且 `APP_ENV` 不是生产环境时可用；生产环境固定返回 404。

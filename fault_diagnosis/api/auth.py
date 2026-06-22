@@ -1,14 +1,17 @@
 """管理员身份相关 HTTP 路由。"""
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from .. import config
 from ..auth.admin_auth import ADMIN_USERNAME, is_valid_admin_credentials
 from ..repositories.user_repository import FileUserRepository
-from ..security.permissions import build_auth_context
+from ..security.contracts import Role
+from ..security.permissions import build_auth_context, build_dev_auth_context
 from ._shared import (
     json_response_with_scope,
     json_response_with_scope_and_admin,
+    json_response_with_scope_and_dev,
     json_response_with_scope_and_user,
     resolve_request_identity,
 )
@@ -24,6 +27,10 @@ class AdminLoginPayload(BaseModel):
 class LoginPayload(BaseModel):
     username: str
     password: str
+
+
+class DevLoginPayload(BaseModel):
+    role: Role
 
 
 @router.get("/auth/identity")
@@ -59,6 +66,24 @@ async def login(request: Request, payload: LoginPayload):
         request,
         auth_context.identity_payload(),
         user_id=user.user_id,
+    )
+
+
+@router.post("/auth/dev-login")
+async def dev_login(request: Request):
+    """Issue a signed, server-defined identity for local authorization acceptance."""
+
+    if not config.DEV_AUTH_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+    try:
+        payload = DevLoginPayload.model_validate(await request.json())
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="role must be guest, engineer or admin") from exc
+    auth_context = build_dev_auth_context(payload.role)
+    return json_response_with_scope_and_dev(
+        request,
+        auth_context.identity_payload(),
+        role=payload.role,
     )
 
 

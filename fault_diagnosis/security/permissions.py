@@ -34,6 +34,16 @@ KB_RESTRICTED_READ = "kb.restricted.read"
 ADMIN_PDF_MANAGE = "admin.pdf.manage"
 ADMIN_AUDIT_READ = "admin.audit.read"
 
+AUTHORIZED_BUSINESS_TABLES = [
+    "real_data_01",
+    "real_data_02",
+    "real_data_03",
+    "device_alarm",
+    "device_metric",
+    "device_fault_data",
+    "fault_records",
+]
+
 ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
     "guest": frozenset(
         {
@@ -125,7 +135,13 @@ def build_auth_context(
 ) -> AuthContext:
     """Build effective permissions server-side; persisted permissions are ignored."""
 
-    effective_tables = ["real_data_01"] if role == "guest" else _clean_scope(table_scope)
+    effective_tables = (
+        ["real_data_01"]
+        if role == "guest"
+        else list(AUTHORIZED_BUSINESS_TABLES)
+        if role == "admin"
+        else _clean_scope(table_scope)
+    )
     effective_kb_scopes = list(KB_VISIBILITY_BY_ROLE[role])
     requested_kb_scopes = _clean_scope(kb_scopes)
     if requested_kb_scopes:
@@ -155,22 +171,45 @@ def effective_resource_scope(auth: AuthContext) -> ResourceScope:
             allowed_kb_visibility=["public"],
             authorized_purpose="status_or_visualization_only",
         )
-    admin_tables = [
-        "real_data_01",
-        "real_data_02",
-        "real_data_03",
-        "device_alarm",
-        "device_metric",
-        "device_fault_data",
-        "fault_records",
-    ]
     return ResourceScope(
         asset_ids=list(auth.asset_scope),
-        allowed_tables=admin_tables if auth.role == "admin" else list(auth.table_scope),
+        allowed_tables=list(AUTHORIZED_BUSINESS_TABLES) if auth.role == "admin" else list(auth.table_scope),
         systems=list(auth.system_scope),
         locations=list(auth.location_scope),
         max_rows=50,
         max_time_window_days=7,
         allowed_kb_visibility=list(auth.kb_scopes or KB_VISIBILITY_BY_ROLE[auth.role]),
         authorized_purpose="diagnosis",
+    )
+
+
+def build_dev_auth_context(role: Role, *, session_id: str = "") -> AuthContext:
+    """Build deterministic local identities without trusting cookie-provided scopes."""
+
+    if role == "engineer":
+        return build_auth_context(
+            user_id="dev_engineer",
+            display_name="本地维修工程师",
+            role=role,
+            asset_scope=["J1号机", "pump_001"],
+            table_scope=["real_data_01", "device_alarm", "device_metric"],
+            system_scope=["DCMA_LINE_1"],
+            location_scope=["一号车间"],
+            session_id=session_id,
+            auth_method="dev-login",
+        )
+    if role == "admin":
+        return build_auth_context(
+            user_id="dev_admin",
+            display_name="本地管理员",
+            role=role,
+            session_id=session_id,
+            auth_method="dev-login",
+        )
+    return build_auth_context(
+        user_id="dev_guest",
+        display_name="本地访客",
+        role="guest",
+        session_id=session_id,
+        auth_method="dev-login",
     )

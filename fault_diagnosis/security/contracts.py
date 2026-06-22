@@ -57,6 +57,7 @@ class AuthContext(BaseModel):
             "permissions": sorted(self.permissions),
             "asset_scope": list(self.asset_scope),
             "table_scope": list(self.table_scope),
+            "allowed_tables": list(self.table_scope),
             "system_scope": list(self.system_scope),
             "location_scope": list(self.location_scope),
             "kb_scopes": list(self.kb_scopes),

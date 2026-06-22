@@ -180,6 +180,9 @@ SESSION_COOKIE_PATH = os.getenv("SESSION_COOKIE_PATH", "/").strip() or "/"
 
 # === Local Development ===
 LOCAL_DEV_MODE = _env_bool("LOCAL_DEV_MODE", False)
+ENABLE_DEV_AUTH = _env_bool("ENABLE_DEV_AUTH", False)
+# The explicit opt-in must never turn the development identity endpoint on in production.
+DEV_AUTH_ENABLED = not IS_PRODUCTION and (LOCAL_DEV_MODE or ENABLE_DEV_AUTH)
 IS_LOCAL_RUNTIME = LOCAL_DEV_MODE or APP_ENV in {"dev", "development", "local", "test"}
 
 # === Admin Auth / PDF Upload ===

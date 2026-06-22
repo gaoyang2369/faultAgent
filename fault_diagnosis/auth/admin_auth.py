@@ -27,15 +27,18 @@ from ..config import (
     SESSION_COOKIE_SECURE,
     SESSION_SECRET,
 )
+from .. import config
 from ..repositories.user_repository import FileUserRepository
 from ..security.contracts import AuthContext
-from ..security.permissions import build_auth_context
+from ..security.permissions import build_auth_context, build_dev_auth_context
 
 
 ADMIN_AUTH_COOKIE_NAME = "fd_admin_auth"
 ADMIN_AUTH_COOKIE_SALT = "fd-admin-auth-v1"
 USER_AUTH_COOKIE_NAME = "fd_user_auth"
 USER_AUTH_COOKIE_SALT = "fd-user-auth-v1"
+DEV_AUTH_COOKIE_NAME = "fd_dev_auth"
+DEV_AUTH_COOKIE_SALT = "fd-dev-auth-v1"
 
 _AUTH_SECRET = (SESSION_SECRET or "fd-admin-auth-local-fallback").encode("utf-8")
 
@@ -148,6 +151,36 @@ def verify_user_auth_token(token: str | None, session_id: str) -> dict[str, str]
     }
 
 
+def issue_dev_auth_token(session_id: str, role: str) -> str:
+    if role not in {"guest", "engineer", "admin"}:
+        raise ValueError("unsupported development role")
+    payload = _encode_payload(
+        {"sid": session_id, "role": role, "method": "dev-login", "iat": int(time.time())}
+    )
+    signature = _sign(f"{DEV_AUTH_COOKIE_SALT}:{payload}")
+    return f"{payload}.{signature}"
+
+
+def verify_dev_auth_token(token: str | None, session_id: str) -> dict[str, str] | None:
+    if not token or "." not in token:
+        return None
+    payload, signature = token.rsplit(".", 1)
+    expected = _sign(f"{DEV_AUTH_COOKIE_SALT}:{payload}")
+    if not hmac.compare_digest(signature, expected):
+        return None
+    try:
+        decoded = _decode_payload(payload)
+        issued_at = int(decoded.get("iat", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    role = str(decoded.get("role", "")).strip()
+    if str(decoded.get("sid", "")).strip() != session_id or role not in {"guest", "engineer", "admin"}:
+        return None
+    if issued_at <= 0 or int(time.time()) - issued_at > ADMIN_AUTH_MAX_AGE:
+        return None
+    return {"role": role, "auth_method": "dev-login"}
+
+
 def attach_admin_auth_cookie(
     response: Response,
     session_id: str,
@@ -200,6 +233,27 @@ def clear_user_auth_cookie(response: Response) -> None:
     )
 
 
+def attach_dev_auth_cookie(response: Response, session_id: str, role: str) -> None:
+    response.set_cookie(
+        key=DEV_AUTH_COOKIE_NAME,
+        value=issue_dev_auth_token(session_id, role),
+        httponly=True,
+        samesite=SESSION_COOKIE_SAMESITE,
+        secure=SESSION_COOKIE_SECURE,
+        max_age=ADMIN_AUTH_MAX_AGE,
+        domain=SESSION_COOKIE_DOMAIN,
+        path=SESSION_COOKIE_PATH,
+    )
+
+
+def clear_dev_auth_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=DEV_AUTH_COOKIE_NAME,
+        domain=SESSION_COOKIE_DOMAIN,
+        path=SESSION_COOKIE_PATH,
+    )
+
+
 def resolve_auth_context(
     request: Request,
     session_id: str,
@@ -207,6 +261,11 @@ def resolve_auth_context(
     user_repository: FileUserRepository | None = None,
 ) -> AuthContext:
     """Resolve a trusted identity; client role fields never participate."""
+
+    if config.DEV_AUTH_ENABLED:
+        dev_identity = verify_dev_auth_token(request.cookies.get(DEV_AUTH_COOKIE_NAME), session_id)
+        if dev_identity:
+            return build_dev_auth_context(dev_identity["role"], session_id=session_id)
 
     admin_token = request.cookies.get(ADMIN_AUTH_COOKIE_NAME)
     admin_identity = verify_admin_auth_token(admin_token, session_id)

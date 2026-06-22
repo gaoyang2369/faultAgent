@@ -520,10 +520,11 @@ Admin 仍不具备 `tool.workorder.dispatch`，系统也没有设备控制、配
 
 | 接口/机制 | 当前行为 |
 | --- | --- |
+| `POST /auth/dev-login` | 仅开发开关启用时，签发与 session 绑定的 `fd_dev_auth`，模拟服务端预设的 guest/engineer/admin |
 | `POST /auth/login` | 校验文件用户仓储中的 PBKDF2 密码，签发 `fd_user_auth` |
 | `POST /auth/admin/login` | 校验管理员配置，签发 `fd_admin_auth` |
 | `POST /auth/logout` | 清理用户与管理员 cookie |
-| `GET /auth/identity` | 返回服务端解析后的 `AuthContext.identity_payload()` |
+| `GET /auth/identity` | 返回服务端解析后的 `AuthContext.identity_payload()`，含 role、permissions、asset_scope、allowed_tables、auth_method |
 | 用户 cookie | HMAC 签名、绑定 session id、检查有效期 |
 | 管理员 cookie | HMAC 签名、绑定 session id、用户名和有效期 |
 | `users.json` | 保存 role 与资源范围；持久化 permissions 不被信任 |

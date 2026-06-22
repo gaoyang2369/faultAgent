@@ -105,6 +105,7 @@ async def token_stream_events(
                 thread_id,
                 user_identity,
                 cancel_event=cancel_event,
+                auth_context=auth_context,
             ):
                 yield _inject_trace_into_sse_chunk(chunk, trace_id, thread_id=thread_id)
             return

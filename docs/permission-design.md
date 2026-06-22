@@ -252,6 +252,8 @@ trash/run/users.json
 - 不保存明文密码。
 - cookie 必须服务端签名，不能让前端直接写 role。
 - 继续兼容现有 `fd_admin_auth`，管理员老接口不破坏。
+- 本地验收使用 `POST /auth/dev-login` 和独立签名 `fd_dev_auth` Cookie；仅当 `LOCAL_DEV_MODE=true` 或 `ENABLE_DEV_AUTH=true` 且不是生产环境时可用。
+- dev-login 只接受 `guest`、`engineer`、`admin`，设备和表范围由服务端预设，Cookie 中不接受调用方自定义权限或 scope。
 - `/auth/identity` 保持已有字段，同时增加新字段：
 
 ```json
@@ -263,6 +265,7 @@ trash/run/users.json
   "permissions": ["workflow.status_query", "tool.sql.read"],
   "asset_scope": ["J1号机"],
   "table_scope": ["real_data_01", "device_alarm", "device_metric"],
+  "allowed_tables": ["real_data_01", "device_alarm", "device_metric"],
   "system_scope": ["DCMA_LINE_1"],
   "auth_method": "password"
 }
@@ -277,12 +280,23 @@ trash/run/users.json
 
 - `fault_diagnosis/api/auth.py`
   - 新增普通登录接口。
+  - 新增仅开发环境可用的 `/auth/dev-login`。
   - `/auth/identity` 返回兼容字段 + 权限字段。
 
 - `fault_diagnosis/services/chat_service.py`
   - `resolve_request_identity()` 后构造 `AuthContext`。
   - 调用 `token_stream_events` 时传 `auth_context`。
   - `user_identity` 参数只保留日志和兼容，不参与授权。
+
+### 本地验收
+
+`tests/test_agent_authorization_flow.py` 固化三种角色的 workflow、SQL、报告、PDF 和设备控制边界。运行中的本地服务可用以下脚本做真实 Cookie + curl + SSE 验收：
+
+```bash
+scripts/auth_acceptance_test.sh
+```
+
+脚本会故意为 guest 和 engineer 传入 `user_identity=管理员`，并检查最终仍以服务端 `AuthContext` 为准；同时检查 `complete.authorization`、`tool_start`、`report_url` 和 PDF 管理接口状态码。
 
 - `fault_diagnosis/agent_runtime/streaming.py`
   - `token_stream_events()` 增加 `auth_context` 可选参数。

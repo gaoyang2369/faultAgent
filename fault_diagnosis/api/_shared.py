@@ -9,8 +9,10 @@ from fastapi.responses import JSONResponse
 
 from ..auth.admin_auth import (
     attach_admin_auth_cookie,
+    attach_dev_auth_cookie,
     attach_user_auth_cookie,
     clear_admin_auth_cookie,
+    clear_dev_auth_cookie,
     clear_user_auth_cookie,
     resolve_auth_context,
     resolve_identity_payload,
@@ -44,6 +46,7 @@ def json_response_with_scope_and_admin(
         clear_admin_auth_cookie(response)
     elif admin_username:
         clear_user_auth_cookie(response)
+        clear_dev_auth_cookie(response)
         attach_admin_auth_cookie(response, session_id, admin_username)
     return response
 
@@ -62,9 +65,27 @@ def json_response_with_scope_and_user(
     if clear_auth_cookies_after_response:
         clear_user_auth_cookie(response)
         clear_admin_auth_cookie(response)
+        clear_dev_auth_cookie(response)
     elif user_id:
         attach_user_auth_cookie(response, session_id, user_id)
         clear_admin_auth_cookie(response)
+        clear_dev_auth_cookie(response)
+    return response
+
+
+def json_response_with_scope_and_dev(
+    request: Request,
+    content: Any,
+    *,
+    role: str,
+    status_code: int = 200,
+) -> JSONResponse:
+    manager, session_id, _, legacy_bindings = resolve_request_scope(request)
+    response = JSONResponse(status_code=status_code, content=content)
+    manager.attach_scope_cookies(response, session_id, legacy_bindings)
+    clear_user_auth_cookie(response)
+    clear_admin_auth_cookie(response)
+    attach_dev_auth_cookie(response, session_id, role)
     return response
 
 

@@ -159,10 +159,20 @@ start -> ping* -> tool_start/tool_end* -> token -> complete
 
 接口：
 
+- `POST /auth/dev-login`：仅本地开发开关启用时签发 guest/engineer/admin 测试身份。
 - `POST /auth/login`：工程师/文件用户登录。
 - `POST /auth/admin/login`：兼容现有管理员登录。
 - `POST /auth/logout`：清理普通用户与管理员 cookie。
-- `GET /auth/identity`：返回兼容身份字段以及 `role`、`permissions` 和资源范围。
+- `GET /auth/identity`：返回兼容身份字段以及 `role`、`permissions`、`asset_scope`、`allowed_tables` 和 `auth_method`。
+
+开发身份的角色与资源范围由服务端固定策略生成，Cookie 与当前签名 session 绑定，前端 `user_identity` 参数不能覆盖它。启用方式与 curl 验收命令：
+
+```bash
+LOCAL_DEV_MODE=true python -m uvicorn fault_diagnosis.app:app --host 127.0.0.1 --port 8000
+scripts/auth_acceptance_test.sh
+```
+
+也可仅设置 `ENABLE_DEV_AUTH=true` 开放登录入口；当 `APP_ENV=production` 时该入口始终不可用。
 
 普通用户默认从 `trash/run/users.json` 读取，也可通过 `USER_STORE_PATH` 指定。密码只接受 PBKDF2-SHA256 哈希，不接受明文。可用以下方式生成哈希：
 
