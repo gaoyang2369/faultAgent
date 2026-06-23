@@ -99,7 +99,7 @@
               :key="index"
               :message="message"
               :is-stream="isStreaming && index === currentMessages.length - 1"
-              :can-edit="message.role === 'user' && !message.voiceSessionActive"
+              :can-edit="message.role === 'user' && !message.voiceSessionActive && !isStreaming"
               @edit-user-message="handleEditUserMessage(index, $event)"
           />
         </div>

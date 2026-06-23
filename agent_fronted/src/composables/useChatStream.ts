@@ -78,6 +78,7 @@ const buildHistoryTitle = (threadId: string, source: 'server' | 'local-cache' = 
 
 const PUBLIC_THINKING_STATUS = '思考中...'
 const THINKING_STREAM_STATES = new Set(['connecting', 'reasoning', 'streaming', 'tool_running'])
+const ASSISTANT_SPEAKER_NAME = '故障诊断 Agent'
 
 const normalizeMessageForView = (message: Message) => normalizeChatMessage(message)
 const isRenderableMessage = (message: Message) => isRenderableChatMessage(normalizeMessageForView(message))
@@ -549,6 +550,31 @@ export const useChatStream = ({
     return '管理员'
   }
 
+  const resolveUserSpeakerName = () => {
+    const candidates = [
+      userIdentityStore.speakerName,
+      userIdentityStore.rawDisplayName,
+      userIdentityStore.userRole,
+      userIdentityStore.userId
+    ]
+    for (const candidate of candidates) {
+      const value = typeof candidate === 'string' ? candidate.trim() : ''
+      if (!value || value === '等待身份识别') continue
+      return value.replace(/身份识别已完成$/, '')
+    }
+    return '访客'
+  }
+
+  const buildUserMessageMetadata = () => ({
+    speakerName: resolveUserSpeakerName(),
+    userId: userIdentityStore.userId || null,
+    userRole: userIdentityStore.userRole || null
+  })
+
+  const buildAssistantMessageMetadata = () => ({
+    speakerName: ASSISTANT_SPEAKER_NAME
+  })
+
   const renameChatHistoryItem = async (chatId: string, title: string) => {
     const normalizedTitle = title.trim().slice(0, 60)
     if (!chatId || !normalizedTitle) return
@@ -691,6 +717,7 @@ export const useChatStream = ({
     voiceAccumulatedText = ''
     currentMessages.value.push({
       role: 'assistant',
+      ...buildAssistantMessageMetadata(),
       content: '',
       timestamp: new Date().toISOString(),
       isMarkdown: true,
@@ -724,6 +751,7 @@ export const useChatStream = ({
     syncExternalThread(threadId)
     currentMessages.value.push({
       role: 'user',
+      ...buildUserMessageMetadata(),
       content: messageContent,
       timestamp: new Date().toISOString(),
       voiceSessionActive: true
@@ -835,6 +863,7 @@ export const useChatStream = ({
     if (payload.chartData) {
       currentMessages.value.push({
         role: 'assistant',
+        ...buildAssistantMessageMetadata(),
         content: '',
         chartData: payload.chartData,
         timestamp: new Date().toISOString(),
@@ -845,6 +874,7 @@ export const useChatStream = ({
     if (payload.imageUrl) {
       currentMessages.value.push({
         role: 'assistant',
+        ...buildAssistantMessageMetadata(),
         content: '',
         imageUrl: payload.imageUrl,
         timestamp: new Date().toISOString(),
@@ -931,6 +961,7 @@ export const useChatStream = ({
     if (appendUserMessage) {
       const userMessage = {
         role: 'user',
+        ...buildUserMessageMetadata(),
         content: messageContent,
         timestamp: new Date().toISOString()
       }
@@ -940,6 +971,7 @@ export const useChatStream = ({
     if (appendUserMessage && reboundFromLocalCache) {
       currentMessages.value.push({
         role: 'assistant',
+        ...buildAssistantMessageMetadata(),
         content: '⚠️ 以下回复将从新的受控会话开始。旧本地缓存内容不会自动注入服务端上下文。',
         timestamp: new Date().toISOString(),
         isMarkdown: true,
@@ -955,6 +987,7 @@ export const useChatStream = ({
 
     currentMessages.value.push({
       role: 'assistant',
+      ...buildAssistantMessageMetadata(),
       content: '',
       timestamp: new Date().toISOString(),
       isMarkdown: true,
@@ -1181,6 +1214,7 @@ export const useChatStream = ({
             if (completeData.chartData) {
               currentMessages.value.push({
                 role: 'assistant',
+                ...buildAssistantMessageMetadata(),
                 content: '',
                 chartData: completeData.chartData,
                 timestamp: new Date().toISOString(),
@@ -1191,6 +1225,7 @@ export const useChatStream = ({
             if (completeData.imageUrl) {
               currentMessages.value.push({
                 role: 'assistant',
+                ...buildAssistantMessageMetadata(),
                 content: '',
                 imageUrl: completeData.imageUrl,
                 timestamp: new Date().toISOString(),
@@ -1298,6 +1333,9 @@ export const useChatStream = ({
         localCacheOnly.value ? 'local-cache' : 'server'
       )
       await scrollToBottom()
+      if (options.throwOnError) {
+        throw error
+      }
     } finally {
       isSubmittingMessage = false
     }
@@ -1339,11 +1377,15 @@ export const useChatStream = ({
     }
 
     const requestedThreadId = typeof currentChatId.value === 'string' ? currentChatId.value : null
+    if (!requestedThreadId || !isSignedThreadId(requestedThreadId)) {
+      throw new Error('当前会话尚未同步到服务端，不能编辑后重新生成。请先发送一轮新消息后再编辑。')
+    }
     const userTurnIndex = getUserTurnIndexAtMessageIndex(messageIndex)
     if (userTurnIndex < 0) {
       throw new Error('未找到可编辑的用户轮次')
     }
     const editedAt = new Date().toISOString()
+    const previousMessages = [...currentMessages.value]
     const previousHistory = Array.isArray(targetMessage.editHistory)
       ? targetMessage.editHistory
       : []
@@ -1390,13 +1432,27 @@ export const useChatStream = ({
     )
     await scrollToBottom({ force: true, markNewContent: false })
 
-    await sendMessage(nextContent, {
-      appendUserMessage: false,
-      threadId: requestedThreadId,
-      edit: {
-        userTurnIndex
+    try {
+      await sendMessage(nextContent, {
+        appendUserMessage: false,
+        threadId: requestedThreadId,
+        throwOnError: true,
+        edit: {
+          userTurnIndex
+        }
+      })
+    } catch (error: any) {
+      currentMessages.value = previousMessages
+      const previousTaskSnapshot = resolveLatestVisibleTaskSnapshot(previousMessages)
+      if (previousTaskSnapshot) {
+        assignTodosState(previousTaskSnapshot.todos || [], previousTaskSnapshot.summary || null)
+      } else {
+        assignTodosState([])
       }
-    })
+      persistConversationCache(requestedThreadId, localCacheOnly.value ? 'local-cache' : 'server')
+      await scrollToBottom({ force: true, markNewContent: false })
+      throw new Error(error?.message || '保存并重新生成失败，请稍后重试')
+    }
   }
 
   const disposeStream = () => {

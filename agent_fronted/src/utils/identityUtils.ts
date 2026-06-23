@@ -25,7 +25,8 @@ export const processUserInfo = (userInfo: any) => {
   // 设置用户身份信息
   userIdentityStore.setUserInfo({
     userId: userInfo.user_id,
-    userRole: roles.length > 0 ? roles.join(',') : null
+    userRole: roles.length > 0 ? roles.join(',') : null,
+    displayName: userInfo.display_name || (roles.length > 0 ? roles[0] : null)
   });
 
   // 返回处理后的信息

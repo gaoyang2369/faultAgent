@@ -5,6 +5,11 @@
       <ComputerDesktopIcon v-else class="icon" :class="{ 'assistant': !isUser }" />
     </div>
     <div class="content">
+      <div class="message-meta">
+        <span class="message-meta__speaker">{{ messageSpeakerName }}</span>
+        <time class="message-meta__time" :datetime="messageTimestampIso">{{ messageTimestampLabel }}</time>
+      </div>
+
       <div v-if="isUser" class="text-container">
         <div v-if="isEditingUserMessage" class="user-edit-box">
           <textarea
@@ -1192,6 +1197,9 @@
             <el-button size="small" @click="openReportInNewTab(reportLinks[0])">
               新窗口打开
             </el-button>
+            <el-button size="small" @click="downloadReport(reportLinks[0])">
+              下载报告
+            </el-button>
           </template>
           <template v-else>
             <el-select v-model="selectedReport" size="small" placeholder="选择报告" style="width: 260px; margin-right: 8px;">
@@ -1202,6 +1210,9 @@
             </el-button>
             <el-button size="small" :disabled="!selectedReport" @click="openReportInNewTab(selectedReport)">
               新窗口打开
+            </el-button>
+            <el-button size="small" :disabled="!selectedReport" @click="downloadReport(selectedReport)">
+              下载报告
             </el-button>
           </template>
         </div>
@@ -1234,6 +1245,7 @@
       <div class="report-toolbar">
         <el-button size="small" @click="reloadReport" :disabled="!reportUrl">刷新</el-button>
         <el-button size="small" @click="openReportInNewTab(reportUrl)" :disabled="!reportUrl">新窗口打开</el-button>
+        <el-button size="small" @click="downloadReport(reportUrl)" :disabled="!reportUrl">下载报告</el-button>
         <el-button size="small" @click="toggleDrawerSize">{{ drawerSize === '420px' ? '加宽' : '还原' }}</el-button>
       </div>
       
@@ -1395,6 +1407,38 @@ const governanceLedgerKanban = computed(() => {
 const isUser = computed(() => props.message.role === 'user');
 const canEditUserMessage = computed(() => isUser.value && props.canEdit && !props.isStream);
 const copyButtonTitle = computed(() => copied.value ? '已复制' : '复制内容');
+const normalizeDisplayText = (value) => (typeof value === 'string' ? value.trim() : '');
+const messageSpeakerName = computed(() => {
+  const candidates = [
+    props.message?.speakerName,
+    props.message?.displayName,
+    props.message?.display_name,
+    props.message?.userRole,
+    props.message?.user_role,
+    props.message?.userId,
+    props.message?.user_id
+  ];
+  for (const candidate of candidates) {
+    const text = normalizeDisplayText(candidate).replace(/身份识别已完成$/, '');
+    if (text) return text;
+  }
+  return isUser.value ? '用户' : '故障诊断 Agent';
+});
+const messageTimestampDate = computed(() => {
+  const timestamp = props.message?.timestamp || props.message?.created_at || props.message?.createdAt;
+  const date = timestamp ? new Date(timestamp) : new Date();
+  return Number.isNaN(date.getTime()) ? new Date() : date;
+});
+const messageTimestampIso = computed(() => messageTimestampDate.value.toISOString());
+const messageTimestampLabel = computed(() => messageTimestampDate.value.toLocaleString('zh-CN', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false
+}));
 const editHistoryItems = computed(() => {
   const history = Array.isArray(props.message?.editHistory) ? props.message.editHistory : [];
   return history
@@ -4662,6 +4706,28 @@ const normalizeReportUrl = (url) => {
   return url;
 };
 
+const getSafeReportPath = (url) => {
+  const rawUrl = String(url || '').trim();
+  if (!rawUrl) return '';
+  const pathOnly = rawUrl.split('?')[0];
+  if (isSafeReportUrl(pathOnly)) {
+    return pathOnly;
+  }
+
+  try {
+    const parsed = new URL(rawUrl, window.location.origin);
+    const candidate = parsed.pathname;
+    return isSafeReportUrl(candidate) ? candidate : '';
+  } catch {
+    return '';
+  }
+};
+
+const getReportDownloadName = (url) => {
+  const safePath = getSafeReportPath(url);
+  return normalizeReportFilename(safePath.split('/').pop()) || 'diagnosis-report.html';
+};
+
 // 监听reportUrl变化，当为空时自动关闭抽屉
 watch(reportUrl, (newVal) => {
   if (!newVal && drawerVisible.value) {
@@ -4676,17 +4742,18 @@ watch(drawerVisible, (newVal) => {
   }
 });
 const openReport = (url) => {
-  if (!isSafeReportUrl(url)) {
+  const safePath = getSafeReportPath(url);
+  if (!safePath) {
     ElMessage.warning('报告链接不合法，无法打开');
     return;
   }
-  reportUrl.value = normalizeReportUrl(url);
-  isMarkdownReport.value = url.endsWith('.md');
+  reportUrl.value = normalizeReportUrl(safePath);
+  isMarkdownReport.value = safePath.endsWith('.md');
   drawerLoading.value = true;
   drawerVisible.value = true;
   
   if (isMarkdownReport.value) {
-    fetchMarkdownContent(url);
+    fetchMarkdownContent(safePath);
   } else {
     window.setTimeout(() => { drawerLoading.value = false; }, 1500);
   }
@@ -4709,11 +4776,38 @@ const fetchMarkdownContent = async (url) => {
 };
 const openReportInNewTab = (url) => {
   if (!url) return;
-  if (!isSafeReportUrl(url)) {
+  const safePath = getSafeReportPath(url);
+  if (!safePath) {
     ElMessage.warning('报告链接不合法，无法打开');
     return;
   }
-  window.open(normalizeReportUrl(url), '_blank');
+  window.open(normalizeReportUrl(safePath), '_blank');
+};
+const downloadReport = async (url) => {
+  const safePath = getSafeReportPath(url);
+  if (!safePath) {
+    ElMessage.warning('报告链接不合法，无法下载');
+    return;
+  }
+
+  try {
+    const response = await fetch(normalizeReportUrl(safePath), { credentials: 'include' });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = getReportDownloadName(safePath);
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  } catch (error) {
+    console.error('Failed to download report:', error);
+    ElMessage.error('报告下载失败');
+  }
 };
 const reloadReport = () => {
   if (!reportUrl.value) return;

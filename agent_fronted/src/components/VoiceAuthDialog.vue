@@ -14,6 +14,7 @@ type VoiceAuthSuccessPayload = {
   role: string
   userId: string
   userRole: string
+  displayName?: string | null
   voiceprintScore?: number | null
   transcript?: string
 }
@@ -89,7 +90,8 @@ const resolveRolePayload = (
   userId: string,
   role: unknown,
   score?: number | null,
-  transcript?: string
+  transcript?: string,
+  displayName?: string | null
 ): VoiceAuthSuccessPayload => {
   const normalizedUserId = userId.trim() || resolveAuthUserId()
   const userRole = resolveVoiceRole(role, normalizedUserId)
@@ -99,6 +101,7 @@ const resolveRolePayload = (
     role: isVisitor ? 'visitor' : 'admin',
     userId: normalizedUserId,
     userRole,
+    displayName: displayName || userRole,
     voiceprintScore: score,
     transcript
   }
@@ -174,7 +177,8 @@ const authenticateVoice = async () => {
       result.user_id || userId,
       result.user_role || result.role || result.clean_role,
       result.voiceprint_score ?? null,
-      result.transcript || ''
+      result.transcript || '',
+      result.display_name || null
     )
     authStatusText.value = result.transcript ? `识别文本：${result.transcript}` : '认证通过'
     ElMessage.success(`识别成功：${payload.userRole}`)

@@ -17,6 +17,9 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   timestamp?: string
+  speakerName?: string | null
+  userId?: string | null
+  userRole?: string | null
   thread_id?: string
   threadId?: string
   trace_id?: string | null

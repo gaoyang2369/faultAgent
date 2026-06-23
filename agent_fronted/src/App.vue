@@ -23,6 +23,7 @@ type DevAuthRole = 'guest' | 'engineer' | 'admin'
 type BackendIdentity = {
   user_id?: string | null
   user_role?: string | null
+  display_name?: string | null
   role?: DevAuthRole | string | null
   is_admin?: boolean | null
 }
@@ -30,6 +31,7 @@ type VoiceAuthSuccessPayload = {
   role: string
   userId: string
   userRole: string
+  displayName?: string | null
   voiceprintScore?: number | null
   transcript?: string
 }
@@ -109,6 +111,7 @@ const applyBackendIdentity = (identity: BackendIdentity) => {
   userIdentityStore.setUserInfo({
     userId: identity.user_id || fallbackUserId,
     userRole: identity.user_role || fallbackUserRole,
+    displayName: identity.display_name || identity.user_role || fallbackUserRole,
   })
   userIdentityStore.setStatus('connected')
   devIdentityRole.value = nextRole
@@ -281,7 +284,8 @@ const applyDesktopPetUserInfo = (payload: DesktopPetPayload) => {
 
   userIdentityStore.setUserInfo({
     userId: resolvedRole.role === '访客' ? 'guest' : nextUserId,
-    userRole: resolvedRole.role
+    userRole: resolvedRole.role,
+    displayName: resolvedRole.role
   })
   userIdentityStore.setStatus('connected')
 
@@ -419,6 +423,7 @@ const onVoiceAuthSuccess = async (payload: VoiceAuthSuccessPayload | string) => 
   userIdentityStore.setUserInfo({
     userId: normalizedPayload.userId || (isAdmin ? 'admin' : 'guest'),
     userRole: normalizedPayload.userRole || (isAdmin ? '管理员' : '访客'),
+    displayName: normalizedPayload.displayName || normalizedPayload.userRole || (isAdmin ? '管理员' : '访客'),
   })
   userIdentityStore.setStatus('connected')
 
