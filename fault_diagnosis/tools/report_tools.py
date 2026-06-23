@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..common.paths import REPORTS_DIR
 from ..security.runtime_context import get_current_auth_context
+from .operation_report_renderer import build_operation_report_html, load_operation_report_payload
 
 try:
     from langchain_core.tools import tool
@@ -467,7 +468,7 @@ def _trend_panel_html(group: dict, index: int, *, wide: bool = True) -> str:
 def _core_trend_group_indexes(trend_groups: list[dict]) -> list[int]:
     if not trend_groups:
         return []
-    preferred_keys = ("speed", "health_overview")
+    preferred_keys = ("speed", "load")
     indexes: list[int] = []
     for key in preferred_keys:
         matched = next(
@@ -808,11 +809,21 @@ def _build_report_html(
     preventive_maintenance: str,
     diagnosis_basis: str,
     chart_payload: str | None = None,
+    operation_report_payload: str | None = None,
 ) -> str:
     chart_data = _load_chart_payload(chart_payload)
-    status_summary_section = _build_status_summary_section(chart_data)
     chart_section = _build_chart_section(chart_data)
     chart_assets = _build_chart_assets(chart_data)
+    operation_payload = load_operation_report_payload(operation_report_payload)
+    if operation_payload:
+        return build_operation_report_html(
+            payload=operation_payload,
+            chart_section=chart_section,
+            chart_assets=chart_assets,
+            diagnosis_basis=diagnosis_basis,
+            markdown_to_html=_markdown_to_html,
+        )
+    status_summary_section = _build_status_summary_section(chart_data)
     workorder_section = _extract_workorder_section(repair_recommendations)
     sections = [
         ("01", "报告摘要", executive_summary, False),
@@ -1201,6 +1212,7 @@ class SaveReportSchema(BaseModel):
     diagnosis_basis: str = Field(description="Diagnosis basis")
     report_filename: str = Field(description="Output filename without extension")
     chart_payload: str | None = Field(default=None, description="Optional JSON payload for ECharts visualizations")
+    operation_report_payload: str | None = Field(default=None, description="Optional structured operation report JSON")
 
 
 @tool(args_schema=SaveReportSchema)
@@ -1218,6 +1230,7 @@ def save_report(
     diagnosis_basis: str,
     report_filename: str,
     chart_payload: str | None = None,
+    operation_report_payload: str | None = None,
 ) -> str:
     """Save a visual HTML report."""
     try:
@@ -1238,6 +1251,7 @@ def save_report(
             preventive_maintenance=preventive_maintenance,
             diagnosis_basis=merged_basis,
             chart_payload=chart_payload,
+            operation_report_payload=operation_report_payload,
         )
 
         final_filename = f"{safe_report_name}.html"

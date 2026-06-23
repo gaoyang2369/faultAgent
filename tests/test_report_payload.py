@@ -356,17 +356,65 @@ def test_status_report_downgrades_a_code_to_warning_event() -> None:
         sql_artifact=sql_artifact,
         knowledge_artifact=knowledge,
         analysis_artifact=artifact,
-        current_time="2026-06-10 12:13:00",
+        current_time="2026-06-23 12:13:00",
         report_filename="dcma-status",
     )
     chart_payload = json.loads(payload["chart_payload"])
+    operation_report = json.loads(payload["operation_report_payload"])
     speed_group = next(group for group in chart_payload["trend_groups"] if group["key"] == "speed")
     assert chart_payload["status_summary"]["status_level"] == "告警 / 需确认"
     assert chart_payload["status_summary"]["current_event"] == "A07089"
+    assert operation_report["severity"] == "warning"
+    assert operation_report["severity_label"] == "WARNING / 采样窗口异常"
+    assert operation_report["asset_risk_level"] == "warning"
+    assert operation_report["data_currentness_level"] == "stale"
+    assert operation_report["action_priority"] == "P1"
+    assert operation_report["event_code"] == "A07089"
+    assert operation_report["top_actions"][:1] == ["重新获取实时数据或确认采样链路"]
+    assert operation_report["data_age_text"].endswith("天")
+    assert "约 已滞后" not in operation_report["data_freshness_note"]
+    assert "采样窗口内" in operation_report["one_sentence_conclusion"]
+    assert "当前处于告警状态" not in operation_report["one_sentence_conclusion"]
+    assert len(operation_report["findings"]) <= 5
+    assert len(operation_report["cause_candidates"]) <= 3
+    assert len(operation_report["action_plan"]) <= 5
+    assert operation_report["action_plan"][0]["acceptance_criteria"]
+    assert operation_report["action_plan"][0]["escalation_condition"]
+    assert operation_report["workorder_suggestion"]["trigger_conditions"]
     assert "A07089" in payload["diagnosis_details"]
     assert "不能仅凭事件码证明速度偏差" in payload["diagnosis_details"]
     assert "speed_error_rate" in {metric["key"] for metric in speed_group["metrics"]}
     assert {"name": "关注", "value": 20.0, "unit": "%"} in speed_group["thresholds"]
+
+    html = _build_report_html(
+        title=payload["title"],
+        report_time=payload["report_time"],
+        diagnosis_object=payload["diagnosis_object"],
+        diagnosis_type=payload["diagnosis_type"],
+        executive_summary=payload["executive_summary"],
+        diagnosis_overview=payload["diagnosis_overview"],
+        diagnosis_details=payload["diagnosis_details"],
+        fault_inference=payload["fault_inference"],
+        repair_recommendations=payload["repair_recommendations"],
+        preventive_maintenance=payload["preventive_maintenance"],
+        diagnosis_basis=payload["diagnosis_basis"],
+        chart_payload=payload["chart_payload"],
+        operation_report_payload=payload["operation_report_payload"],
+    )
+    assert "一页结论" in html
+    assert "运行快照" in html
+    assert "设备风险" in html
+    assert "数据时效" in html
+    assert "处置优先级" in html
+    assert "趋势与持续性" in html
+    assert "原因候选" in html
+    assert "处置计划" in html
+    assert "附录" in html
+    assert "SQL 与执行信息" in html
+    assert "报告生成元信息" in html
+    assert "Executive Diagnosis" not in html
+    assert "Operational Snapshot" not in html
+    assert "CRITICAL / 严重" not in html
 
 
 def test_structured_analysis_avoids_stale_timestamp_language() -> None:

@@ -20,6 +20,7 @@ from .report_sections import (
     build_workorder_todo_markdown,
     details_block,
 )
+from .operation_report import build_operation_diagnosis_report
 from .reporting_defs import (
     CONTROL_WORD_BITS as _CONTROL_WORD_BITS,
     DATA_FRESHNESS_DELAYED_SECONDS as _DATA_FRESHNESS_DELAYED_SECONDS,
@@ -1741,6 +1742,22 @@ def build_report_payload(
     workorder_suffix = f"\n\n{workorder_section}" if workorder_section else ""
     repair_recommendations = f"{base_recommendations}{workorder_suffix}"
     sql_statement_text = ";\n".join(sql_artifact.sql_used) or "无"
+    operation_report = None
+    if sql_report.rows:
+        operation_report = build_operation_diagnosis_report(
+            request=request,
+            title=title,
+            report_time=current_time,
+            diagnosis_type=diagnosis_type,
+            rows=sql_report.rows,
+            data_quality=sql_report.data_quality or {},
+            status_summary=_build_status_summary(sql_report.rows, sql_report.data_quality),
+            sql_summary=sql_artifact.summary or "无",
+            sql_statement=sql_statement_text,
+            knowledge_artifact=knowledge_artifact,
+            analysis_artifact=analysis_artifact,
+            workorder_suggestion=workorder_suggestion,
+        )
 
     return {
         "title": title,
@@ -1772,5 +1789,10 @@ def build_report_payload(
         ),
         "report_filename": report_filename,
         "chart_payload": sql_report.chart_payload,
+        "operation_report_payload": (
+            json.dumps(operation_report.model_dump(mode="json", exclude_none=True), ensure_ascii=False)
+            if operation_report is not None
+            else None
+        ),
         "workorder_suggestion": workorder_suggestion.model_dump(exclude_none=True) if workorder_suggestion else None,
     }
