@@ -56,6 +56,7 @@ def json_response_with_scope_and_user(
     content: Any,
     *,
     user_id: str | None = None,
+    auth_method: str = "password",
     clear_auth_cookies_after_response: bool = False,
     status_code: int = 200,
 ) -> JSONResponse:
@@ -67,7 +68,7 @@ def json_response_with_scope_and_user(
         clear_admin_auth_cookie(response)
         clear_dev_auth_cookie(response)
     elif user_id:
-        attach_user_auth_cookie(response, session_id, user_id)
+        attach_user_auth_cookie(response, session_id, user_id, auth_method=auth_method)
         clear_admin_auth_cookie(response)
         clear_dev_auth_cookie(response)
     return response

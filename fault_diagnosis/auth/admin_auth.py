@@ -116,7 +116,7 @@ def verify_admin_auth_token(token: str | None, session_id: str) -> dict[str, str
         "user_role": "管理员",
         "is_admin": True,
         "auth_method": auth_method,
-        "available_auth_methods": ["password", "voice_signed"],
+        "available_auth_methods": ["password", "voice_signed", "voice_exchange"],
     }
 
 

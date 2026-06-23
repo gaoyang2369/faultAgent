@@ -96,17 +96,49 @@ def verify_voice_signed_request(
     now: float | None = None,
 ) -> VoiceIdentityAssertion | None:
     """Verify voice headers and atomically consume the nonce on success."""
-
-    shared_secret = secret if secret is not None else os.getenv("VOICE_AUTH_SHARED_SECRET", "").strip()
-    if not shared_secret:
-        return None
-
     headers = getattr(request, "headers", {})
     user = str(headers.get(VOICE_USER_HEADER) or "").strip()
     role = str(headers.get(VOICE_ROLE_HEADER) or "").strip()
     timestamp_text = str(headers.get(VOICE_TIMESTAMP_HEADER) or "").strip()
     nonce = str(headers.get(VOICE_NONCE_HEADER) or "").strip()
     signature = str(headers.get(VOICE_SIGNATURE_HEADER) or "").strip()
+
+    return verify_voice_signed_values(
+        user=user,
+        role=role,
+        timestamp=timestamp_text,
+        nonce=nonce,
+        signature=signature,
+        secret=secret,
+        max_age_seconds=max_age_seconds,
+        nonce_cache=nonce_cache,
+        now=now,
+    )
+
+
+def verify_voice_signed_values(
+    *,
+    user: str,
+    role: str,
+    timestamp: str | int,
+    nonce: str,
+    signature: str,
+    secret: str | None = None,
+    max_age_seconds: int | None = None,
+    nonce_cache: VoiceNonceCache | None = None,
+    now: float | None = None,
+) -> VoiceIdentityAssertion | None:
+    """Verify a voice identity assertion from any transport, then consume nonce."""
+
+    shared_secret = secret if secret is not None else os.getenv("VOICE_AUTH_SHARED_SECRET", "").strip()
+    if not shared_secret:
+        return None
+
+    user = str(user or "").strip()
+    role = str(role or "").strip()
+    timestamp_text = str(timestamp or "").strip()
+    nonce = str(nonce or "").strip()
+    signature = str(signature or "").strip()
     if signature.lower().startswith("sha256="):
         signature = signature.split("=", 1)[1].strip()
     normalized_role = normalize_voice_role(role)

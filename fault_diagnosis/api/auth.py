@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from .. import config
 from ..auth.admin_auth import ADMIN_USERNAME, is_valid_admin_credentials
+from ..auth.voice_exchange import resolve_voice_exchange_auth_context
 from ..repositories.user_repository import FileUserRepository
 from ..security.contracts import Role
 from ..security.permissions import build_auth_context, build_dev_auth_context
@@ -31,6 +32,14 @@ class LoginPayload(BaseModel):
 
 class DevLoginPayload(BaseModel):
     role: Role
+
+
+class VoiceExchangePayload(BaseModel):
+    user: str
+    role: str
+    timestamp: str | int
+    nonce: str
+    signature: str
 
 
 @router.get("/auth/identity")
@@ -66,6 +75,31 @@ async def login(request: Request, payload: LoginPayload):
         request,
         auth_context.identity_payload(),
         user_id=user.user_id,
+    )
+
+
+@router.post("/auth/voice/exchange")
+async def voice_exchange(request: Request, payload: VoiceExchangePayload):
+    """Exchange a trusted voice backend assertion for this backend's browser cookie."""
+
+    auth_context = resolve_voice_exchange_auth_context(
+        user=payload.user,
+        role=payload.role,
+        timestamp=payload.timestamp,
+        nonce=payload.nonce,
+        signature=payload.signature,
+    )
+    if auth_context is None:
+        return json_response_with_scope(
+            request,
+            {"detail": "语音身份签名无效、已过期或未映射到有效用户。"},
+            status_code=403,
+        )
+    return json_response_with_scope_and_user(
+        request,
+        auth_context.identity_payload(),
+        user_id=auth_context.user_id,
+        auth_method="voice_exchange",
     )
 
 

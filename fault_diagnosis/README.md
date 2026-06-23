@@ -218,6 +218,8 @@ payload = trim(user) + "\n" + trim(role) + "\n" + trim(timestamp) + "\n" + trim(
 
 用户记录可额外配置 `voice_name`，并使用 `allowed_tables` 作为数据表范围；为兼容旧文件，`display_name`、`username` 和 `table_scope` 仍可读取。服务端会核对签名中的 role 与用户记录角色，权限仍由服务端角色策略生成，不信任请求体中的 `user_identity` 或用户文件中的自定义 `permissions`。当前 nonce 防重放缓存为单进程内存实现，多 worker 部署前应替换为 Redis 等共享存储。
 
+浏览器前端需要使用文本输入 `/chat/stream` 时，不直接信任前端传入的 `user_identity`。可先调用 `POST /auth/voice/exchange`，请求体包含 `user`、`role`、`timestamp`、`nonce`、`signature`，签名原文与上面的 header 直连方案完全一致，不包含 body。交换成功后故障诊断后端签发自己的 Session/Cookie，随后 `/chat/stream` 只通过该 Cookie 解析权限；交换失败返回 403，不会按前端传来的 role 授权。`/agent/chat` 仍保留 `X-Voice-*` 直连能力。
+
 部署时应将用户文件权限设为仅服务账号可读，并显式配置稳定的 `SESSION_SECRET`。安全审计默认写入 `trash/run/security-audit.jsonl`，可用 `SECURITY_AUDIT_PATH` 调整。
 
 诊断报告现写入私有的 `trash/run/reports/`，通过受保护的 `/reports/{filename}` 返回；旧的公共静态报告目录不再挂载。工程师只能查看当前设备/数据表范围内的报告，管理员可查看全部报告。
