@@ -185,6 +185,15 @@ ENABLE_DEV_AUTH = _env_bool("ENABLE_DEV_AUTH", False)
 DEV_AUTH_ENABLED = not IS_PRODUCTION and (LOCAL_DEV_MODE or ENABLE_DEV_AUTH)
 IS_LOCAL_RUNTIME = LOCAL_DEV_MODE or APP_ENV in {"dev", "development", "local", "test"}
 
+# Non-production demo databases often contain a historical snapshot rather than
+# rows close to wall-clock NOW(). In that case keep the configured lookback
+# length, but anchor it to the latest row only when the live window is empty.
+SQL_TIME_ANCHOR_MODE = _env_choice(
+    "DCMA_SQL_TIME_ANCHOR",
+    "now" if IS_PRODUCTION else "latest_row_if_stale",
+    {"now", "latest_row_if_stale"},
+)
+
 # === Admin Auth / PDF Upload ===
 DEFAULT_ADMIN_USERNAME = "DCMA"
 DEFAULT_ADMIN_PASSWORD = "707707"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from ..diagnosis.contracts import DiagnosisRequest
+from ..security.assets import real_data_filter_terms, select_asset_table
 
 _SQL_TABLE_RE = re.compile(r"\b(?:from|join)\s+`?([a-zA-Z_][\w]*)`?", re.IGNORECASE)
 
@@ -131,7 +132,18 @@ def select_real_data_table(request: DiagnosisRequest) -> str:
         )
         if item
     ).lower()
-    return next((table_name for table_name in REAL_DATA_TABLES if table_name in text), REAL_DATA_LATEST_TABLE)
+    explicit_table = next((table_name for table_name in REAL_DATA_TABLES if table_name in text), None)
+    if explicit_table:
+        return explicit_table
+    asset_table = select_asset_table(request.equipment_hint, allowed_tables=set(REAL_DATA_TABLES))
+    return asset_table or REAL_DATA_LATEST_TABLE
+
+
+def _in_predicate(column: str, values: list[str]) -> str:
+    if not values:
+        return ""
+    literals = ", ".join(sql_literal(value) for value in values)
+    return f"{column} IN ({literals})"
 
 
 def build_fallback_sql_query(request: DiagnosisRequest, *, table_name: str | None = None) -> str:
@@ -140,8 +152,22 @@ def build_fallback_sql_query(request: DiagnosisRequest, *, table_name: str | Non
     fault_code_hint = (request.fault_code_hint or "").strip()
     conditions = []
     if equipment_hint and not is_generic_equipment_hint(equipment_hint):
-        equipment_literal = sql_literal(equipment_hint)
-        conditions.append(f"(device_name = {equipment_literal} OR inverter_name = {equipment_literal})")
+        source_terms = real_data_filter_terms(equipment_hint, table_name)
+        equipment_predicates = [
+            predicate
+            for predicate in (
+                _in_predicate("device_name", source_terms.get("device_name", [])),
+                _in_predicate("inverter_name", source_terms.get("inverter_name", [])),
+            )
+            if predicate
+        ]
+        if not equipment_predicates:
+            equipment_literal = sql_literal(equipment_hint)
+            equipment_predicates = [
+                f"device_name = {equipment_literal}",
+                f"inverter_name = {equipment_literal}",
+            ]
+        conditions.append("(" + " OR ".join(equipment_predicates) + ")")
     if fault_code_hint:
         fault_code_literal = sql_literal(fault_code_hint)
         conditions.append(f"(fault_code = {fault_code_literal} OR alarm_code = {fault_code_literal})")

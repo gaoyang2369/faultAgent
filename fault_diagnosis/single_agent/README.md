@@ -260,8 +260,10 @@ SQL 规划在 `sql_safety.py` 中集中处理：
   - `device_fault_data`
   - `fault_records`
 - 禁止使用旧表 `real_data`。
-- 当前/最近运行数据默认查 `real_data_01`。
+- 当前/最近运行数据默认查 `real_data_01`；如果设备名能在资产目录中解析，则优先使用该设备绑定的数据表。
 - 设备过滤使用 `device_name` 或 `inverter_name`，不要假设 `real_data_01/02/03` 有 `device_id`。
+- 设备别名和数据源由 `security/assets.py` 管理。内置默认映射为 `J1号机/G120电机1 -> real_data_01`、`J2号机/G120电机2 -> real_data_02`、`J3号机/G120电机3 -> real_data_03`，可用 `ASSET_REGISTRY_PATH` 指向 JSON 文件覆盖。
+- 非生产环境默认启用 `DCMA_SQL_TIME_ANCHOR=latest_row_if_stale`：权限窗口仍是最近 1 小时或 7 天，但当真实 `NOW()` 窗口没有数据时，会回退到该表 `MAX(create_time)` 附近的数据窗口，便于半个月前的演示库生成报告。生产环境默认 `now`。
 - 如果模型生成 SQL 为空、非只读或包含未知表，会回退到 `build_fallback_sql_query()`。
 - 常见运行状态/报告类请求会走 `build_fast_sql_plan()`，直接生成确定性 SQL 并跳过 checker。
 

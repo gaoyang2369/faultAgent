@@ -82,7 +82,26 @@ understand
 - `query_knowledge_base`
 - `save_report`
 
-SQL 阶段只允许访问 `real_data_01`、`real_data_02`、`real_data_03`、`device_alarm`、`device_metric`、`device_fault_data`、`fault_records`，并只允许只读 `SELECT/WITH` 查询。最近/当前运行状态默认查询 `real_data_01`，未知表、旧表 `real_data` 或非只读 SQL 会回退到受限最近数据查询。
+SQL 阶段只允许访问 `real_data_01`、`real_data_02`、`real_data_03`、`device_alarm`、`device_metric`、`device_fault_data`、`fault_records`，并只允许只读 `SELECT/WITH` 查询。最近/当前运行状态默认查询 `real_data_01`，如果设备命中资产目录则使用设备绑定的数据源；未知表、旧表 `real_data` 或非只读 SQL 会回退到受限最近数据查询。
+
+资产目录由 `fault_diagnosis/security/assets.py` 提供，内置默认映射为 `J1号机/G120电机1 -> real_data_01`、`J2号机/G120电机2 -> real_data_02`、`J3号机/G120电机3 -> real_data_03`。如需按现场设备调整，可设置 `ASSET_REGISTRY_PATH=/path/to/asset_registry.json`，文件格式支持：
+
+```json
+{
+  "assets": [
+    {
+      "asset_id": "g120_motor_1",
+      "display_name": "G120电机1",
+      "aliases": ["J1号机", "DCMA一号电机"],
+      "data_sources": [{"table": "real_data_01", "device_name": "G120电机1"}],
+      "system": "DCMA_LINE_1",
+      "location": "一号车间"
+    }
+  ]
+}
+```
+
+SQL 时间权限窗口默认按环境区分：生产环境 `DCMA_SQL_TIME_ANCHOR=now`，非生产环境默认为 `latest_row_if_stale`。后者会先使用真实 `NOW()` 最近窗口；如果该窗口没有数据，再回退到表内 `MAX(create_time)` 附近的数据窗口，避免演示库数据滞后时报告全为空。
 
 `single_agent/` 内部按职责拆分：
 

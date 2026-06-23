@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .. import config
+from .assets import asset_is_in_scope, data_source_terms_for_table
 from ..single_agent.sql_safety import (
     ALLOWED_SQL_TABLES,
     extract_sql_table_names,
@@ -14,7 +16,6 @@ from ..single_agent.sql_safety import (
 )
 from .contracts import AuthContext, SqlAclResult
 from .permissions import effective_resource_scope
-from .policy_engine import asset_is_in_scope
 
 _LIMIT_RE = re.compile(r"\blimit\s+(\d+)(?:\s*,\s*(\d+))?\s*$", re.IGNORECASE)
 _TRAILING_CLAUSE_RE = re.compile(r"\b(group\s+by|having|order\s+by|limit)\b", re.IGNORECASE)
@@ -56,6 +57,30 @@ def _enforce_limit(sql_query: str, max_rows: int) -> tuple[str, bool]:
     return rewritten, rewritten != sql_query
 
 
+def _time_window_predicate(
+    table_name: str,
+    column: str,
+    amount: int,
+    unit: str,
+    *,
+    scope_predicate: str = "",
+) -> str:
+    live_window = f"{column} >= NOW() - INTERVAL {amount} {unit}"
+    if config.SQL_TIME_ANCHOR_MODE != "latest_row_if_stale":
+        return live_window
+    subquery_window = live_window
+    max_time_source = f"(SELECT MAX({column}) FROM {table_name})"
+    if scope_predicate:
+        subquery_window = f"{live_window} AND ({scope_predicate})"
+        max_time_source = f"(SELECT MAX({column}) FROM {table_name} WHERE {scope_predicate})"
+    return (
+        f"({live_window} OR ("
+        f"NOT EXISTS (SELECT 1 FROM {table_name} WHERE {subquery_window} LIMIT 1) "
+        f"AND {column} >= {max_time_source} - INTERVAL {amount} {unit}"
+        f"))"
+    )
+
+
 def _requested_assets(request: Any, decision: Any) -> list[str]:
     assets: list[str] = []
     equipment = str(getattr(request, "equipment_hint", "") or "").strip()
@@ -66,14 +91,37 @@ def _requested_assets(request: Any, decision: Any) -> list[str]:
     return list(dict.fromkeys(assets))
 
 
+def _in_predicate(column: str, values: list[str]) -> str:
+    if not values:
+        return ""
+    literals = ", ".join(sql_literal(value) for value in values)
+    return f"{column} IN ({literals})"
+
+
 def _asset_predicate(table_name: str, assets: list[str]) -> str:
-    literals = ", ".join(sql_literal(asset) for asset in assets)
+    terms = data_source_terms_for_table(table_name, assets)
     if table_name.startswith("real_data_"):
-        return f"(device_name IN ({literals}) OR inverter_name IN ({literals}))"
+        predicates = [
+            predicate
+            for predicate in (
+                _in_predicate("device_name", terms.get("device_name", [])),
+                _in_predicate("inverter_name", terms.get("inverter_name", [])),
+            )
+            if predicate
+        ]
+        return "(" + " OR ".join(predicates) + ")" if predicates else ""
     if table_name in {"device_alarm", "device_fault_data"}:
-        return f"(device_name IN ({literals}) OR device_id IN ({literals}))"
+        predicates = [
+            predicate
+            for predicate in (
+                _in_predicate("device_name", terms.get("device_name", [])),
+                _in_predicate("device_id", terms.get("device_id", [])),
+            )
+            if predicate
+        ]
+        return "(" + " OR ".join(predicates) + ")" if predicates else ""
     if table_name == "device_metric":
-        return f"device_id IN ({literals})"
+        return _in_predicate("device_id", terms.get("device_id", []))
     return ""
 
 
@@ -123,19 +171,7 @@ def apply_sql_acl(
 
     filters: list[str] = []
     table_name = next(iter(tables))
-    if auth.role == "guest":
-        time_predicate = "create_time >= NOW() - INTERVAL 1 HOUR"
-        query = _insert_predicate(query, time_predicate)
-        filters.append("guest_last_1_hour")
-    else:
-        time_column = _time_column(table_name)
-        if time_column:
-            query = _insert_predicate(
-                query,
-                f"{time_column} >= NOW() - INTERVAL {scope.max_time_window_days} DAY",
-            )
-            filters.append(f"max_last_{scope.max_time_window_days}_days")
-
+    asset_filter_predicate = ""
     if auth.role == "engineer":
         requested = _requested_assets(request, decision)
         denied_assets = [asset for asset in requested if not asset_is_in_scope(asset, auth.asset_scope)]
@@ -148,10 +184,30 @@ def apply_sql_acl(
         if predicate:
             if not auth.asset_scope:
                 return _deny("该数据表查询要求配置设备范围。", "missing_asset_scope")
+            asset_filter_predicate = predicate
             query = _insert_predicate(query, predicate)
             filters.append("engineer_asset_scope")
         elif table_name != "fault_records":
-            return _deny("当前数据表无法安全注入设备范围。", "asset_filter_not_supported")
+            return _deny("当前账号负责设备没有匹配该数据表的数据源。", "asset_filter_not_supported")
+
+    if auth.role == "guest":
+        time_predicate = _time_window_predicate(table_name, "create_time", 1, "HOUR")
+        query = _insert_predicate(query, time_predicate)
+        filters.append("guest_last_1_hour")
+    else:
+        time_column = _time_column(table_name)
+        if time_column:
+            query = _insert_predicate(
+                query,
+                _time_window_predicate(
+                    table_name,
+                    time_column,
+                    scope.max_time_window_days,
+                    "DAY",
+                    scope_predicate=asset_filter_predicate,
+                ),
+            )
+            filters.append(f"max_last_{scope.max_time_window_days}_days")
 
     query, limit_changed = _enforce_limit(query, scope.max_rows)
     if limit_changed:

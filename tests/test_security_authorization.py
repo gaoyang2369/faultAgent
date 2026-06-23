@@ -107,6 +107,7 @@ def test_guest_sql_acl_forces_table_time_and_limit() -> None:
 
     assert result.allowed is True
     assert "create_time >= NOW() - INTERVAL 1 HOUR" in result.sql_query
+    assert "SELECT MAX(create_time) FROM real_data_01" in result.sql_query
     assert result.sql_query.endswith("LIMIT 50")
     assert apply_sql_acl(
         "SELECT * FROM device_alarm LIMIT 10",
@@ -134,8 +135,26 @@ def test_engineer_sql_acl_injects_asset_scope() -> None:
     )
 
     assert result.allowed is True
-    assert "device_name IN ('J1号机', 'pump_001')" in result.sql_query
+    assert "device_name IN ('G120电机1', 'pump_001')" in result.sql_query
     assert "engineer_asset_scope" in result.filters_applied
+
+
+def test_engineer_asset_scope_allows_registered_aliases() -> None:
+    auth = build_auth_context(
+        user_id="engineer_01",
+        role="engineer",
+        asset_scope=["J1号机"],
+        table_scope=["real_data_01"],
+    )
+    result = apply_sql_acl(
+        "SELECT * FROM real_data_01 ORDER BY create_time DESC",
+        auth=auth,
+        request=SimpleNamespace(equipment_hint="G120电机1"),
+        decision=SingleAgentDecision(objects={"device_ids": ["G120电机1"]}),
+    )
+
+    assert result.allowed is True
+    assert "device_name IN ('G120电机1')" in result.sql_query
 
 
 def test_rag_acl_filters_uploaded_documents_by_role() -> None:

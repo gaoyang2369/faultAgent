@@ -44,13 +44,21 @@ def test_fallback_sql_uses_current_real_data_columns() -> None:
     sql = build_fallback_sql_query(_request(equipment_hint="G120电机1", fault_code_hint="42"))
 
     assert f"FROM {REAL_DATA_LATEST_TABLE}" in sql
-    assert "device_name = 'G120电机1' OR inverter_name = 'G120电机1'" in sql
+    assert "device_name IN ('G120电机1')" in sql
     assert "fault_code = '42' OR alarm_code = '42'" in sql
     assert "device_id" not in sql
     assert "spindle_" not in sql
     assert "vibration" not in sql
     assert "alarm_status" not in sql
     assert f"ORDER BY {REAL_DATA_LATEST_TABLE}.create_time DESC, id DESC" in sql
+
+
+def test_fallback_sql_resolves_asset_alias_to_real_data_source() -> None:
+    sql = build_fallback_sql_query(_request(equipment_hint="J1号机"))
+
+    assert f"FROM {REAL_DATA_LATEST_TABLE}" in sql
+    assert "device_name IN ('G120电机1')" in sql
+    assert "J1号机" not in sql
 
 
 def test_fallback_sql_queries_latest_rows_without_default_device_filter() -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .contracts import AuthContext, AuthorizationDecision
+from .assets import asset_is_in_scope
 from .permissions import effective_resource_scope
 
 WORKFLOW_PERMISSION_BY_TASK = {
@@ -29,29 +30,6 @@ _GUEST_DEGRADABLE_TASKS = {
 def _requested_assets(decision: Any) -> list[str]:
     objects = getattr(decision, "objects", {}) or {}
     return [str(value).strip() for value in objects.get("device_ids", []) if str(value).strip()]
-
-
-def _scope_key(value: str) -> str:
-    return "".join(str(value or "").casefold().split())
-
-
-def _asset_aliases(value: str) -> set[str]:
-    aliases = {_scope_key(part) for part in str(value or "").replace("／", "/").split("/")}
-    for alias in list(aliases):
-        for suffix in ("号机", "设备"):
-            if alias.endswith(suffix) and len(alias) > len(suffix):
-                aliases.add(alias[: -len(suffix)])
-    return {alias for alias in aliases if alias}
-
-
-def asset_is_in_scope(asset: str, assigned_assets: list[str]) -> bool:
-    requested_aliases = _asset_aliases(asset)
-    if not requested_aliases:
-        return True
-    for assigned in assigned_assets:
-        if requested_aliases.intersection(_asset_aliases(assigned)):
-            return True
-    return False
 
 
 def authorize_workflow(auth: AuthContext, decision: Any) -> AuthorizationDecision:
