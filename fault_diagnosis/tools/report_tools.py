@@ -784,6 +784,16 @@ def _build_chart_assets(chart_payload: dict | None) -> str:
     """
 
 
+def _extract_workorder_section(repair_recommendations: str) -> str:
+    """Return a fixed work-order chapter body without changing tool inputs."""
+
+    text = str(repair_recommendations or "").strip()
+    marker = "### 待处理事项"
+    if marker in text:
+        return text[text.index(marker) :].strip()
+    return "本次未触发独立工单建议；如异常持续或重复出现，应由有权限人员确认后再创建工单。"
+
+
 def _build_report_html(
     *,
     title: str,
@@ -803,14 +813,17 @@ def _build_report_html(
     status_summary_section = _build_status_summary_section(chart_data)
     chart_section = _build_chart_section(chart_data)
     chart_assets = _build_chart_assets(chart_data)
+    workorder_section = _extract_workorder_section(repair_recommendations)
     sections = [
-        ("01", "核心诊断摘要", executive_summary, False),
-        ("02", "数据来源与采样窗口", diagnosis_overview, False),
-        ("03", "诊断证据链", diagnosis_details, False),
-        ("04", "诊断判断与不确定性", fault_inference, False),
-        ("05", "分级处置建议", repair_recommendations, False),
-        ("06", "复测验证与能力边界", preventive_maintenance, False),
-        ("07", "详细附录", diagnosis_basis, True),
+        ("01", "报告摘要", executive_summary, False),
+        ("02", "诊断对象与数据范围", diagnosis_overview, False),
+        ("03", "运行状态概览", diagnosis_details, False),
+        ("04", "异常与故障分析", fault_inference, False),
+        ("05", "证据依据", diagnosis_basis, False),
+        ("06", "处置与维护建议", repair_recommendations, False),
+        ("07", "工单建议", workorder_section, False),
+        ("08", "风险与边界说明", preventive_maintenance, False),
+        ("09", "附录", diagnosis_basis, True),
     ]
     section_html = "\n".join(
         f"""

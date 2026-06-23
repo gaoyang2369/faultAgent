@@ -84,6 +84,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self._last_step_result: Any = None
         self.evidence_bundle: Any | None = None
         self.output_guardrail_result: dict[str, Any] | None = None
+        self._last_rendered_answer: Any | None = None
         self.authorization_decision: Any | None = None
         self._active_allowed_tools: tuple[str, ...] | None = None
         self._workflow_task_decision: Any | None = None
@@ -169,6 +170,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self._stage_observations = {}
         self.evidence_bundle = None
         self.output_guardrail_result = None
+        self._last_rendered_answer = None
         self.authorization_decision = None
         self._active_allowed_tools = None
         self._workflow_task_decision = None

@@ -39,7 +39,7 @@ from .intent import (
     normalize_equipment_hint,
     should_use_rule_based_understanding,
 )
-from .final_answer import build_final_answer_fallback
+from .final_answer import build_templated_final_answer
 from .prompts import (
     build_single_agent_analysis_prompt,
     build_single_agent_evidence_synthesis_prompt,
@@ -543,11 +543,24 @@ class SingleAgentStagesMixin:
             if str(envelope.workflow_type) == DiagnosisArtifactType.FAULT_DIAGNOSIS.value
             else "结构化结果"
         )
+        payload = envelope.payload or {}
+        analysis_payload = payload.get("analysis_artifact") or {}
+        summary_items = [
+            str(analysis_payload.get("conclusion") or envelope.request_summary or "").strip(),
+            *[str(item).strip() for item in (analysis_payload.get("basis") or []) if str(item).strip()],
+            *[str(item).strip() for item in (analysis_payload.get("recommendations") or []) if str(item).strip()],
+        ]
+        summary_lines = [
+            f"{index}. {item}"
+            for index, item in enumerate(list(dict.fromkeys(summary_items))[:5], start=1)
+            if item
+        ] or ["1. 已基于当前线程保存的结构化结果生成报告。"]
+        report_link = extract_report_url(save_result) or artifact.report_filename or "未返回报告链接"
         final_answer = (
-            f"已基于当前线程最近一次{source_name}生成报告。\n"
-            f"【来源摘要】{envelope.request_summary}\n"
-            f"【报告文件】{extract_report_url(save_result) or artifact.report_filename or '未生成'}\n"
-            f"【保存结果】{save_result}"
+            f"已基于当前线程最近一次{source_name}生成报告：《{artifact.report_filename or '诊断报告'}》。\n\n"
+            f"报告摘要：\n{chr(10).join(summary_lines)}\n\n"
+            f"报告链接：{report_link}\n\n"
+            "边界说明：本报告基于已保存的结构化结果生成，若现场状态或数据窗口已变化，需要重新诊断后确认。"
         )
         self._last_step_result = final_answer, artifact
 
@@ -556,15 +569,25 @@ class SingleAgentStagesMixin:
         analysis_artifact: AnalysisStepArtifact,
         report_artifact: ReportStepArtifact,
         decision: SingleAgentDecision | None = None,
+        sql_artifact: SqlStepArtifact | None = None,
+        knowledge_artifact: KnowledgeStepArtifact | None = None,
+        workorder_suggestion: WorkOrderSuggestion | None = None,
     ) -> str:
-        report_name = (
-            report_artifact.report_filename
-            if report_artifact and report_artifact.report_filename
-            else None
-        )
-        answer = build_final_answer_fallback(analysis_artifact, report_name)
         if decision is None:
-            return answer
+            decision = SingleAgentDecision()
+
+        rendered_answer = build_templated_final_answer(
+            decision=decision,
+            evidence_bundle=self.evidence_bundle,
+            analysis_artifact=analysis_artifact,
+            workorder_suggestion=workorder_suggestion,
+            report_artifact=report_artifact,
+            sql_artifact=sql_artifact,
+            knowledge_artifact=knowledge_artifact,
+        )
+        self._last_rendered_answer = rendered_answer
+        self._record_artifact("rendered_answer", rendered_answer, stage="final_answer")
+        answer = rendered_answer.content
 
         prefixes: list[str] = []
         authorization = decision.authorization or {}
@@ -591,7 +614,9 @@ class SingleAgentStagesMixin:
             unique_missing = list(dict.fromkeys(missing))
             prefixes.append(f"【待补充】{'; '.join(unique_missing[:5])}。这些缺口会降低对应子目标结论置信度。")
         if prefixes:
-            return "\n".join([*prefixes, answer])
+            answer = "\n".join([*prefixes, answer])
+            rendered_answer.content = answer
+            return answer
         return answer
 
     def _build_skipped_sql_artifact(self, reason: str) -> SqlStepArtifact:
@@ -651,6 +676,7 @@ class SingleAgentStagesMixin:
         decision: SingleAgentDecision,
         evidence_bundle: EvidenceBundle | None = None,
         output_guardrail: dict[str, object] | None = None,
+        rendered_answer: Any | None = None,
         workflow_artifacts: dict[str, object] | None = None,
     ) -> DiagnosisArtifactEnvelope:
         self.trace.add_event(
@@ -673,6 +699,7 @@ class SingleAgentStagesMixin:
             trace=self.trace,
             evidence_bundle=evidence_bundle,
             output_guardrail=output_guardrail,
+            rendered_answer=rendered_answer,
             workflow_artifacts=workflow_artifacts,
             auth=self.auth_context.audit_summary(),
             authorization=decision.authorization,

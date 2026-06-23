@@ -34,6 +34,7 @@ def build_diagnosis_artifact_envelope(
     trace: AgentTrace,
     evidence_bundle: EvidenceBundle | None = None,
     output_guardrail: dict[str, object] | None = None,
+    rendered_answer: Any | None = None,
     workflow_artifacts: dict[str, object] | None = None,
     auth: dict[str, Any] | None = None,
     authorization: dict[str, Any] | None = None,
@@ -73,6 +74,11 @@ def build_diagnosis_artifact_envelope(
         "report_artifact": report_artifact.model_dump(exclude_none=True),
         "trace": trace.model_dump(exclude_none=True),
         "output_guardrail": output_guardrail or {},
+        "rendered_answer": (
+            rendered_answer.model_dump(exclude_none=True)
+            if hasattr(rendered_answer, "model_dump")
+            else rendered_answer or {}
+        ),
         "workflow_artifacts": workflow_artifacts or {},
         "auth": auth or {},
         "authorization": authorization or {},

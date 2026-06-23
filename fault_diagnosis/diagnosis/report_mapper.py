@@ -63,7 +63,12 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
             ),
             "fault_inference": analysis_artifact.get("conclusion") or envelope.final_answer,
             "repair_recommendations": f"{repair_recommendations}{_workorder_section(workorder_decision)}",
-            "preventive_maintenance": "建议结合本次诊断结果持续跟踪关键指标，并复核相关部件状态。",
+            "preventive_maintenance": (
+                "### 风险与边界说明\n"
+                "本报告基于当前线程已保存的结构化诊断产物生成，未重新查询实时数据库。"
+                "若现场状态、告警状态或维修记录已经变化，根因判断和处置优先级需人工复核。\n\n"
+                "建议结合本次诊断结果持续跟踪关键指标，并复核相关部件状态。"
+            ),
             "diagnosis_basis": (
                 "### 请求摘要\n"
                 f"- {envelope.request_summary or '无'}\n\n"
@@ -101,7 +106,12 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
             "repair_recommendations": "\n".join(
                 f"- {item}" for item in (inspection_artifact.get("suggested_actions") or [])
             ) or "- 暂无具体建议动作",
-            "preventive_maintenance": "建议根据巡检风险等级持续关注关键指标趋势，必要时安排复检。",
+            "preventive_maintenance": (
+                "### 风险与边界说明\n"
+                "本报告基于当前线程已保存的状态巡检产物生成，未重新查询实时数据库。"
+                "若现场状态或数据窗口已变化，需要重新巡检后再定论。\n\n"
+                "建议根据巡检风险等级持续关注关键指标趋势，必要时安排复检。"
+            ),
             "diagnosis_basis": (
                 "### 请求摘要\n"
                 f"- {envelope.request_summary or '无'}\n\n"

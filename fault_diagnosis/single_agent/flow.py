@@ -565,7 +565,14 @@ class SingleAgentFlowMixin:
 
             stage_started = self._start_stage("final_answer", "整理最终回答")
             async for ping in self._drive_step(
-                self.build_final_answer(analysis_artifact, report_artifact, decision),
+                self.build_final_answer(
+                    analysis_artifact,
+                    report_artifact,
+                    decision,
+                    sql_artifact=sql_artifact,
+                    knowledge_artifact=knowledge_artifact,
+                    workorder_suggestion=workorder_suggestion,
+                ),
                 stage="final_answer",
             ):
                 yield ping
@@ -577,7 +584,18 @@ class SingleAgentFlowMixin:
                 event_count += 1
 
             stage_started = self._start_stage("output_guardrail", "检查最终回答和证据链一致性")
-            self.output_guardrail_result = build_output_guardrail_result(final_answer, self.evidence_bundle, decision)
+            self.output_guardrail_result = build_output_guardrail_result(
+                final_answer,
+                self.evidence_bundle,
+                decision,
+                rendered_answer=self._last_rendered_answer,
+            )
+            safe_rewrite = str(self.output_guardrail_result.get("safe_rewrite") or "").strip()
+            if safe_rewrite:
+                final_answer = safe_rewrite
+                self._last_step_result = final_answer
+                if self._last_rendered_answer is not None:
+                    self._last_rendered_answer.content = final_answer
             self._record_artifact("output_guardrail", self.output_guardrail_result, stage="output_guardrail")
             self._finish_stage(
                 "output_guardrail",
@@ -622,6 +640,7 @@ class SingleAgentFlowMixin:
                 decision,
                 evidence_bundle=self.evidence_bundle,
                 output_guardrail=self.output_guardrail_result,
+                rendered_answer=self._last_rendered_answer,
                 workflow_artifacts={
                     "authorization": self.authorization_decision.model_dump(),
                     "permission_check": permission_check_result,
@@ -677,6 +696,7 @@ class SingleAgentFlowMixin:
                 report_artifact=report_artifact,
                 evidence_bundle=self.evidence_bundle,
                 output_guardrail=self.output_guardrail_result or {},
+                rendered_answer=self._last_rendered_answer,
                 saved_envelope=saved_envelope,
                 trace=self.trace,
                 todos=self._current_workflow_todos_payload(status_hint="本轮回答已完成").get("todos", []),

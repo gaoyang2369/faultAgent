@@ -1715,6 +1715,11 @@ def build_report_payload(
             f"{sql_report.maintenance}\n\n"
             f"### 报告能力边界\n{build_capability_boundary_markdown(REAL_DATA_LATEST_TABLE)}"
         )
+    if "报告能力边界" not in preventive_maintenance and "边界" not in preventive_maintenance:
+        preventive_maintenance = (
+            f"{preventive_maintenance}\n\n"
+            f"### 风险与边界说明\n{build_capability_boundary_markdown(REAL_DATA_LATEST_TABLE)}"
+        )
     base_recommendations = build_sop_recommendations_markdown(
         generated_recommendations,
         analysis_artifact.recommendations,

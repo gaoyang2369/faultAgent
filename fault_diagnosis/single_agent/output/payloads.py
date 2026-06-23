@@ -107,6 +107,7 @@ def build_diagnosis_complete_payload(
     report_artifact: ReportStepArtifact,
     evidence_bundle: EvidenceBundle | None,
     output_guardrail: dict[str, Any],
+    rendered_answer: Any | None = None,
     saved_envelope: DiagnosisArtifactEnvelope,
     trace: AgentTrace,
     todos: list[dict[str, Any]],
@@ -136,6 +137,11 @@ def build_diagnosis_complete_payload(
         "report_artifact": report_artifact.model_dump(exclude_none=True),
         "evidence_bundle": evidence_bundle.model_dump(exclude_none=True) if evidence_bundle else None,
         "output_guardrail": output_guardrail,
+        "rendered_answer": (
+            rendered_answer.model_dump(exclude_none=True)
+            if hasattr(rendered_answer, "model_dump")
+            else rendered_answer
+        ),
         "workflow_route": {
             "primary_task_type": decision.primary_task_type,
             "route_confidence": decision.route_confidence,
