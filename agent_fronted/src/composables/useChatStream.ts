@@ -15,7 +15,6 @@ import {
 } from '@/utils/chatMessageModel.js'
 import {
   buildCachedHistoryTitle,
-  buildLocalCacheFallbackMessage,
   getCachedServiceConversation,
   isSignedThreadId,
   listCachedServiceHistory,
@@ -360,12 +359,9 @@ export const useChatStream = ({
     }
 
     localCacheOnly.value = true
-    currentMessages.value = [
-      buildLocalCacheFallbackMessage(),
-      ...cachedConversation.messages
-        .map(normalizeMessageForView)
-        .filter(message => isRenderableMessage(message))
-    ]
+    currentMessages.value = cachedConversation.messages
+      .map(normalizeMessageForView)
+      .filter(message => isRenderableMessage(message))
     assignTodosState(cachedConversation.todos || [], cachedConversation.summary || null)
     ensureChatHistoryItem(chatId, 'local-cache')
     if (fallbackReason) {

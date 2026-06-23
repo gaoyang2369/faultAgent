@@ -192,13 +192,3 @@ export const buildCachedHistoryTitle = (conversation: CachedConversation) => {
   }
   return baseTitle
 }
-
-export const buildLocalCacheFallbackMessage = () => ({
-  role: 'assistant',
-  content: '⚠️ 当前展示的是同浏览器保存的本地缓存历史。由于旧会话没有真实用户归属，服务端不会自动恢复其历史上下文。继续提问时会接管到新的受控会话，但旧缓存内容不会自动回灌到服务端。',
-  timestamp: new Date().toISOString(),
-  isMarkdown: true,
-  cacheHint: true,
-  streamState: 'cached',
-  statusText: '本地缓存历史'
-})
