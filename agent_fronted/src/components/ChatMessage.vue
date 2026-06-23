@@ -25,7 +25,7 @@
             <button
               type="button"
               class="user-edit-action primary"
-              :disabled="!editDraft.trim() || editDraft.trim() === String(message.content || '').trim()"
+              :disabled="!editDraft.trim()"
               @click="submitUserEdit"
             >
               保存并重新生成
@@ -4179,7 +4179,7 @@ const cancelUserEdit = () => {
 
 const submitUserEdit = () => {
   const nextContent = editDraft.value.trim();
-  if (!nextContent || nextContent === String(props.message.content || '').trim()) return;
+  if (!nextContent) return;
   emit('edit-user-message', {
     message: props.message,
     content: nextContent

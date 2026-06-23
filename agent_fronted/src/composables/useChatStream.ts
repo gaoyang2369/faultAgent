@@ -1372,9 +1372,7 @@ export const useChatStream = ({
     }
 
     const previousContent = String(targetMessage.content || '').trim()
-    if (previousContent === nextContent) {
-      return
-    }
+    const contentChanged = previousContent !== nextContent
 
     const requestedThreadId = typeof currentChatId.value === 'string' ? currentChatId.value : null
     if (!requestedThreadId || !isSignedThreadId(requestedThreadId)) {
@@ -1389,14 +1387,16 @@ export const useChatStream = ({
     const previousHistory = Array.isArray(targetMessage.editHistory)
       ? targetMessage.editHistory
       : []
-    const editHistory = [
-      ...previousHistory,
-      {
-        content: previousContent,
-        editedAt,
-        timestamp: targetMessage.timestamp || null
-      }
-    ]
+    const editHistory = contentChanged
+      ? [
+          ...previousHistory,
+          {
+            content: previousContent,
+            editedAt,
+            timestamp: targetMessage.timestamp || null
+          }
+        ]
+      : previousHistory
 
     activeRequestVersion += 1
     closeActiveStream('interrupted')
@@ -1408,10 +1408,10 @@ export const useChatStream = ({
       ...targetMessage,
       content: nextContent,
       timestamp: targetMessage.timestamp || new Date().toISOString(),
-      editedAt,
-      isEdited: true,
+      editedAt: contentChanged ? editedAt : targetMessage.editedAt,
+      isEdited: Boolean(targetMessage.isEdited || contentChanged),
       editHistory,
-      editRevision: editHistory.length + 1
+      editRevision: contentChanged ? editHistory.length + 1 : targetMessage.editRevision
     }
     const keptMessages = [
       ...currentMessages.value.slice(0, messageIndex),
