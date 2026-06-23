@@ -193,6 +193,11 @@ def _custom_section(
             return section.content, section.evidence_ids, section.missing_evidence
 
     if contract.task_type.value == "report_generation":
+        if key == "report_status":
+            return "报告已生成。", [], []
+        if key == "report_title":
+            title = _report_title(context)
+            return title, [], []
         if key == "report_summary":
             summary_items = _limited_items(
                 [
@@ -204,11 +209,8 @@ def _custom_section(
             )
             return _numbered(summary_items, "报告已生成，但当前结构化摘要不足。"), context.evidence_ids(), context.missing_evidence()
         if key == "report_link":
-            report_name = context.report_artifact.report_filename if context.report_artifact else ""
-            report_url = extract_report_url(context.report_artifact.save_result) if context.report_artifact else ""
-            title = report_name or "诊断报告"
-            return f"已生成《{title}》。\n报告链接：{report_url or report_name or '未返回报告链接'}", [], []
-        if key == "risk_and_limitations":
+            return _report_link(context), [], []
+        if key == "missing_evidence_notice":
             return _limitations_text(context), [], context.missing_evidence()
 
     if key in {"diagnosis_conclusion", "brief_judgement", "event_summary", "health_score"}:
@@ -333,10 +335,22 @@ def _action_request_sections(context: _RenderContext, contract: OutputContract) 
 
 def _join_sections(contract: OutputContract, sections: list[RenderedSection]) -> str:
     if contract.task_type.value == "report_generation":
-        report_line = next((section.content for section in sections if section.key == "report_link"), "")
+        status = next((section.content for section in sections if section.key == "report_status"), "")
+        title = next((section.content for section in sections if section.key == "report_title"), "")
         summary = next((section.content for section in sections if section.key == "report_summary"), "")
-        boundary = next((section.content for section in sections if section.key == "risk_and_limitations"), "")
-        return "\n\n".join(item for item in [report_line, f"报告摘要：\n{summary}", f"边界说明：{boundary}"] if item)
+        link = next((section.content for section in sections if section.key == "report_link"), "")
+        missing = next((section.content for section in sections if section.key == "missing_evidence_notice"), "")
+        return "\n\n".join(
+            item
+            for item in [
+                f"报告状态：{status}",
+                f"报告标题：{title}",
+                f"报告链接：{link}",
+                f"报告摘要：\n{summary}",
+                f"证据不足提示：{missing}",
+            ]
+            if item
+        )
     if contract.task_type.value == "action_request":
         return "\n\n".join(section.content for section in sections if section.content)
     chunks = []
@@ -384,6 +398,31 @@ def _limitations_text(context: _RenderContext) -> str:
     if quality and quality.get("all_claims_have_evidence") and quality.get("no_dangling_evidence_refs"):
         return "本次结论仅基于当前可查询到的数据、知识库和证据链；高风险操作仍需现场人工确认。"
     return "当前证据链不完整，结论仅作辅助参考，需补充实时数据、历史趋势或现场记录后确认。"
+
+
+def _report_title(context: _RenderContext) -> str:
+    artifact = context.report_artifact
+    if artifact is not None:
+        title = str(getattr(artifact, "report_title", "") or "").strip()
+        if title:
+            return title
+    goal = str(context.decision.user_goal or "").strip()
+    if "运行" in goal and "报告" in goal:
+        return "DCMA 运行诊断报告"
+    if "RCA" in goal.upper() or "根因" in goal:
+        return "DCMA 根因分析报告"
+    return "DCMA 故障诊断报告"
+
+
+def _report_link(context: _RenderContext) -> str:
+    artifact = context.report_artifact
+    if artifact is None:
+        return "未返回报告链接"
+    explicit_url = str(getattr(artifact, "report_url", "") or "").strip()
+    if explicit_url:
+        return explicit_url
+    save_result_url = extract_report_url(artifact.save_result)
+    return save_result_url or artifact.report_filename or "未返回报告链接"
 
 
 def _numbered(items: list[str], fallback: str) -> str:

@@ -13,7 +13,8 @@ from fault_diagnosis.single_agent.reporting import (
     build_report_payload,
     build_structured_analysis_artifact,
 )
-from fault_diagnosis.single_agent.final_answer import build_final_answer_fallback
+from fault_diagnosis.single_agent.contracts import SingleAgentDecision
+from fault_diagnosis.single_agent.output.renderers import render_final_answer
 from fault_diagnosis.single_agent.sql_safety import REAL_DATA_FALLBACK_COLUMNS, REAL_DATA_LATEST_TABLE
 from fault_diagnosis.tools.kb_tools import query_fault_code_from_local_pdfs
 from fault_diagnosis.tools.report_tools import _build_report_html
@@ -505,7 +506,7 @@ def test_structured_analysis_uses_rag_fault_code_actions() -> None:
     assert "F01002" in evidence_summary
 
 
-def test_final_answer_omits_report_section_when_report_not_generated() -> None:
+def test_final_answer_uses_task_template_without_legacy_fallback_sections() -> None:
     artifact = AnalysisStepArtifact(
         success=True,
         conclusion="设备存在异常码，需结合数据和 RAG 处理。",
@@ -519,14 +520,18 @@ def test_final_answer_omits_report_section_when_report_not_generated() -> None:
         confidence="medium",
     )
 
-    answer = build_final_answer_fallback(artifact)
+    rendered = render_final_answer(
+        decision=SingleAgentDecision(primary_task_type="fault_diagnosis"),
+        evidence_bundle=None,
+        analysis_artifact=artifact,
+    )
+    answer = rendered.content
 
     assert "【报告文件】" not in answer
-    assert "未生成" not in answer
-    assert "【优先动作】" in answer
-    assert "【关键依据】" in answer
-    assert "SQL 返回最新运行数据" in answer
-    assert "RAG 指向参数配置问题" not in answer
+    assert "诊断结论" in answer
+    assert "处置建议" in answer
+    assert "关键证据" in answer
+    assert "可能原因" in answer
+    assert "RAG 指向参数配置问题" in answer
     assert "【可能原因与待验证】" not in answer
     assert "【建议处置与验证】" not in answer
-    assert "异常码识别 high" in answer

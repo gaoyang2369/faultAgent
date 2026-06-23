@@ -177,13 +177,20 @@ def test_report_generation_template_returns_summary_and_link_only() -> None:
         decision=SingleAgentDecision(primary_task_type="report_generation"),
         evidence_bundle=_evidence_bundle(),
         analysis_artifact=_analysis(),
-        report_artifact=ReportStepArtifact(success=True, report_filename="j1_report.html", save_result="/reports/j1_report.html"),
+        report_artifact=ReportStepArtifact(
+            success=True,
+            report_filename="j1_report.html",
+            report_title="J1号机运行诊断报告",
+            report_url="/reports/j1_report.html",
+            save_result="/reports/j1_report.html",
+        ),
     )
 
-    assert "已生成" in rendered.content
+    assert "报告状态：报告已生成。" in rendered.content
+    assert "报告标题：J1号机运行诊断报告" in rendered.content
     assert "报告摘要" in rendered.content
     assert "报告链接：/reports/j1_report.html" in rendered.content
-    assert "边界说明" in rendered.content
+    assert "证据不足提示" in rendered.content
 
 
 def test_report_html_uses_fixed_report_chapters() -> None:

@@ -81,3 +81,21 @@ def test_action_request_routes_to_guarded_workflow() -> None:
     assert "device_control.write" in decision.workflow_policy["forbidden_tools"]
     assert "sql_db_query" in decision.runtime_tools
     assert "query_knowledge_base" in decision.runtime_tools
+
+
+def test_device_running_report_collects_fresh_sql_evidence() -> None:
+    message = "生成J1号机的运行报告"
+    payload = fallback_understanding_payload(message, "维修员")
+    decision = decide_capabilities(
+        payload=payload,
+        request=_request(message, payload),
+        message=message,
+        report_from_previous_artifact=False,
+    )
+
+    assert payload["equipment_hint"] == "J1"
+    assert payload["needs_sql"] is True
+    assert decision.primary_task_type == "report_generation"
+    assert decision.needs_sql is True
+    assert decision.enabled_nodes["sql"] is True
+    assert "sql_db_query" in decision.runtime_tools

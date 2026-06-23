@@ -202,6 +202,8 @@ class ReportStepArtifact(BaseModel):
 
     success: bool
     report_filename: str | None = None
+    report_title: str | None = None
+    report_url: str | None = None
     save_result: str = ""
     error: str | None = None
 

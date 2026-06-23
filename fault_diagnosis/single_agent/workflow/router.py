@@ -208,7 +208,11 @@ def _flags_for_task(
         )
     elif task_type == TaskType.REPORT_GENERATION:
         flags.update(
-            need_sql=not report_from_previous_artifact and _has_any(text, ("最新", "今天", "日报", "周报", "当前")),
+            need_sql=not report_from_previous_artifact
+            and (
+                bool(objects.device_ids)
+                or _has_any(text, ("最新", "今天", "日报", "周报", "当前", "运行", "运行情况", "运行状态", "状态"))
+            ),
             need_knowledge=not report_from_previous_artifact and _has_any(text, ("模板", "SOP", "sop", "RCA", "rca")),
             need_report=True,
             need_workorder_decision=False,

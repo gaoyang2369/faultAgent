@@ -198,9 +198,11 @@ REPORT_GENERATION_CONTRACT = OutputContract(
     max_bullets_per_section=8,
     max_chars=None,
     sections=[
+        OutputSectionContract(key="report_status", title="报告状态", require_evidence=False),
+        OutputSectionContract(key="report_title", title="报告标题", require_evidence=False),
         OutputSectionContract(key="report_summary", title="报告摘要", require_evidence=True),
         OutputSectionContract(key="report_link", title="报告链接", require_evidence=False),
-        OutputSectionContract(key="risk_and_limitations", title="风险与边界说明"),
+        OutputSectionContract(key="missing_evidence_notice", title="证据不足提示"),
     ],
 )
 

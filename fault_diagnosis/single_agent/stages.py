@@ -512,6 +512,8 @@ class SingleAgentStagesMixin:
         artifact = ReportStepArtifact(
             success="失败" not in save_result,
             report_filename=extract_report_filename(save_result, f"{report_filename}.html"),
+            report_title=str(payload.get("title") or "").strip() or None,
+            report_url=extract_report_url(save_result),
             save_result=save_result,
             error=None if "失败" not in save_result else save_result,
         )
@@ -534,6 +536,8 @@ class SingleAgentStagesMixin:
         artifact = ReportStepArtifact(
             success="失败" not in save_result,
             report_filename=extract_report_filename(save_result, report_payload.get("report_filename")),
+            report_title=str(report_payload.get("title") or "").strip() or None,
+            report_url=extract_report_url(save_result),
             save_result=save_result,
             error=None if "失败" not in save_result else save_result,
         )
@@ -555,12 +559,14 @@ class SingleAgentStagesMixin:
             for index, item in enumerate(list(dict.fromkeys(summary_items))[:5], start=1)
             if item
         ] or ["1. 已基于当前线程保存的结构化结果生成报告。"]
-        report_link = extract_report_url(save_result) or artifact.report_filename or "未返回报告链接"
+        report_link = artifact.report_url or artifact.report_filename or "未返回报告链接"
+        report_title = artifact.report_title or artifact.report_filename or "诊断报告"
         final_answer = (
-            f"已基于当前线程最近一次{source_name}生成报告：《{artifact.report_filename or '诊断报告'}》。\n\n"
+            f"报告状态：已基于当前线程最近一次{source_name}生成报告。\n\n"
+            f"报告标题：{report_title}\n\n"
             f"报告摘要：\n{chr(10).join(summary_lines)}\n\n"
             f"报告链接：{report_link}\n\n"
-            "边界说明：本报告基于已保存的结构化结果生成，若现场状态或数据窗口已变化，需要重新诊断后确认。"
+            "证据不足提示：本报告基于已保存的结构化结果生成，若现场状态或数据窗口已变化，需要重新诊断后确认。"
         )
         self._last_step_result = final_answer, artifact
 
@@ -646,6 +652,8 @@ class SingleAgentStagesMixin:
         artifact = ReportStepArtifact(
             success=False,
             report_filename=None,
+            report_title=None,
+            report_url=None,
             save_result="本次请求未要求生成报告",
             error=None,
         )
