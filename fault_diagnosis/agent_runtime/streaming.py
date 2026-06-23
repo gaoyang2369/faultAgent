@@ -7,12 +7,7 @@ from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI
 
-from .sse_adapter import (
-    adapt_sse_chunk,
-    build_server_error_payload,
-    build_trace_id,
-    encode_sse_event,
-)
+from .sse_adapter import adapt_sse_chunk, build_server_error_payload, build_trace_id, encode_sse_event
 from ..runtime.dev_mode import stream_dev_chat_events
 from .error_classification import classify_model_gateway_error
 from .error_classification import model_error_code
@@ -55,12 +50,6 @@ def _build_server_error_payload(
     )
 
 
-def _inject_trace_into_sse_chunk(chunk: str, trace_id: str, *, thread_id: str) -> str:
-    """为 Dev 路径的既有 SSE 帧补充 trace_id。"""
-
-    return adapt_sse_chunk(chunk, trace_id, thread_id=thread_id)
-
-
 def classify_stream_error(error: Exception) -> tuple[str, str]:
     """Classify scheduler-level errors without importing removed runtime paths."""
 
@@ -87,6 +76,7 @@ async def token_stream_events(
     history_messages: list[Any] | None = None,
     replace_history: bool = False,
     auth_context: AuthContext | None = None,
+    complete_payload_enricher=None,
 ) -> AsyncGenerator[str, None]:
     """聊天 SSE 兼容入口：dev mock 或限制型单 Agent。"""
 
@@ -94,7 +84,6 @@ async def token_stream_events(
     trace_id = _build_trace_id(request_id)
     stream_id = (stream_id or "").strip()
     set_namespace({"__builtins__": __builtins__})
-    del history_messages, replace_history
 
     try:
         if getattr(app.state, "dev_mode", False):
@@ -107,7 +96,12 @@ async def token_stream_events(
                 cancel_event=cancel_event,
                 auth_context=auth_context,
             ):
-                yield _inject_trace_into_sse_chunk(chunk, trace_id, thread_id=thread_id)
+                yield adapt_sse_chunk(
+                    chunk,
+                    trace_id,
+                    thread_id=thread_id,
+                    complete_payload_enricher=complete_payload_enricher,
+                )
             return
 
         single_agent = RestrictedSingleAgentRunner(
@@ -123,7 +117,12 @@ async def token_stream_events(
             app,
             cancel_handle=cancel_handle,
         ):
-            yield chunk
+            yield adapt_sse_chunk(
+                chunk,
+                trace_id,
+                thread_id=thread_id,
+                complete_payload_enricher=complete_payload_enricher,
+            )
     except asyncio.CancelledError:
         _log.warning(
             "流式请求被取消",

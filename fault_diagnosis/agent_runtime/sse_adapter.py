@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel
 
@@ -220,6 +220,7 @@ def adapt_sse_chunk(
     trace_id: str | None,
     *,
     thread_id: str,
+    complete_payload_enricher: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> str:
     """为单 Agent / Dev 路径的既有 SSE 帧补充统一协议字段。"""
 
@@ -233,6 +234,15 @@ def adapt_sse_chunk(
         trace_id=trace_id,
         thread_id=thread_id,
     )
+    if event_name == "complete" and complete_payload_enricher is not None:
+        try:
+            data = complete_payload_enricher(data)
+        except Exception as exc:
+            _log.warning(
+                "complete payload enrichment failed",
+                thread_id=_summarize_identifier_for_log(thread_id, keep=10),
+                error=str(exc),
+            )
     return encode_sse_event(event_name, data)
 
 

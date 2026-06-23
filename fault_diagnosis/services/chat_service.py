@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -39,7 +40,28 @@ class StopStreamPayload(BaseModel):
 class AgentChatPayload(BaseModel):
     message: str
     session_id: str | None = None
+    thread_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class AgentInvocationContext:
+    message: str
+    thread_id: str
+    session_id: str
+    auth_context: Any
+    history_messages: list[dict[str, Any]]
+    metadata: dict[str, Any]
+    channel: str
+    stream_id: str
+    request_id: str
+    requested_thread_id: str | None
+    requested_user_identity: str
+    trusted_user_identity: str
+    session_manager: Any
+    legacy_bindings: dict[str, str]
+    updated_legacy_bindings: dict[str, str]
+    minted_new_thread: bool
 
 
 def summarize_session_id(session_id: str | None) -> str:
@@ -157,6 +179,132 @@ class ChatService:
         self.stream_events = stream_events
         self._log = logger or get_logger("services.chat")
 
+    def _resolve_requested_thread_id(self, thread_id: str | None, metadata: dict[str, Any] | None) -> str | None:
+        candidates = [thread_id, (metadata or {}).get("thread_id")]
+        for candidate in candidates:
+            normalized = str(candidate or "").strip()
+            if normalized:
+                return normalized
+        return None
+
+    def _resolve_thread_id(
+        self,
+        session_manager,
+        session_id: str,
+        requested_thread_id: str | None,
+        legacy_bindings: dict[str, str],
+    ) -> tuple[str, bool, dict[str, str], str | None]:
+        if requested_thread_id:
+            legacy_thread_id = requested_thread_id if session_manager.is_legacy_thread_id(requested_thread_id) else None
+            return requested_thread_id, False, dict(legacy_bindings), legacy_thread_id
+        return session_manager.resolve_thread_id(session_id, None, legacy_bindings)
+
+    def _build_complete_payload_enricher(self, context: AgentInvocationContext):
+        def enrich(payload: dict[str, Any]) -> dict[str, Any]:
+            enriched = dict(payload)
+            enriched.setdefault("auth_context", context.auth_context.audit_summary())
+            enriched.setdefault(
+                "invocation_context",
+                {
+                    "channel": context.channel,
+                    "session_id": context.session_id,
+                    "thread_id": context.thread_id,
+                    "requested_thread_id": context.requested_thread_id,
+                    "stream_id": context.stream_id,
+                    "request_id": context.request_id,
+                    "metadata": context.metadata,
+                },
+            )
+            return enriched
+
+        return enrich
+
+    async def prepare_agent_invocation_context(
+        self,
+        request: Request,
+        *,
+        message: str,
+        thread_id: str | None = None,
+        user_identity: str = "游客",
+        stream_id: str | None = None,
+        channel: str = "text",
+        metadata: dict[str, Any] | None = None,
+        request_id: str | None = None,
+    ) -> AgentInvocationContext:
+        session_manager, session_id, _, legacy_bindings = resolve_request_scope(request)
+        auth_context = resolve_auth_context(request, session_id)
+        identity = auth_context.identity_payload()
+        trusted_user_identity = str(identity.get("user_role") or "访客")
+        requested_user_identity = user_identity if user_identity in ["游客", "管理员"] else "游客"
+        request_id = (request_id or ensure_request_id()).strip()
+        stream_id = (stream_id or "").strip() or str(uuid4())
+        requested_thread_id = self._resolve_requested_thread_id(thread_id, metadata)
+        if requested_user_identity != trusted_user_identity:
+            self._log.info(
+                "忽略不可信的前端身份参数" if channel == "text" else "忽略不可信的语音 Agent 身份参数",
+                requested_user_identity=requested_user_identity,
+                trusted_user_identity=trusted_user_identity,
+                session_id=summarize_session_id(session_id),
+            )
+
+        resolved_thread_id, minted_new_thread, updated_legacy_bindings, legacy_thread_id = self._resolve_thread_id(
+            session_manager,
+            session_id,
+            requested_thread_id,
+            legacy_bindings,
+        )
+        if legacy_thread_id and resolved_thread_id != legacy_thread_id:
+            self._log.info(
+                "legacy thread_id 已绑定到当前会话的新 thread",
+                legacy_thread_id=summarize_thread_id(legacy_thread_id),
+                thread_id=summarize_thread_id(resolved_thread_id),
+            )
+        elif requested_thread_id and requested_thread_id != resolved_thread_id:
+            self._log.warning("忽略未授权 thread_id", requested_thread_id=summarize_thread_id(requested_thread_id))
+        if minted_new_thread:
+            self._log.info("签发新的 thread_id", thread_id=summarize_thread_id(resolved_thread_id))
+
+        history_messages = await self._load_thread_history_messages(request, resolved_thread_id)
+        self._record_history_thread(
+            request.app,
+            session_id=session_id,
+            thread_id=resolved_thread_id,
+            history_type="voice" if channel == "voice" else "service",
+        )
+
+        merged_metadata = dict(metadata or {})
+        merged_metadata.update(
+            {
+                "channel": channel,
+                "session_id": session_id,
+                "thread_id": resolved_thread_id,
+                "requested_thread_id": requested_thread_id,
+                "request_id": request_id,
+                "stream_id": stream_id,
+                "user_identity": trusted_user_identity,
+                "requested_user_identity": requested_user_identity,
+            }
+        )
+
+        return AgentInvocationContext(
+            message=message,
+            thread_id=resolved_thread_id,
+            session_id=session_id,
+            auth_context=auth_context,
+            history_messages=history_messages,
+            metadata=merged_metadata,
+            channel=channel,
+            stream_id=stream_id,
+            request_id=request_id,
+            requested_thread_id=requested_thread_id,
+            requested_user_identity=requested_user_identity,
+            trusted_user_identity=trusted_user_identity,
+            session_manager=session_manager,
+            legacy_bindings=legacy_bindings,
+            updated_legacy_bindings=updated_legacy_bindings,
+            minted_new_thread=minted_new_thread,
+        )
+
     async def stream_chat(
         self,
         request: Request,
@@ -166,87 +314,60 @@ class ChatService:
         user_identity: str = "游客",
         stream_id: str | None = None,
     ):
-        session_manager, session_id, _, legacy_bindings = resolve_request_scope(request)
-        auth_context = resolve_auth_context(request, session_id)
-        identity = auth_context.identity_payload()
-        trusted_user_identity = str(identity.get("user_role") or "访客")
         request_id = ensure_request_id()
         try:
             if not message:
                 raise HTTPException(status_code=400, detail="message parameter is required")
-            requested_user_identity = user_identity if user_identity in ["游客", "管理员"] else "游客"
-            if requested_user_identity != trusted_user_identity:
-                self._log.info(
-                    "忽略不可信的前端身份参数",
-                    requested_user_identity=requested_user_identity,
-                    trusted_user_identity=trusted_user_identity,
-                    session_id=summarize_session_id(session_id),
-                )
-
-            stream_id = (stream_id or "").strip() or str(uuid4())
-
+            context = await self.prepare_agent_invocation_context(
+                request,
+                message=message,
+                thread_id=thread_id,
+                user_identity=user_identity,
+                stream_id=stream_id,
+                channel="text",
+                request_id=request_id,
+            )
             self._log.info(
                 "收到聊天流式请求",
                 path="/chat/stream",
-                session_id=summarize_session_id(session_id),
-                requested_thread_id=summarize_thread_id(thread_id),
-                stream_id=summarize_identifier_for_log(stream_id, keep=8),
-                user_identity=trusted_user_identity,
+                session_id=summarize_session_id(context.session_id),
+                requested_thread_id=summarize_thread_id(context.requested_thread_id),
+                stream_id=summarize_identifier_for_log(context.stream_id, keep=8),
+                user_identity=context.trusted_user_identity,
                 message_len=len(message),
                 message_preview=summarize_text_for_log(message, limit=72),
-            )
-
-            resolved_thread_id, minted_new_thread, updated_legacy_bindings, legacy_thread_id = (
-                session_manager.resolve_thread_id(
-                    session_id,
-                    thread_id,
-                    legacy_bindings,
-                )
-            )
-            if legacy_thread_id and resolved_thread_id != legacy_thread_id:
-                self._log.info(
-                    "legacy thread_id 已绑定到当前会话的新 thread",
-                    legacy_thread_id=summarize_thread_id(legacy_thread_id),
-                    thread_id=summarize_thread_id(resolved_thread_id),
-                )
-            elif thread_id and thread_id != resolved_thread_id:
-                self._log.warning("忽略未授权 thread_id", requested_thread_id=summarize_thread_id(thread_id))
-            if minted_new_thread:
-                self._log.info("签发新的 thread_id", thread_id=summarize_thread_id(resolved_thread_id))
-            self._record_history_thread(
-                request.app,
-                session_id=session_id,
-                thread_id=resolved_thread_id,
-                history_type="service",
             )
 
             self._log.info(
                 "Chat stream request accepted",
                 path="/chat/stream",
-                session_id=summarize_session_id(session_id),
-                thread_id=summarize_thread_id(resolved_thread_id),
-                stream_id=summarize_identifier_for_log(stream_id, keep=8),
-                minted_new_thread=minted_new_thread,
-                legacy_rebound=bool(legacy_thread_id),
+                session_id=summarize_session_id(context.session_id),
+                thread_id=summarize_thread_id(context.thread_id),
+                stream_id=summarize_identifier_for_log(context.stream_id, keep=8),
+                channel=context.channel,
+                minted_new_thread=context.minted_new_thread,
             )
             cancel_handle = await register_stream_handle(
                 request.app,
-                stream_id=stream_id,
-                request_id=request_id,
-                thread_id=resolved_thread_id,
-                session_id=session_id,
+                stream_id=context.stream_id,
+                request_id=context.request_id,
+                thread_id=context.thread_id,
+                session_id=context.session_id,
             )
 
             response = StreamingResponse(
                 self.stream_events(
                     request.app,
-                    message,
-                    resolved_thread_id,
-                    trusted_user_identity,
-                    request_id=request_id,
-                    stream_id=stream_id,
+                    context.message,
+                    context.thread_id,
+                    context.trusted_user_identity,
+                    request_id=context.request_id,
+                    stream_id=context.stream_id,
                     cancel_handle=cancel_handle,
-                    auth_context=auth_context,
+                    history_messages=context.history_messages,
+                    replace_history=False,
+                    auth_context=context.auth_context,
+                    complete_payload_enricher=self._build_complete_payload_enricher(context),
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -255,26 +376,28 @@ class ChatService:
                     "X-Accel-Buffering": "no",
                 },
             )
-            session_manager.attach_scope_cookies(response, session_id, updated_legacy_bindings)
+            context.session_manager.attach_scope_cookies(response, context.session_id, context.updated_legacy_bindings)
             return response
         except HTTPException:
             raise
         except Exception as exc:
-            if stream_id:
-                await clear_stream_handle(request.app, stream_id)
+            cleanup_stream_id = context.stream_id if "context" in locals() else (stream_id or "").strip()
+            if cleanup_stream_id:
+                await clear_stream_handle(request.app, cleanup_stream_id)
             self._log.exception(
                 "创建流式响应失败",
                 error=str(exc),
                 path="/chat/stream",
-                session_id=summarize_session_id(session_id),
+                session_id=summarize_session_id(context.session_id) if "context" in locals() else "",
                 requested_thread_id=summarize_thread_id(thread_id),
-                stream_id=summarize_identifier_for_log(stream_id, keep=8),
+                stream_id=summarize_identifier_for_log(cleanup_stream_id, keep=8) if cleanup_stream_id else "",
             )
             response = JSONResponse(
                 status_code=500,
                 content={"message": "Service temporarily unavailable, please retry later", "error_id": request_id},
             )
-            session_manager.attach_scope_cookies(response, session_id, legacy_bindings)
+            if "context" in locals():
+                context.session_manager.attach_scope_cookies(response, context.session_id, context.updated_legacy_bindings)
             return response
 
     async def stream_edit(
@@ -402,21 +525,20 @@ class ChatService:
             raise HTTPException(status_code=400, detail="message is required")
 
         metadata = payload.metadata or {}
-        _, request_session_id, _, _ = resolve_request_scope(request)
-        auth_context = resolve_auth_context(request, request_session_id)
-        identity = auth_context.identity_payload()
-        trusted_user_identity = str(identity.get("user_role") or "访客")
-        requested_identity = metadata.get("user_identity") or metadata.get("identity") or "游客"
-        if requested_identity in ("游客", "管理员") and requested_identity != trusted_user_identity:
-            self._log.info(
-                "忽略不可信的语音 Agent 身份参数",
-                requested_user_identity=requested_identity,
-                trusted_user_identity=trusted_user_identity,
-                session_id=summarize_session_id(payload.session_id or request_session_id),
-            )
-        user_identity = trusted_user_identity
-        thread_id = str(payload.session_id or metadata.get("thread_id") or str(uuid4())).strip()
         request_id = ensure_request_id()
+        context = await self.prepare_agent_invocation_context(
+            request,
+            message=message,
+            thread_id=payload.thread_id or metadata.get("thread_id"),
+            user_identity=str(metadata.get("user_identity") or metadata.get("identity") or "游客"),
+            stream_id=metadata.get("stream_id"),
+            channel="voice",
+            metadata={
+                **metadata,
+                "client_session_id": payload.session_id,
+            },
+            request_id=request_id,
+        )
 
         reply_text = ""
         accumulated_tokens: list[str] = []
@@ -426,8 +548,9 @@ class ChatService:
         self._log.info(
             "收到语音 Agent JSON 请求",
             path="/agent/chat",
-            session_id=summarize_session_id(payload.session_id),
-            thread_id=summarize_thread_id(thread_id),
+            session_id=summarize_session_id(context.session_id),
+            thread_id=summarize_thread_id(context.thread_id),
+            stream_id=summarize_identifier_for_log(context.stream_id, keep=8),
             message_len=len(message),
             message_preview=summarize_text_for_log(message, limit=72),
         )
@@ -435,11 +558,15 @@ class ChatService:
         try:
             async for chunk in self.stream_events(
                 request.app,
-                message,
-                thread_id,
-                user_identity,
-                request_id=request_id,
-                auth_context=auth_context,
+                context.message,
+                context.thread_id,
+                context.trusted_user_identity,
+                request_id=context.request_id,
+                stream_id=context.stream_id,
+                history_messages=context.history_messages,
+                replace_history=False,
+                auth_context=context.auth_context,
+                complete_payload_enricher=self._build_complete_payload_enricher(context),
             ):
                 for event in parse_sse_payloads(chunk):
                     msg_type = event.get("type")
@@ -462,8 +589,8 @@ class ChatService:
             self._log.exception(
                 "语音 Agent JSON 请求失败",
                 error=str(exc),
-                session_id=summarize_session_id(payload.session_id),
-                thread_id=summarize_thread_id(thread_id),
+                session_id=summarize_session_id(context.session_id),
+                thread_id=summarize_thread_id(context.thread_id),
             )
             raise HTTPException(status_code=500, detail="Agent service temporarily unavailable") from exc
 
@@ -477,7 +604,7 @@ class ChatService:
                     "reply_text": "",
                     "visual_actions": visual_actions,
                     "session_id": payload.session_id,
-                    "thread_id": thread_id,
+                    "thread_id": context.thread_id,
                     "error": error_message,
                 },
             )
@@ -486,8 +613,14 @@ class ChatService:
             "reply_text": reply_text,
             "visual_actions": visual_actions,
             "session_id": payload.session_id,
-            "thread_id": thread_id,
-            "metadata": {"request_id": request_id},
+            "thread_id": context.thread_id,
+            "metadata": {
+                "request_id": context.request_id,
+                "thread_id": context.thread_id,
+                "session_id": context.session_id,
+                "channel": context.channel,
+                "auth_context": context.auth_context.audit_summary(),
+            },
         }
 
     async def stop_stream(self, request: Request, payload: StopStreamPayload):
