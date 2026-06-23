@@ -79,6 +79,9 @@ def json_response_with_scope_and_dev(
     content: Any,
     *,
     role: str,
+    user_id: str | None = None,
+    asset_scope: list[str] | None = None,
+    allowed_tables: list[str] | None = None,
     status_code: int = 200,
 ) -> JSONResponse:
     manager, session_id, _, legacy_bindings = resolve_request_scope(request)
@@ -86,7 +89,14 @@ def json_response_with_scope_and_dev(
     manager.attach_scope_cookies(response, session_id, legacy_bindings)
     clear_user_auth_cookie(response)
     clear_admin_auth_cookie(response)
-    attach_dev_auth_cookie(response, session_id, role)
+    attach_dev_auth_cookie(
+        response,
+        session_id,
+        role,
+        user_id=user_id,
+        asset_scope=asset_scope,
+        allowed_tables=allowed_tables,
+    )
     return response
 
 

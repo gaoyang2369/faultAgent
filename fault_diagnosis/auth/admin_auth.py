@@ -48,12 +48,12 @@ def _sign(payload: str) -> str:
     return hmac.new(_AUTH_SECRET, payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def _encode_payload(data: dict[str, str | int]) -> str:
+def _encode_payload(data: dict[str, Any]) -> str:
     raw = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
-def _decode_payload(token: str) -> dict[str, str | int]:
+def _decode_payload(token: str) -> dict[str, Any]:
     padded = token + "=" * (-len(token) % 4)
     raw = base64.urlsafe_b64decode(padded.encode("ascii"))
     decoded = json.loads(raw.decode("utf-8"))
@@ -152,17 +152,40 @@ def verify_user_auth_token(token: str | None, session_id: str) -> dict[str, str]
     }
 
 
-def issue_dev_auth_token(session_id: str, role: str) -> str:
+def _clean_token_scope(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+
+
+def issue_dev_auth_token(
+    session_id: str,
+    role: str,
+    *,
+    user_id: str | None = None,
+    asset_scope: list[str] | None = None,
+    allowed_tables: list[str] | None = None,
+) -> str:
     if role not in {"guest", "engineer", "admin"}:
         raise ValueError("unsupported development role")
-    payload = _encode_payload(
-        {"sid": session_id, "role": role, "method": "dev-login", "iat": int(time.time())}
-    )
+    token_payload: dict[str, Any] = {
+        "sid": session_id,
+        "role": role,
+        "method": "dev-login",
+        "iat": int(time.time()),
+    }
+    if user_id:
+        token_payload["uid"] = user_id
+    if asset_scope is not None:
+        token_payload["asset_scope"] = _clean_token_scope(asset_scope)
+    if allowed_tables is not None:
+        token_payload["allowed_tables"] = _clean_token_scope(allowed_tables)
+    payload = _encode_payload(token_payload)
     signature = _sign(f"{DEV_AUTH_COOKIE_SALT}:{payload}")
     return f"{payload}.{signature}"
 
 
-def verify_dev_auth_token(token: str | None, session_id: str) -> dict[str, str] | None:
+def verify_dev_auth_token(token: str | None, session_id: str) -> dict[str, Any] | None:
     if not token or "." not in token:
         return None
     payload, signature = token.rsplit(".", 1)
@@ -179,7 +202,13 @@ def verify_dev_auth_token(token: str | None, session_id: str) -> dict[str, str] 
         return None
     if issued_at <= 0 or int(time.time()) - issued_at > ADMIN_AUTH_MAX_AGE:
         return None
-    return {"role": role, "auth_method": "dev-login"}
+    return {
+        "role": role,
+        "user_id": str(decoded.get("uid", "")).strip(),
+        "asset_scope": _clean_token_scope(decoded.get("asset_scope")) if "asset_scope" in decoded else None,
+        "allowed_tables": _clean_token_scope(decoded.get("allowed_tables")) if "allowed_tables" in decoded else None,
+        "auth_method": "dev-login",
+    }
 
 
 def attach_admin_auth_cookie(
@@ -234,10 +263,24 @@ def clear_user_auth_cookie(response: Response) -> None:
     )
 
 
-def attach_dev_auth_cookie(response: Response, session_id: str, role: str) -> None:
+def attach_dev_auth_cookie(
+    response: Response,
+    session_id: str,
+    role: str,
+    *,
+    user_id: str | None = None,
+    asset_scope: list[str] | None = None,
+    allowed_tables: list[str] | None = None,
+) -> None:
     response.set_cookie(
         key=DEV_AUTH_COOKIE_NAME,
-        value=issue_dev_auth_token(session_id, role),
+        value=issue_dev_auth_token(
+            session_id,
+            role,
+            user_id=user_id,
+            asset_scope=asset_scope,
+            allowed_tables=allowed_tables,
+        ),
         httponly=True,
         samesite=SESSION_COOKIE_SAMESITE,
         secure=SESSION_COOKIE_SECURE,
@@ -267,7 +310,13 @@ def resolve_auth_context(
     if config.DEV_AUTH_ENABLED:
         dev_identity = verify_dev_auth_token(request.cookies.get(DEV_AUTH_COOKIE_NAME), session_id)
         if dev_identity:
-            return build_dev_auth_context(dev_identity["role"], session_id=session_id)
+            return build_dev_auth_context(
+                dev_identity["role"],
+                session_id=session_id,
+                user_id=dev_identity.get("user_id") or None,
+                asset_scope=dev_identity.get("asset_scope"),
+                allowed_tables=dev_identity.get("allowed_tables"),
+            )
 
     admin_token = request.cookies.get(ADMIN_AUTH_COOKIE_NAME)
     admin_identity = verify_admin_auth_token(admin_token, session_id)

@@ -32,6 +32,9 @@ class LoginPayload(BaseModel):
 
 class DevLoginPayload(BaseModel):
     role: Role
+    user_id: str | None = None
+    asset_scope: list[str] | None = None
+    allowed_tables: list[str] | None = None
 
 
 class VoiceExchangePayload(BaseModel):
@@ -113,11 +116,19 @@ async def dev_login(request: Request):
         payload = DevLoginPayload.model_validate(await request.json())
     except Exception as exc:
         raise HTTPException(status_code=422, detail="role must be guest, engineer or admin") from exc
-    auth_context = build_dev_auth_context(payload.role)
+    auth_context = build_dev_auth_context(
+        payload.role,
+        user_id=payload.user_id,
+        asset_scope=payload.asset_scope,
+        allowed_tables=payload.allowed_tables,
+    )
     return json_response_with_scope_and_dev(
         request,
         auth_context.identity_payload(),
         role=payload.role,
+        user_id=auth_context.user_id,
+        asset_scope=auth_context.asset_scope,
+        allowed_tables=auth_context.table_scope,
     )
 
 

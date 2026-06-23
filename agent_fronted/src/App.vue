@@ -16,8 +16,16 @@ import DesktopPetIdentityDialog from '@/components/DesktopPetIdentityDialog.vue'
 import FileUploadDialog from '@/views/FileUpload.vue'
 import VoiceAuthDialog from '@/components/VoiceAuthDialog.vue'
 import AdminAuthDialog from '@/components/AdminAuthDialog.vue'
+import { adminAuthAPI } from '@/services/api'
 
 type IdentityDialogState = 'identifying' | 'success' | 'failed'
+type DevAuthRole = 'guest' | 'engineer' | 'admin'
+type BackendIdentity = {
+  user_id?: string | null
+  user_role?: string | null
+  role?: DevAuthRole | string | null
+  is_admin?: boolean | null
+}
 type VoiceAuthSuccessPayload = {
   role: string
   userId: string
@@ -38,6 +46,9 @@ const desktopPetUserId = ref<string | null>(null)
 const desktopPetUserRole = ref<string | null>(null)
 const desktopPetPermissionHint = ref<string | null>(null)
 const shouldAutoDismissDesktopPetIdentityDialog = ref(false)
+const isDevIdentitySwitcherVisible = import.meta.env.DEV
+const devIdentityRole = ref<DevAuthRole>('admin')
+const isSwitchingDevIdentity = ref(false)
 const route = useRoute()
 const router = useRouter()
 
@@ -77,6 +88,53 @@ const desktopPetRoleRules = [
     permissionHint: '用户权限：全局管理'
   }
 ]
+const devIdentityOptions: Array<{ value: DevAuthRole; label: string }> = [
+  { value: 'guest', label: '游客' },
+  { value: 'engineer', label: '工程师' },
+  { value: 'admin', label: '管理员' }
+]
+
+const resolveBackendIdentityRole = (identity: BackendIdentity): DevAuthRole => {
+  const rawRole = String(identity.role || identity.user_role || '').trim().toLowerCase()
+  if (rawRole.includes('admin') || rawRole.includes('管理员') || identity.is_admin) return 'admin'
+  if (rawRole.includes('engineer') || rawRole.includes('工程师') || rawRole.includes('维修')) return 'engineer'
+  return 'guest'
+}
+
+const applyBackendIdentity = (identity: BackendIdentity) => {
+  const nextRole = resolveBackendIdentityRole(identity)
+  const fallbackUserId = nextRole === 'admin' ? 'admin' : nextRole === 'engineer' ? 'engineer_01' : 'guest'
+  const fallbackUserRole = nextRole === 'admin' ? '管理员' : nextRole === 'engineer' ? '维修工程师' : '访客'
+
+  userIdentityStore.setUserInfo({
+    userId: identity.user_id || fallbackUserId,
+    userRole: identity.user_role || fallbackUserRole,
+  })
+  userIdentityStore.setStatus('connected')
+  devIdentityRole.value = nextRole
+}
+
+const switchDevIdentity = async () => {
+  if (isSwitchingDevIdentity.value) return
+  isSwitchingDevIdentity.value = true
+  userIdentityStore.setStatus('connecting')
+
+  try {
+    await adminAuthAPI.devLogin(devIdentityRole.value)
+    const identity = await adminAuthAPI.getIdentity()
+    applyBackendIdentity(identity)
+    const option = devIdentityOptions.find(item => item.value === devIdentityRole.value)
+    ElMessage.success(`已切换为${option?.label || '开发'}身份`)
+  } catch (error) {
+    userIdentityStore.setStatus('error')
+    const message = error instanceof Error && error.message
+      ? error.message
+      : '开发身份切换失败，请确认后端已开启 LOCAL_DEV_MODE 或 ENABLE_DEV_AUTH。'
+    ElMessage.error(message)
+  } finally {
+    isSwitchingDevIdentity.value = false
+  }
+}
 
 const normalizeQueryValue = (value: unknown) => {
   const firstValue = Array.isArray(value) ? value[0] : value
@@ -379,11 +437,7 @@ const onVoiceAuthSuccess = async (payload: VoiceAuthSuccessPayload | string) => 
 }
 
 const onAdminAuthenticated = (identity: { user_id: string; user_role: string; is_admin: boolean }) => {
-  userIdentityStore.setUserInfo({
-    userId: identity.user_id || 'admin',
-    userRole: identity.user_role || '管理员',
-  })
-  userIdentityStore.setStatus('connected')
+  applyBackendIdentity(identity)
 }
 
 const onAdminLoggedOut = () => {
@@ -455,6 +509,22 @@ const canUploadFile = computed(() => {
         </div>
       </div>
       <div class="navbar-actions">
+        <select
+          v-if="isDevIdentitySwitcherVisible"
+          v-model="devIdentityRole"
+          class="dev-identity-switcher"
+          :disabled="isSwitchingDevIdentity"
+          title="开发身份切换"
+          @change="switchDevIdentity"
+        >
+          <option
+            v-for="option in devIdentityOptions"
+            :key="option.value"
+            :value="option.value"
+          >
+            {{ option.label }}
+          </option>
+        </select>
         <button
           v-if="canUploadFile"
           class="nav-action-btn upload-nav-btn"
@@ -608,6 +678,30 @@ body {
     display: flex;
     align-items: center;
     gap: 0.6rem;
+  }
+
+  .dev-identity-switcher {
+    height: 34px;
+    min-width: 92px;
+    padding: 0 1.8rem 0 0.65rem;
+    border-radius: 8px;
+    border: 1px solid rgba(22, 93, 255, 0.28);
+    background: rgba(255, 255, 255, 0.82);
+    color: var(--text-color);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+
+    &:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    &:focus {
+      border-color: rgba(22, 93, 255, 0.6);
+      box-shadow: 0 0 0 2px rgba(22, 93, 255, 0.12);
+    }
   }
 
   .nav-action-btn {
@@ -812,6 +906,11 @@ body {
 }
 
 .dark .navbar {
+  .dev-identity-switcher {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+
   .identity-indicator.disconnected,
   .identity-indicator.idle {
     background: rgba(255, 255, 255, 0.08);
@@ -852,6 +951,12 @@ body {
       .nav-label {
         display: none;
       }
+    }
+    .dev-identity-switcher {
+      min-width: 78px;
+      max-width: 86px;
+      padding-left: 0.45rem;
+      font-size: 0.75rem;
     }
     .identity-indicator {
       padding: 0.35rem 0.6rem;

@@ -120,6 +120,11 @@ def _clean_scope(values: Iterable[str] | None) -> list[str]:
     return list(dict.fromkeys(str(value).strip() for value in values or [] if str(value).strip()))
 
 
+def _clean_authorized_tables(values: Iterable[str] | None) -> list[str]:
+    allowed = set(AUTHORIZED_BUSINESS_TABLES)
+    return [table for table in _clean_scope(values) if table in allowed]
+
+
 def build_auth_context(
     *,
     user_id: str = "guest",
@@ -183,16 +188,29 @@ def effective_resource_scope(auth: AuthContext) -> ResourceScope:
     )
 
 
-def build_dev_auth_context(role: Role, *, session_id: str = "") -> AuthContext:
-    """Build deterministic local identities without trusting cookie-provided scopes."""
+def build_dev_auth_context(
+    role: Role,
+    *,
+    session_id: str = "",
+    user_id: str | None = None,
+    asset_scope: Iterable[str] | None = None,
+    allowed_tables: Iterable[str] | None = None,
+) -> AuthContext:
+    """Build local identities for the signed development-auth cookie flow."""
 
     if role == "engineer":
+        default_asset_scope = ["J1号机"]
+        default_allowed_tables = ["real_data_01", "device_alarm", "fault_records"]
         return build_auth_context(
-            user_id="dev_engineer",
+            user_id=(user_id or "engineer_01").strip() or "engineer_01",
             display_name="本地维修工程师",
             role=role,
-            asset_scope=["J1号机", "pump_001"],
-            table_scope=["real_data_01", "device_alarm", "device_metric"],
+            asset_scope=default_asset_scope if asset_scope is None else _clean_scope(asset_scope),
+            table_scope=(
+                default_allowed_tables
+                if allowed_tables is None
+                else _clean_authorized_tables(allowed_tables)
+            ),
             system_scope=["DCMA_LINE_1"],
             location_scope=["一号车间"],
             session_id=session_id,
@@ -200,14 +218,14 @@ def build_dev_auth_context(role: Role, *, session_id: str = "") -> AuthContext:
         )
     if role == "admin":
         return build_auth_context(
-            user_id="dev_admin",
+            user_id=(user_id or "admin").strip() or "admin",
             display_name="本地管理员",
             role=role,
             session_id=session_id,
             auth_method="dev-login",
         )
     return build_auth_context(
-        user_id="dev_guest",
+        user_id=(user_id or "guest").strip() or "guest",
         display_name="本地访客",
         role="guest",
         session_id=session_id,

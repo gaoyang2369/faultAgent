@@ -119,6 +119,31 @@ def test_dev_login_identity_is_signed_and_frontend_identity_cannot_escalate(auth
     assert tampered_identity["auth_method"] is None
 
 
+def test_dev_login_signs_requested_development_identity_scope(auth_client: TestClient) -> None:
+    response = auth_client.post(
+        "/auth/dev-login",
+        json={
+            "role": "engineer",
+            "user_id": "engineer_01",
+            "asset_scope": ["J1号机"],
+            "allowed_tables": ["real_data_01", "device_alarm", "fault_records"],
+        },
+    )
+
+    assert response.status_code == 200
+    login_identity = response.json()
+    assert login_identity["role"] == "engineer"
+    assert login_identity["user_id"] == "engineer_01"
+    assert login_identity["asset_scope"] == ["J1号机"]
+    assert login_identity["allowed_tables"] == ["real_data_01", "device_alarm", "fault_records"]
+
+    identity = auth_client.get("/auth/identity").json()
+    assert identity["role"] == "engineer"
+    assert identity["user_id"] == "engineer_01"
+    assert identity["asset_scope"] == ["J1号机"]
+    assert identity["allowed_tables"] == ["real_data_01", "device_alarm", "fault_records"]
+
+
 def test_dev_login_is_unavailable_when_development_auth_is_disabled(monkeypatch) -> None:
     monkeypatch.setattr(config, "DEV_AUTH_ENABLED", False)
     app = FastAPI()

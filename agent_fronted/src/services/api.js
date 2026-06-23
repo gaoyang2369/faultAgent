@@ -59,6 +59,35 @@ const fetchJsonWithSession = async (url, options = {}) => {
   return response.json()
 }
 
+const DEV_AUTH_PRESETS = {
+  guest: {
+    role: 'guest',
+    user_id: 'guest'
+  },
+  engineer: {
+    role: 'engineer',
+    user_id: 'engineer_01',
+    asset_scope: ['J1号机'],
+    allowed_tables: ['real_data_01', 'device_alarm', 'fault_records']
+  },
+  admin: {
+    role: 'admin',
+    user_id: 'admin'
+  }
+}
+
+const normalizeDevLoginPayload = (roleOrPayload = 'guest') => {
+  if (typeof roleOrPayload === 'string') {
+    return DEV_AUTH_PRESETS[roleOrPayload] || DEV_AUTH_PRESETS.guest
+  }
+  const role = typeof roleOrPayload?.role === 'string' ? roleOrPayload.role : 'guest'
+  return {
+    ...(DEV_AUTH_PRESETS[role] || DEV_AUTH_PRESETS.guest),
+    ...roleOrPayload,
+    role
+  }
+}
+
 const normalizeAdminPdfRecord = (record = {}) => ({
   id: record.id,
   fileName: record.file_name || record.fileName || '',
@@ -689,6 +718,16 @@ export const chatAPI = {
 export const adminAuthAPI = {
   async getIdentity() {
     return fetchJsonWithSession(`${BASE_URL}/auth/identity`)
+  },
+
+  async devLogin(roleOrPayload = 'guest') {
+    return fetchJsonWithSession(`${BASE_URL}/auth/dev-login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(normalizeDevLoginPayload(roleOrPayload))
+    })
   },
 
   async login(username, password) {

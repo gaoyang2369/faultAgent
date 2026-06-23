@@ -135,11 +135,21 @@ export interface IdentityResponse {
   permissions?: string[]
   asset_scope?: string[]
   table_scope?: string[]
+  allowed_tables?: string[]
   system_scope?: string[]
   location_scope?: string[]
   kb_scopes?: string[]
   auth_method?: string | null
   available_auth_methods?: string[]
+}
+
+export type DevAuthRole = 'guest' | 'engineer' | 'admin'
+
+export interface DevLoginPayload {
+  role: DevAuthRole
+  user_id?: string
+  asset_scope?: string[]
+  allowed_tables?: string[]
 }
 
 export interface AdminIdentityContext {
@@ -313,6 +323,7 @@ export interface ChatAPI {
 
 export interface AdminAuthAPI {
   getIdentity(): Promise<IdentityResponse>
+  devLogin(roleOrPayload?: DevAuthRole | DevLoginPayload): Promise<IdentityResponse>
   login(username: string, password: string): Promise<IdentityResponse>
   logout(): Promise<IdentityResponse>
 }
