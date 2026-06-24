@@ -149,7 +149,6 @@ def _operation_evidence_table(evidence: list[dict]) -> str:
 
 def _operation_appendix_html(
     payload: dict,
-    fallback_basis: str,
     markdown_to_html: MarkdownRenderer,
 ) -> str:
     appendix = payload.get("appendix") if isinstance(payload.get("appendix"), dict) else {}
@@ -227,7 +226,7 @@ def _operation_appendix_html(
         <details class="details-block"><summary>完整趋势统计</summary><div class="details-body">{trend_html}</div></details>
         <details class="details-block"><summary>最新采样明细</summary><div class="details-body">{sample_html}</div></details>
         <details class="details-block"><summary>状态字/控制字解析</summary><div class="details-body">{_operation_table(["对象", "值"], control_rows)}</div></details>
-        <details class="details-block"><summary>知识库原文</summary><div class="details-body">{markdown_to_html(knowledge_body or fallback_basis or "知识库未返回可展示片段。")}</div></details>
+        <details class="details-block"><summary>知识库原文</summary><div class="details-body">{markdown_to_html(knowledge_body or "知识库未返回可展示片段。")}</div></details>
         <details class="details-block"><summary>报告生成元信息</summary><div class="details-body">{metadata_html}</div></details>
       </section>
     """
@@ -238,7 +237,6 @@ def build_operation_report_html(
     payload: dict,
     chart_section: str,
     chart_assets: str,
-    diagnosis_basis: str,
     markdown_to_html: MarkdownRenderer,
 ) -> str:
     icon, severity_label, severity_class = _severity_meta(payload.get("severity"))
@@ -273,7 +271,7 @@ def build_operation_report_html(
         .replace(">VIS<", ">03<", 1)
         .replace("核心趋势与事件持续性", "趋势与持续性", 1)
     )
-    appendix_html = _operation_appendix_html(payload, diagnosis_basis, markdown_to_html)
+    appendix_html = _operation_appendix_html(payload, markdown_to_html)
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>

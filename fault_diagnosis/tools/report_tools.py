@@ -299,9 +299,6 @@ def _chart_trend_groups(chart_payload: dict) -> list[dict]:
     groups = chart_payload.get("trend_groups")
     if isinstance(groups, list) and groups:
         return [group for group in groups if isinstance(group, dict)]
-    metrics = chart_payload.get("trend_metrics")
-    if isinstance(metrics, list) and metrics:
-        return [{"key": "legacy", "name": "关键指标趋势", "metrics": metrics, "thresholds": []}]
     return []
 
 
@@ -338,60 +335,6 @@ def _build_quality_summary(chart_payload: dict) -> str:
     """
 
 
-def _build_status_summary_section(chart_payload: dict | None) -> str:
-    if not chart_payload:
-        return ""
-    summary = chart_payload.get("status_summary")
-    if not isinstance(summary, dict):
-        return ""
-    status_items = [
-        ("状态等级", summary.get("status_level") or "未知"),
-        ("当前事件", summary.get("current_event") or "无"),
-        ("关键现象", summary.get("key_phenomenon") or "-"),
-        ("处置优先级", summary.get("priority") or "未知"),
-    ]
-    info_items = [
-        ("数据源与窗口", f"{summary.get('source_table') or '-'}；{summary.get('sample_window') or '-'}"),
-        ("设备映射", summary.get("device_mapping") or summary.get("device") or "-"),
-        ("一句话诊断结论", summary.get("initial_assessment") or "-"),
-    ]
-    cards = "".join(
-        f"""
-        <div class="status-card-item">
-          <div class="status-card-label">{escape(str(label))}</div>
-          <div class="status-card-value">{escape(str(value))}</div>
-        </div>
-        """
-        for label, value in status_items
-    )
-    info_cards = "".join(
-        f"""
-        <div class="status-info-item">
-          <div class="status-card-label">{escape(str(label))}</div>
-          <div class="status-info-value">{escape(str(value))}</div>
-        </div>
-        """
-        for label, value in info_items
-    )
-    next_action = escape(str(summary.get("next_action") or "-"))
-    return f"""
-    <section class="status-summary-card" aria-label="当前运行状态摘要">
-      <div class="status-card-head">
-        <div>
-          <div class="section-kicker">STATUS</div>
-          <h2>当前运行诊断摘要</h2>
-        </div>
-        <strong>{escape(str(summary.get("status_level") or "未知"))}</strong>
-      </div>
-      <div class="status-card-grid">{cards}</div>
-      <div class="status-info-grid">{info_cards}</div>
-      <div class="status-card-notes">
-        <p><strong>下一步动作：</strong>{next_action}</p>
-      </div>
-    </section>
-    """
-
-
 def _format_chart_metric_value(value: object, unit: object = "") -> str:
     if value is None:
         return "-"
@@ -408,9 +351,6 @@ def _latest_metric_groups(chart_payload: dict) -> list[dict]:
     groups = chart_payload.get("latest_metric_groups")
     if isinstance(groups, list) and groups:
         return [group for group in groups if isinstance(group, dict)]
-    metrics = chart_payload.get("latest_metrics")
-    if isinstance(metrics, list) and metrics:
-        return [{"key": "legacy", "name": "关键指标", "metrics": metrics}]
     return []
 
 
@@ -648,9 +588,6 @@ def _build_chart_assets(chart_payload: dict | None) -> str:
         if (Array.isArray(data.trend_groups) && data.trend_groups.length) {
           return data.trend_groups;
         }
-        if (Array.isArray(data.trend_metrics) && data.trend_metrics.length) {
-          return [{ key: "legacy", name: "关键指标趋势", metrics: data.trend_metrics, thresholds: [] }];
-        }
         return [];
       }
 
@@ -785,474 +722,45 @@ def _build_chart_assets(chart_payload: dict | None) -> str:
     """
 
 
-def _extract_workorder_section(repair_recommendations: str) -> str:
-    """Return a fixed work-order chapter body without changing tool inputs."""
-
-    text = str(repair_recommendations or "").strip()
-    marker = "### 待处理事项"
-    if marker in text:
-        return text[text.index(marker) :].strip()
-    return "本次未触发独立工单建议；如异常持续或重复出现，应由有权限人员确认后再创建工单。"
-
-
 def _build_report_html(
     *,
-    title: str,
-    report_time: str,
-    diagnosis_object: str,
-    diagnosis_type: str,
-    executive_summary: str,
-    diagnosis_overview: str,
-    diagnosis_details: str,
-    fault_inference: str,
-    repair_recommendations: str,
-    preventive_maintenance: str,
-    diagnosis_basis: str,
+    operation_report_payload: str,
     chart_payload: str | None = None,
-    operation_report_payload: str | None = None,
 ) -> str:
     chart_data = _load_chart_payload(chart_payload)
-    chart_section = _build_chart_section(chart_data)
-    chart_assets = _build_chart_assets(chart_data)
     operation_payload = load_operation_report_payload(operation_report_payload)
-    if operation_payload:
-        return build_operation_report_html(
-            payload=operation_payload,
-            chart_section=chart_section,
-            chart_assets=chart_assets,
-            diagnosis_basis=diagnosis_basis,
-            markdown_to_html=_markdown_to_html,
-        )
-    status_summary_section = _build_status_summary_section(chart_data)
-    workorder_section = _extract_workorder_section(repair_recommendations)
-    sections = [
-        ("01", "报告摘要", executive_summary, False),
-        ("02", "诊断对象与数据范围", diagnosis_overview, False),
-        ("03", "运行状态概览", diagnosis_details, False),
-        ("04", "异常与故障分析", fault_inference, False),
-        ("05", "证据依据", diagnosis_basis, False),
-        ("06", "处置与维护建议", repair_recommendations, False),
-        ("07", "工单建议", workorder_section, False),
-        ("08", "风险与边界说明", preventive_maintenance, False),
-        ("09", "附录", diagnosis_basis, True),
-    ]
-    section_html = "\n".join(
-        f"""
-        <section class="report-section">
-          <div class="section-kicker">{number}</div>
-          <h2>{escape(name)}</h2>
-          <div class="section-body">{
-            f'<details class="details-block"><summary>展开查看：SQL 与执行信息</summary><div class="details-body">{_markdown_to_html(body)}</div></details>'
-            if collapsed
-            else _markdown_to_html(body)
-          }</div>
-        </section>
-        """
-        for number, name, body, collapsed in sections
+    if not operation_payload:
+        raise ValueError("缺少结构化运行诊断报告 payload。")
+    return build_operation_report_html(
+        payload=operation_payload,
+        chart_section=_build_chart_section(chart_data),
+        chart_assets=_build_chart_assets(chart_data),
+        markdown_to_html=_markdown_to_html,
     )
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{escape(title)}</title>
-  <style>
-    :root {{
-      color-scheme: light;
-      --ink: #162033;
-      --muted: #5f6b7a;
-      --line: #d8dee8;
-      --panel: #ffffff;
-      --surface: #f6f8fb;
-      --teal: #0f8b8d;
-      --green: #2e7d32;
-      --amber: #b7791f;
-      --red: #c2413a;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      font-family: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
-      color: var(--ink);
-      background: var(--surface);
-      line-height: 1.62;
-    }}
-    .report-shell {{ max-width: 1180px; margin: 0 auto; padding: 28px 24px 48px; }}
-    .report-hero {{
-      background: linear-gradient(135deg, #ffffff 0%, #eef7f6 56%, #fff7e7 100%);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 28px;
-      box-shadow: 0 12px 34px rgba(22, 32, 51, 0.08);
-    }}
-    .eyebrow {{ color: var(--teal); font-weight: 700; letter-spacing: 0; margin: 0 0 8px; }}
-    h1 {{ margin: 0; font-size: 34px; line-height: 1.18; letter-spacing: 0; }}
-    .meta-grid {{
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 24px;
-    }}
-    .meta-item {{
-      background: rgba(255,255,255,0.82);
-      border: 1px solid rgba(216, 222, 232, 0.9);
-      border-radius: 8px;
-      padding: 12px 14px;
-    }}
-    .meta-label {{ color: var(--muted); font-size: 12px; margin-bottom: 4px; }}
-    .meta-value {{ font-weight: 700; overflow-wrap: anywhere; }}
-    .status-summary-card {{
-      margin-top: 18px;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 22px;
-      box-shadow: 0 8px 22px rgba(22, 32, 51, 0.05);
-    }}
-    .status-card-head {{
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 14px;
-    }}
-    .status-card-head h2 {{ margin-bottom: 0; }}
-    .status-card-head strong {{
-      display: inline-flex;
-      align-items: center;
-      min-height: 34px;
-      padding: 5px 10px;
-      border-radius: 6px;
-      background: #fff7ed;
-      color: #9a3412;
-      font-size: 15px;
-      white-space: nowrap;
-    }}
-    .status-card-grid {{
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-    }}
-    .status-card-item {{
-      min-width: 0;
-      border: 1px solid #edf1f6;
-      border-radius: 8px;
-      padding: 10px 12px;
-      background: #fbfcfe;
-    }}
-    .status-card-label {{ color: var(--muted); font-size: 12px; margin-bottom: 3px; }}
-    .status-card-value {{ font-weight: 800; overflow-wrap: anywhere; }}
-    .status-info-grid {{
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      margin-top: 10px;
-    }}
-    .status-info-item {{
-      min-width: 0;
-      border: 1px solid #e4ebf2;
-      border-radius: 8px;
-      padding: 12px 14px;
-      background: #ffffff;
-    }}
-    .status-info-value {{ font-weight: 700; color: #243047; overflow-wrap: anywhere; }}
-    .status-card-notes {{
-      margin-top: 14px;
-      padding-top: 12px;
-      border-top: 1px solid var(--line);
-      color: #304057;
-    }}
-    .status-card-notes p:last-child {{ margin-bottom: 0; }}
-    .report-section {{
-      margin-top: 18px;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 22px;
-      box-shadow: 0 8px 22px rgba(22, 32, 51, 0.05);
-    }}
-    .section-kicker {{
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 38px;
-      height: 24px;
-      border-radius: 6px;
-      background: #e6f4f1;
-      color: var(--teal);
-      font-weight: 800;
-      font-size: 12px;
-    }}
-    h2 {{ margin: 10px 0 14px; font-size: 22px; letter-spacing: 0; }}
-    h3 {{ margin: 18px 0 10px; font-size: 18px; letter-spacing: 0; }}
-    h4 {{ margin: 14px 0 8px; font-size: 15px; letter-spacing: 0; color: var(--muted); }}
-    .chart-section {{ background: #fbfdff; }}
-    .quality-summary {{
-      margin: 0 0 14px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fff;
-      padding: 12px 14px;
-    }}
-    .quality-grid {{
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-    }}
-    .quality-item {{ min-width: 0; }}
-    .quality-label {{ color: var(--muted); font-size: 12px; margin-bottom: 3px; }}
-    .quality-value {{ font-weight: 800; overflow-wrap: anywhere; }}
-    .quality-note {{ margin: 8px 0 0; color: var(--muted); font-size: 13px; }}
-    .chart-grid {{
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 14px;
-      align-items: stretch;
-    }}
-    .chart-grid-core {{ margin-bottom: 12px; }}
-    .chart-grid-detail {{ margin-top: 12px; }}
-    .chart-panel {{
-      min-width: 0;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fff;
-      padding: 14px;
-    }}
-    .chart-panel-wide {{ grid-column: 1 / -1; }}
-    .chart-panel h3 {{ margin: 0 0 10px; font-size: 16px; }}
-    .chart-box {{ width: 100%; height: 340px; }}
-    .chart-box-small {{ height: 260px; }}
-    .chart-status {{ margin: 12px 0 0; color: var(--muted); font-size: 13px; }}
-    .chart-empty {{
-      height: 100%;
-      display: grid;
-      place-items: center;
-      color: var(--muted);
-      background: #f8fafc;
-      border: 1px dashed var(--line);
-      border-radius: 8px;
-      font-size: 14px;
-    }}
-    .chart-empty-inline {{ min-height: 88px; height: auto; }}
-    .event-panel {{ grid-column: 1 / -1; }}
-    .event-list {{ display: grid; gap: 8px; }}
-    .event-row {{
-      display: grid;
-      grid-template-columns: 1.1fr 0.8fr 0.7fr 1fr 0.9fr;
-      gap: 10px;
-      align-items: center;
-      border: 1px solid #edf1f6;
-      border-radius: 8px;
-      padding: 10px 12px;
-      background: #fbfcfe;
-      overflow-wrap: anywhere;
-    }}
-    .event-row strong {{ color: #0f766e; }}
-    .event-row em {{
-      font-style: normal;
-      justify-self: start;
-      border-radius: 6px;
-      padding: 2px 8px;
-      background: #fff7ed;
-      color: #9a3412;
-      font-size: 12px;
-      font-weight: 800;
-    }}
-    .chart-details,
-    .details-block {{
-      margin: 12px 0 0;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #ffffff;
-    }}
-    .chart-details summary,
-    .details-block summary {{
-      cursor: pointer;
-      padding: 11px 14px;
-      color: #243047;
-      font-weight: 800;
-    }}
-    .chart-details summary::marker,
-    .details-block summary::marker {{ color: var(--teal); }}
-    .details-body {{
-      border-top: 1px solid var(--line);
-      padding: 14px 16px 4px;
-      background: #fbfcfe;
-      overflow-wrap: anywhere;
-    }}
-    .metric-panel h3 {{ margin-bottom: 4px; }}
-    .metric-groups {{
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px 18px;
-      margin-top: 10px;
-    }}
-    .metric-group {{ min-width: 0; }}
-    .metric-group-title {{
-      color: var(--muted);
-      font-size: 13px;
-      font-weight: 800;
-      margin-bottom: 6px;
-    }}
-    .metric-list {{ border-top: 1px solid var(--line); }}
-    .metric-row {{
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 7px 0;
-      border-bottom: 1px solid #edf1f6;
-    }}
-    .metric-name {{ color: #334155; font-size: 13px; }}
-    .metric-row strong {{ font-size: 15px; white-space: nowrap; }}
-    p {{ margin: 0 0 12px; }}
-    .section-body h3,
-    .section-body h4 {{
-      margin: 16px 0 8px;
-      color: #1f2a3d;
-      font-size: 16px;
-      line-height: 1.35;
-    }}
-    .details-body h3:first-child,
-    .details-body h4:first-child {{ margin-top: 0; }}
-    ul {{ margin: 0 0 12px 20px; padding: 0; }}
-    li {{ margin: 4px 0; }}
-    blockquote {{
-      margin: 14px 0 0;
-      padding: 12px 14px;
-      border-left: 4px solid var(--teal);
-      background: #f1faf8;
-      color: #304057;
-      border-radius: 0 8px 8px 0;
-    }}
-    .table-wrap {{ width: 100%; overflow-x: auto; margin: 10px 0 18px; }}
-    table {{ width: 100%; border-collapse: collapse; min-width: 680px; background: #fff; }}
-    th, td {{
-      border: 1px solid var(--line);
-      padding: 9px 10px;
-      text-align: left;
-      vertical-align: top;
-      overflow-wrap: anywhere;
-    }}
-    th {{ background: #f0f5f8; color: #29384f; font-weight: 800; }}
-    tr:nth-child(even) td {{ background: #fbfcfe; }}
-    .code-block {{
-      margin: 8px 0 16px;
-      padding: 12px 14px;
-      border: 1px solid #dbe3ee;
-      border-radius: 6px;
-      background: #f8fafc;
-      color: #1e293b;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
-      line-height: 1.55;
-    }}
-    .code-block code {{
-      padding: 0;
-      background: transparent;
-      color: inherit;
-      border-radius: 0;
-    }}
-    code {{ background: #eef2f7; padding: 1px 5px; border-radius: 4px; color: #9b2c2c; }}
-    strong {{ color: #111827; }}
-    @media (max-width: 860px) {{
-      .report-shell {{ padding: 18px 12px 32px; }}
-      .report-hero {{ padding: 20px; }}
-      h1 {{ font-size: 27px; }}
-      .meta-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-      .status-card-head {{ display: block; }}
-      .status-card-head strong {{ margin-top: 10px; }}
-      .status-card-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-      .status-info-grid {{ grid-template-columns: 1fr; }}
-      .report-section {{ padding: 18px; }}
-      .quality-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-      .chart-grid {{ grid-template-columns: 1fr; }}
-      .chart-box {{ height: 300px; }}
-      .chart-box-small {{ height: 240px; }}
-      .event-row {{ grid-template-columns: 1fr 1fr; }}
-      .metric-groups {{ grid-template-columns: 1fr; }}
-    }}
-  </style>
-</head>
-<body>
-  <main class="report-shell">
-    <header class="report-hero">
-      <p class="eyebrow">DCMA Intelligent Diagnosis Report</p>
-      <h1>{escape(title)}</h1>
-      <div class="meta-grid">
-        <div class="meta-item"><div class="meta-label">报告时间</div><div class="meta-value">{escape(report_time)}</div></div>
-        <div class="meta-item"><div class="meta-label">诊断对象</div><div class="meta-value">{escape(diagnosis_object)}</div></div>
-        <div class="meta-item"><div class="meta-label">报告类型</div><div class="meta-value">{escape(diagnosis_type)}</div></div>
-        <div class="meta-item"><div class="meta-label">生成系统</div><div class="meta-value">工业设备故障诊断专家系统</div></div>
-      </div>
-    </header>
-    {status_summary_section}
-    {chart_section}
-    {section_html}
-    <blockquote>报告生成时间：{escape(report_time)}<br />诊断系统版本：工业设备故障诊断专家系统</blockquote>
-  </main>
-{chart_assets}
-</body>
-</html>
-"""
 
 
 class SaveReportSchema(BaseModel):
-    title: str = Field(description="Report title")
-    report_time: str = Field(description="Report timestamp")
-    diagnosis_object: str = Field(description="Diagnosis object")
-    diagnosis_type: str = Field(description="Diagnosis type")
-    executive_summary: str = Field(description="Executive summary")
-    diagnosis_overview: str = Field(description="Diagnosis overview")
-    diagnosis_details: str = Field(description="Diagnosis details")
-    fault_inference: str = Field(description="Fault inference")
-    repair_recommendations: str = Field(description="Repair recommendations")
-    preventive_maintenance: str = Field(description="Preventive maintenance suggestions")
-    diagnosis_basis: str = Field(description="Diagnosis basis")
     report_filename: str = Field(description="Output filename without extension")
     chart_payload: str | None = Field(default=None, description="Optional JSON payload for ECharts visualizations")
-    operation_report_payload: str | None = Field(default=None, description="Optional structured operation report JSON")
+    operation_report_payload: str = Field(description="Structured operation diagnosis report JSON")
 
 
 @tool(args_schema=SaveReportSchema)
 def save_report(
-    title: str,
-    report_time: str,
-    diagnosis_object: str,
-    diagnosis_type: str,
-    executive_summary: str,
-    diagnosis_overview: str,
-    diagnosis_details: str,
-    fault_inference: str,
-    repair_recommendations: str,
-    preventive_maintenance: str,
-    diagnosis_basis: str,
     report_filename: str,
     chart_payload: str | None = None,
-    operation_report_payload: str | None = None,
+    operation_report_payload: str = "",
 ) -> str:
     """Save a visual HTML report."""
     try:
         os.makedirs(REPORTS_DIR, exist_ok=True)
         safe_report_name = _sanitize_report_filename(report_filename, "html")
-        merged_basis = diagnosis_basis
 
         report_content = _build_report_html(
-            title=title,
-            report_time=report_time,
-            diagnosis_object=diagnosis_object,
-            diagnosis_type=diagnosis_type,
-            executive_summary=executive_summary,
-            diagnosis_overview=diagnosis_overview,
-            diagnosis_details=diagnosis_details,
-            fault_inference=fault_inference,
-            repair_recommendations=repair_recommendations,
-            preventive_maintenance=preventive_maintenance,
-            diagnosis_basis=merged_basis,
-            chart_payload=chart_payload,
             operation_report_payload=operation_report_payload,
+            chart_payload=chart_payload,
         )
+        operation_payload = load_operation_report_payload(operation_report_payload) or {}
 
         final_filename = f"{safe_report_name}.html"
         report_path = _resolve_report_path(final_filename)
@@ -1267,7 +775,7 @@ def save_report(
                 "created_by_role": auth_context.role,
                 "authorized_asset_scope": list(auth_context.asset_scope),
                 "authorized_table_scope": list(auth_context.table_scope),
-                "diagnosis_object": diagnosis_object,
+                "diagnosis_object": operation_payload.get("asset") or "DCMA 系统",
             }
             with open(access_path, "w", encoding="utf-8") as handle:
                 json.dump(access_payload, handle, ensure_ascii=False, indent=2)

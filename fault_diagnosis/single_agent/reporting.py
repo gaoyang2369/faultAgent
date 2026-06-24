@@ -14,19 +14,10 @@ from ..diagnosis.contracts import (
     SqlStepArtifact,
     WorkOrderSuggestion,
 )
-from .report_sections import (
-    build_capability_boundary_markdown,
-    build_sop_recommendations_markdown,
-    build_workorder_todo_markdown,
-    details_block,
-)
 from .operation_report import build_operation_diagnosis_report
 from .reporting_defs import (
-    CONTROL_WORD_BITS as _CONTROL_WORD_BITS,
     DATA_FRESHNESS_DELAYED_SECONDS as _DATA_FRESHNESS_DELAYED_SECONDS,
     DATA_FRESHNESS_FRESH_SECONDS as _DATA_FRESHNESS_FRESH_SECONDS,
-    DC_VOLTAGE_LOWER as _DC_VOLTAGE_LOWER,
-    DC_VOLTAGE_UPPER as _DC_VOLTAGE_UPPER,
     INVERTER_TEMP_CRITICAL as _INVERTER_TEMP_CRITICAL,
     INVERTER_TEMP_WARNING as _INVERTER_TEMP_WARNING,
     LOAD_CRITICAL as _LOAD_CRITICAL,
@@ -36,8 +27,6 @@ from .reporting_defs import (
     PRIMARY_LATEST_METRIC_KEYS as _PRIMARY_LATEST_METRIC_KEYS,
     SPEED_ERROR_CRITICAL_PERCENT as _SPEED_ERROR_CRITICAL_PERCENT,
     SPEED_ERROR_WARNING_PERCENT as _SPEED_ERROR_WARNING_PERCENT,
-    STATUS_WORD_BITS as _STATUS_WORD_BITS,
-    TREND_METRICS as _TREND_METRICS,
     TREND_METRIC_DEFS as _TREND_METRIC_DEFS,
     SqlReportSummary,
 )
@@ -46,7 +35,6 @@ from .sql_safety import REAL_DATA_LATEST_TABLE
 
 _REPORT_URL_RE = re.compile(r"(/reports/[A-Za-z0-9._\-]+\.(?:md|html))", re.IGNORECASE)
 _EMPTY_CODE_VALUES = {"", "0", "0.0", "none", "null", "无", "正常", "nan"}
-_SPARKLINE_BLOCKS = "▁▂▃▄▅▆▇█"
 _STATUS_REPORT_HINTS = ("运行状态", "状态报告", "当前状态", "运行情况", "运行报告", "巡检", "当前运行")
 _DIAGNOSIS_REPORT_HINTS = ("故障诊断", "故障原因", "根因", "维修", "维修方案", "怎么处理", "处置建议")
 _KNOWLEDGE_ACTION_LABELS = (
@@ -259,39 +247,6 @@ def _build_data_quality(rows: list[dict[str, object]], *, report_time: str | Non
     }
 
 
-def _data_quality_markdown(data_quality: dict[str, object]) -> str:
-    return _markdown_table(
-        ["项目", "结果", "说明"],
-        [
-            [
-                "样本窗口",
-                f"{data_quality.get('oldest_sample_time', '-')} 至 {data_quality.get('latest_sample_time', '-')}",
-                "基于运行数据 create_time 排序后的采样范围",
-            ],
-            ["样本量", f"{data_quality.get('sample_count', 0)} 条", "用于本次统计、趋势和异常持续性判断"],
-            [
-                "采样间隔",
-                (
-                    f"平均 {_format_duration(data_quality.get('average_sample_interval_seconds'))}，"
-                    f"最大 {_format_duration(data_quality.get('max_sample_gap_seconds'))}"
-                ),
-                "用于识别采样缺口和趋势连续性",
-            ],
-            [
-                "数据延迟",
-                _format_duration(data_quality.get("freshness_seconds")),
-                str(data_quality.get("currentness") or "缺少报告时间，未评估实时性"),
-            ],
-            [
-                "指标完整率",
-                str(data_quality.get("metric_availability") or "未评估"),
-                f"缺失 {data_quality.get('missing_metric_value_count', 0)}/{data_quality.get('metric_value_count', 0)} 个趋势指标值",
-            ],
-            ["当前性判定", str(data_quality.get("freshness_label") or "未知"), str(data_quality.get("currentness") or "-")],
-        ],
-    )
-
-
 def _parse_sql_rows(raw_output: str) -> list[dict[str, object]]:
     return parse_sql_rows(raw_output)
 
@@ -312,55 +267,6 @@ def _unique_codes(rows: list[dict[str, object]], key: str) -> list[str]:
         if code and code not in values:
             values.append(code)
     return values
-
-
-def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
-    if not rows:
-        return "暂无可展示数据。"
-    def table_cell(value: object) -> str:
-        return _format_value(value).replace("\r\n", " ").replace("\n", " ").replace("|", r"\|")
-
-    header_line = "| " + " | ".join(table_cell(header) for header in headers) + " |"
-    sep_line = "| " + " | ".join("---" for _ in headers) + " |"
-    row_lines = ["| " + " | ".join(table_cell(cell) for cell in row) + " |" for row in rows]
-    return "\n".join([header_line, sep_line, *row_lines])
-
-
-def _sparkline(values: list[float], *, limit: int = 24) -> str:
-    if not values:
-        return "-"
-    sampled = values[-limit:]
-    low = min(sampled)
-    high = max(sampled)
-    if high == low:
-        return _SPARKLINE_BLOCKS[len(_SPARKLINE_BLOCKS) // 2] * len(sampled)
-    chars = []
-    for value in sampled:
-        index = round((value - low) / (high - low) * (len(_SPARKLINE_BLOCKS) - 1))
-        chars.append(_SPARKLINE_BLOCKS[index])
-    return "".join(chars)
-
-
-def _metric_trend_rows(rows: list[dict[str, object]]) -> list[list[str]]:
-    trend_rows: list[list[str]] = []
-    chronological_rows = list(reversed(rows))
-    for key, label in _TREND_METRICS:
-        values = [value for row in chronological_rows if (value := _to_float(row.get(key))) is not None]
-        if not values:
-            continue
-        latest = values[-1]
-        average = sum(values) / len(values)
-        trend_rows.append(
-            [
-                label,
-                _format_float(latest),
-                _format_float(min(values)),
-                _format_float(max(values)),
-                _format_float(average),
-                _sparkline(values),
-            ]
-        )
-    return trend_rows
 
 
 def _count_rows(rows: list[dict[str, object]], key: str, *, normalize_code: bool = False) -> list[list[str]]:
@@ -384,10 +290,6 @@ def _count_abnormal_codes(rows: list[dict[str, object]]) -> list[dict[str, objec
         {"name": value, "value": count}
         for value, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     ]
-
-
-def _count_abnormal_code_rows(rows: list[dict[str, object]]) -> list[list[str]]:
-    return [[str(item["name"]), str(item["value"])] for item in _count_abnormal_codes(rows)]
 
 
 def _format_percent(numerator: int, denominator: int) -> str:
@@ -569,186 +471,6 @@ def _build_status_summary(rows: list[dict[str, object]], data_quality: dict[str,
     }
 
 
-def _executive_summary_markdown(
-    status_summary: dict[str, object],
-    conclusion: str,
-    data_quality: dict[str, object] | None,
-) -> str:
-    rows = [
-        ["状态等级", str(status_summary.get("status_level") or "未知")],
-        ["当前事件", str(status_summary.get("current_event") or "无")],
-        ["关键现象", str(status_summary.get("key_phenomenon") or "-")],
-        ["处置优先级", str(status_summary.get("priority") or "未知")],
-        ["下一步动作", str(status_summary.get("next_action") or "-")],
-    ]
-    freshness_note = ""
-    if data_quality:
-        freshness_label = str(data_quality.get("freshness_label") or "")
-        if freshness_label and freshness_label != "实时性良好":
-            freshness_note = (
-                "\n\n"
-                f"数据时效提示：最新样本距报告时间约 {_format_duration(data_quality.get('freshness_seconds'))}，"
-                f"{data_quality.get('currentness')}。"
-            )
-    source_line = (
-        f"数据来源：{status_summary.get('source_table') or REAL_DATA_LATEST_TABLE}；"
-        f"样本窗口：{status_summary.get('sample_window') or '-'}；"
-        f"设备映射：{status_summary.get('device_mapping') or status_summary.get('device') or '未识别'}。"
-    )
-    sample_count = data_quality.get("sample_count") if data_quality else None
-    source_intro = (
-        f"已从 {status_summary.get('source_table') or REAL_DATA_LATEST_TABLE} 获取 {sample_count} 条 DCMA 运行数据。\n\n"
-        if sample_count is not None
-        else ""
-    )
-    return (
-        f"{_markdown_table(['项目', '结果'], rows)}\n\n"
-        f"一句话结论：{conclusion or status_summary.get('initial_assessment') or '-'}\n\n"
-        f"{source_intro}{source_line}{freshness_note}"
-    )
-
-
-def _judgement_from_high_threshold(value: float | None, warning: float, critical: float, unit: str = "") -> str:
-    if value is None:
-        return "缺少数据，无法判定"
-    value_text = f"{_format_float(value)}{unit}"
-    if value >= critical:
-        return f"{value_text}，达到高风险阈值"
-    if value >= warning:
-        return f"{value_text}，进入关注阈值"
-    return f"{value_text}，未超过关注阈值"
-
-
-def _dc_voltage_judgement(value: float | None) -> str:
-    if value is None:
-        return "缺少数据，无法判定"
-    value_text = f"{_format_float(value)} V"
-    if value < _DC_VOLTAGE_LOWER or value > _DC_VOLTAGE_UPPER:
-        return f"{value_text}，超出默认参考范围"
-    return f"{value_text}，处于默认参考范围"
-
-
-def _build_engineering_metric_rows(rows: list[dict[str, object]]) -> list[list[str]]:
-    if not rows:
-        return []
-    latest = rows[0]
-    speed_setpoint = _to_float(latest.get("speed_setpoint"))
-    speed_actual = _to_float(latest.get("speed_actual"))
-    speed_error = _speed_deviation_percent(latest)
-    max_load = _metric_max(rows, "inverter_load_rate", "motor_load_rate")
-    motor_temp = _to_float(latest.get("motor_temp"))
-    inverter_temp = _to_float(latest.get("inverter_temp"))
-    dc_voltage = _to_float(latest.get("dc_voltage"))
-    current_actual = _to_float(latest.get("current_actual"))
-    actual_power = _to_float(latest.get("actual_power"))
-    speed_current = (
-        f"给定 {_format_float(speed_setpoint)} rpm，实际 {_format_float(speed_actual)} rpm，偏差 "
-        f"{_format_float(speed_error)}%"
-        if speed_error is not None
-        else f"给定 {_format_float(speed_setpoint)} rpm，实际 {_format_float(speed_actual)} rpm"
-    )
-    return [
-        [
-            "速度跟随偏差",
-            speed_current,
-            "|给定-实际| / max(|给定|, 1)",
-            f"关注 ≥ {_format_float(_SPEED_ERROR_WARNING_PERCENT)}%，高风险 ≥ {_format_float(_SPEED_ERROR_CRITICAL_PERCENT)}%",
-            _judgement_from_high_threshold(speed_error, _SPEED_ERROR_WARNING_PERCENT, _SPEED_ERROR_CRITICAL_PERCENT, "%"),
-        ],
-        [
-            "母线电压",
-            f"{_format_float(dc_voltage)} V",
-            "最新 dc_voltage",
-            f"默认参考 {_format_float(_DC_VOLTAGE_LOWER)}-{_format_float(_DC_VOLTAGE_UPPER)} V，可按现场标定调整",
-            _dc_voltage_judgement(dc_voltage),
-        ],
-        [
-            "电机温度",
-            f"{_format_float(motor_temp)} ℃",
-            "最新 motor_temp",
-            f"关注 ≥ {_format_float(_MOTOR_TEMP_WARNING)} ℃，高风险 ≥ {_format_float(_MOTOR_TEMP_CRITICAL)} ℃",
-            _judgement_from_high_threshold(motor_temp, _MOTOR_TEMP_WARNING, _MOTOR_TEMP_CRITICAL, " ℃"),
-        ],
-        [
-            "变频器温度",
-            f"{_format_float(inverter_temp)} ℃",
-            "最新 inverter_temp",
-            f"关注 ≥ {_format_float(_INVERTER_TEMP_WARNING)} ℃，高风险 ≥ {_format_float(_INVERTER_TEMP_CRITICAL)} ℃",
-            _judgement_from_high_threshold(inverter_temp, _INVERTER_TEMP_WARNING, _INVERTER_TEMP_CRITICAL, " ℃"),
-        ],
-        [
-            "负载率",
-            f"样本最高 {_format_float(max_load)}%",
-            "max(inverter_load_rate, motor_load_rate)",
-            f"关注 ≥ {_format_float(_LOAD_WARNING)}%，高风险 ≥ {_format_float(_LOAD_CRITICAL)}%",
-            _judgement_from_high_threshold(max_load, _LOAD_WARNING, _LOAD_CRITICAL, "%"),
-        ],
-        [
-            "电流/功率",
-            f"电流 {_format_float(current_actual)} A，功率 {_format_float(actual_power)} kW",
-            "最新 current_actual / actual_power",
-            "当前系统未配置该指标工程阈值",
-            "仅展示当前值和趋势，不作异常判定",
-        ],
-    ]
-
-
-def _engineering_metric_markdown(rows: list[dict[str, object]]) -> str:
-    return _markdown_table(
-        ["指标", "当前值", "计算/取值方式", "阈值依据", "判定"],
-        _build_engineering_metric_rows(rows),
-    )
-
-
-def _parse_word_value(value: object) -> int | None:
-    try:
-        return int(float(str(value).strip()))
-    except (TypeError, ValueError):
-        return None
-
-
-def _format_word_binary(value: object) -> str:
-    parsed = _parse_word_value(value)
-    if parsed is None:
-        return "无法解析"
-    bits = f"{parsed & 0xFFFF:016b}"
-    return " ".join(bits[index : index + 4] for index in range(0, 16, 4))
-
-
-def _word_bit_summary(value: object, definitions: tuple[tuple[int, str], ...]) -> str:
-    parsed = _parse_word_value(value)
-    if parsed is None:
-        return "原始值不可解析，暂无法做 bit 级解释"
-    enabled = [label for bit, label in definitions if parsed & (1 << bit)]
-    disabled = [label for bit, label in definitions if not parsed & (1 << bit)]
-    enabled_text = "、".join(enabled[:8]) if enabled else "无已知位被置位"
-    disabled_text = "、".join(disabled[:4]) if disabled else "无"
-    return f"已置位：{enabled_text}；未置位参考：{disabled_text}"
-
-
-def _word_parse_markdown(latest: dict[str, object]) -> str:
-    rows = [
-        [
-            "控制字 control_word",
-            _format_value(latest.get("control_word")),
-            _format_word_binary(latest.get("control_word")),
-            _word_bit_summary(latest.get("control_word"), _CONTROL_WORD_BITS),
-        ],
-        [
-            "状态字 status_word",
-            _format_value(latest.get("status_word")),
-            _format_word_binary(latest.get("status_word")),
-            _word_bit_summary(latest.get("status_word"), _STATUS_WORD_BITS),
-        ],
-    ]
-    table = _markdown_table(["对象", "原始值", "16 位二进制", "通用位解析"], rows)
-    return (
-        f"{table}\n\n"
-        "> 说明：控制字/状态字解析采用通用 Siemens/SINAMICS STW1/ZSW1 位定义作为参考，"
-        "现场项目如有自定义报文或版本差异，应以设备参数手册和 PLC 映射表为准。"
-    )
-
-
 def _latest_code_streak(rows: list[dict[str, object]], code: str) -> int:
     target = code.strip()
     streak = 0
@@ -776,107 +498,6 @@ def _event_timeline_items(rows: list[dict[str, object]]) -> list[dict[str, objec
         }
         for item in counts
     ]
-
-
-def _event_timeline_markdown(rows: list[dict[str, object]]) -> str:
-    timeline_items = _event_timeline_items(rows)
-    if not timeline_items:
-        return "样本窗口内未见有效事件码或告警码。"
-    table_rows = [
-        [
-            str(item["code"]),
-            f"{item['count']}/{item['sample_count']}",
-            str(item["ratio"]),
-            f"{item['latest_streak']} 条",
-            str(item["continuity"]),
-        ]
-        for item in timeline_items
-    ]
-    return _markdown_table(["事件码/告警码", "出现次数", "占比", "最新连续", "持续性"], table_rows)
-
-
-def _layered_judgement_markdown(
-    rows: list[dict[str, object]],
-    fault_codes: list[str],
-    alarm_codes: list[str],
-    *,
-    knowledge_artifact: KnowledgeStepArtifact,
-) -> str:
-    if not rows:
-        return "#### 数据事实\n- 【数据事实】SQL 未返回可解析运行数据。\n\n#### Agent 推断\n- 【Agent 推断】当前无法形成可靠运行状态判断。"
-    latest = rows[0]
-    abnormal_count = sum(1 for row in rows if _is_abnormal_row(row))
-    codes = _effective_codes(fault_codes, alarm_codes)
-    knowledge_summaries = _knowledge_action_summaries(knowledge_artifact, codes, per_code_limit=3)
-    alarm_code_values = _unique_codes(rows, "alarm_code")
-    speed_error = _speed_deviation_percent(latest)
-    max_load = _metric_max(rows, "inverter_load_rate", "motor_load_rate")
-    max_motor_temp = _metric_max(rows, "motor_temp")
-    max_inverter_temp = _metric_max(rows, "inverter_temp", "inverter_radiator_temp")
-
-    facts = [
-        f"- 【数据事实】样本窗口包含 {len(rows)} 条 {REAL_DATA_LATEST_TABLE} 记录，{abnormal_count} 条含有效事件码/告警码。",
-        f"- 【数据事实】最新记录时间 {_format_value(latest.get('create_time'))}，设备 {_format_value(latest.get('device_name'))}，状态 {_format_value(latest.get('status'))}。",
-    ]
-    if codes:
-        facts.append(f"- 【数据事实】当前事件码/告警码：{', '.join(codes)}。")
-    if not alarm_code_values:
-        facts.append("- 【数据事实】alarm_code 字段未见有效告警值。")
-    facts.append(f"- 【数据事实】关键运行现象：{_key_phenomenon(rows)}。")
-    if knowledge_summaries:
-        knowledge_lines = [f"- 【知识库解释】{item}" for item in knowledge_summaries]
-    elif codes:
-        knowledge_lines = ["- 【知识库解释】知识库未命中足够明确的事件码释义，不能补充厂家手册结论。"]
-    else:
-        knowledge_lines = ["- 【知识库解释】当前样本未检出有效事件码，未触发故障码释义依赖。"]
-
-    if any(_is_alarm_event_code(code) for code in codes) and not any(_is_fault_code(code) for code in codes):
-        knowledge_lines.append("- 【知识库解释】A 类代码按事件/告警/参数配置线索处理，不能直接等同于机械故障。")
-
-    timeline_items = _event_timeline_items(rows)
-    if timeline_items:
-        event_summary = "；".join(
-            f"{item['code']} 出现 {item['count']}/{item['sample_count']}，最新连续 {item['latest_streak']} 条，{item['continuity']}"
-            for item in timeline_items[:3]
-        )
-    else:
-        event_summary = "样本窗口内未见有效事件码或告警码"
-    rule_lines = [
-        f"- 【规则判断】事件持续性：{event_summary}。",
-    ]
-    if speed_error is not None:
-        rule_lines.append(
-            f"- 【规则判断】速度偏差率 {speed_error:g}%，"
-            f"关注阈值 {_SPEED_ERROR_WARNING_PERCENT:g}%，高风险阈值 {_SPEED_ERROR_CRITICAL_PERCENT:g}%。"
-        )
-    if max_load is not None:
-        rule_lines.append(
-            f"- 【规则判断】样本最高负载率 {_format_float(max_load)}%，"
-            f"关注阈值 {_LOAD_WARNING:g}%，高风险阈值 {_LOAD_CRITICAL:g}%。"
-        )
-    if max_motor_temp is not None or max_inverter_temp is not None:
-        rule_lines.append(
-            "- 【规则判断】"
-            f"电机最高温度 {_format_float(max_motor_temp)}℃，"
-            f"变频器最高温度 {_format_float(max_inverter_temp)}℃。"
-        )
-    inference = [
-        f"- 【Agent 推断】{_initial_assessment(rows, fault_codes, alarm_codes)}",
-        "- 【Agent 推断】当前不能仅凭事件码证明速度偏差、负载变化或温度变化由该事件直接导致，仍需结合控制模式、状态字、控制字、限幅状态和现场工况确认。",
-        f"- 【Agent 推断】建议下一步：{_next_action(rows, fault_codes, alarm_codes)}",
-    ]
-    return "\n\n".join(
-        [
-            "#### 数据事实",
-            "\n".join(facts),
-            "#### 知识库解释",
-            "\n".join(knowledge_lines),
-            "#### 规则判断",
-            "\n".join(rule_lines),
-            "#### Agent 推断",
-            "\n".join(inference),
-        ]
-    )
 
 
 def _load_signal(rows: list[dict[str, object]]) -> str:
@@ -1396,16 +1017,13 @@ def _build_sql_report_summary(
     sql_artifact: SqlStepArtifact,
     *,
     report_time: str | None = None,
-    knowledge_artifact: KnowledgeStepArtifact | None = None,
+    knowledge_artifact: KnowledgeStepArtifact | None = None,  # noqa: ARG001 - kept for caller compatibility
 ) -> SqlReportSummary:
     rows = _parse_sql_rows(sql_artifact.raw_output or sql_artifact.result_preview)
     if not rows:
         return SqlReportSummary(
             rows=[],
             summary=f"SQL 查询未返回可解析的 {REAL_DATA_LATEST_TABLE} 行数据。",
-            details_markdown=f"【SQL 结果摘要】\n{sql_artifact.result_preview or sql_artifact.raw_output or '无'}",
-            fault_inference="当前报告无法基于数据库行数据确认运行状态，请先核对 SQL 查询条件和数据库连接。",
-            maintenance=f"建议先确认 {REAL_DATA_LATEST_TABLE} 最近数据是否可查询，再补充设备范围或时间范围后重新生成报告。",
         )
 
     latest = rows[0]
@@ -1413,154 +1031,22 @@ def _build_sql_report_summary(
     fault_codes = _unique_codes(rows, "fault_code")
     alarm_codes = _unique_codes(rows, "alarm_code")
     latest_time = _format_value(latest.get("create_time"))
-    status = _format_value(latest.get("status"))
     code_label = _code_label(fault_codes, alarm_codes)
     effective_codes = _effective_codes(fault_codes, alarm_codes)
     abnormal_text = f"发现{code_label}：{', '.join(effective_codes)}" if effective_codes else "未发现有效事件码/故障码"
-    abnormal_count = sum(1 for row in rows if _is_abnormal_row(row))
-    latest_streak = _latest_abnormal_streak(rows)
-    oldest_time = _row_time(rows[-1])
     health_level = _derive_health_level(rows, fault_codes, alarm_codes)
     data_quality = _build_data_quality(rows, report_time=report_time)
-    status_summary = _build_status_summary(rows, data_quality)
-
-    latest_rows = rows[:5]
-    state_table = _markdown_table(
-        ["时间", "设备", "状态", "故障/事件码", "告警码", "母线电压(V)", "实际转速", "实际电流", "电机温度", "变频器温度"],
-        [
-            [
-                _format_value(row.get("create_time")),
-                _format_value(row.get("device_name")),
-                _format_value(row.get("status")),
-                _normalize_code(row.get("fault_code")) or "无",
-                _normalize_code(row.get("alarm_code")) or "无",
-                _format_float(row.get("dc_voltage")),
-                _format_float(row.get("speed_actual")),
-                _format_float(row.get("current_actual")),
-                _format_float(row.get("motor_temp")),
-                _format_float(row.get("inverter_temp")),
-            ]
-            for row in latest_rows
-        ],
-    )
-    metric_table = _markdown_table(
-        ["指标", "最新值"],
-        [
-            ["给定转速", _format_float(latest.get("speed_setpoint"))],
-            ["实际转速", _format_float(latest.get("speed_actual"))],
-            ["给定转矩", _format_float(latest.get("torque_setpoint"))],
-            ["实际转矩", _format_float(latest.get("torque_actual"))],
-            ["实际功率", _format_float(latest.get("actual_power"))],
-            ["励磁电流", _format_float(latest.get("field_current"))],
-            ["转矩电流", _format_float(latest.get("torque_current"))],
-            ["变频器负载率", _format_float(latest.get("inverter_load_rate"))],
-            ["电机负载率", _format_float(latest.get("motor_load_rate"))],
-            ["反馈功率", _format_float(latest.get("feedback_power"))],
-        ],
-    )
-    abnormal_rows = [
-        [
-            _format_value(row.get("create_time")),
-            _format_value(row.get("device_name")),
-            _format_value(row.get("status")),
-            _normalize_code(row.get("fault_code")) or "无",
-            _normalize_code(row.get("alarm_code")) or "无",
-        ]
-        for row in rows
-        if _normalize_code(row.get("fault_code")) or _normalize_code(row.get("alarm_code"))
-    ][:10]
-    abnormal_table = _markdown_table(["时间", "设备", "状态", "故障/事件码", "告警码"], abnormal_rows)
-    trend_table = _markdown_table(
-        ["指标", "最新", "最小", "最大", "平均", "趋势"],
-        _metric_trend_rows(rows),
-    )
-    status_table = _markdown_table(["状态字", "记录数"], _count_rows(rows, "status"))
-    fault_count_table = _markdown_table(["异常码/告警码", "记录数"], _count_abnormal_code_rows(rows))
-    health_table = _markdown_table(
-        ["维度", "结果"],
-        [
-            ["数据来源", f"{REAL_DATA_LATEST_TABLE}（最新运行数据分表）"],
-            ["健康判定", health_level],
-            ["采样窗口", f"{oldest_time} 至 {latest_time}"],
-            ["异常占比", f"{abnormal_count}/{len(rows)}（{_format_percent(abnormal_count, len(rows))}）"],
-            ["最新连续异常", f"{latest_streak} 条"],
-            ["最新控制字 / 状态字", f"{_format_value(latest.get('control_word'))} / {_format_value(latest.get('status_word'))}"],
-        ],
-    )
-    signal_table = _markdown_table(
-        ["观察项", "数据表现", "诊断提示"],
-        _build_signal_rows(rows, fault_codes, alarm_codes),
-    )
-    layered_knowledge_artifact = knowledge_artifact or KnowledgeStepArtifact(success=False, query="", raw_output="")
-    overview_table = _markdown_table(
-        ["维度", "结果"],
-        [
-            ["数据样本", f"{len(rows)} 条"],
-            ["覆盖设备", ", ".join(devices) or "未识别"],
-            ["最新记录时间", latest_time],
-            ["最新状态字", status],
-            ["故障/事件码", ", ".join(fault_codes) if fault_codes else "无"],
-            ["告警码", ", ".join(alarm_codes) if alarm_codes else "无"],
-        ],
-    )
-
-    health_overview_details = f"{health_table}\n\n{overview_table}\n\n{signal_table}"
-    latest_sample_details = f"{state_table}\n\n{metric_table}"
-    distribution_details = f"{status_table}\n\n{fault_count_table}\n\n{abnormal_table}"
-    details = (
-        f"### 诊断证据链\n{_layered_judgement_markdown(rows, fault_codes, alarm_codes, knowledge_artifact=layered_knowledge_artifact)}\n\n"
-        f"### 事件码时间线\n{_event_timeline_markdown(rows)}\n\n"
-        f"### 关键指标工程判定\n{_engineering_metric_markdown(rows)}\n\n"
-        f"{details_block('展开查看：数据质量与实时性', _data_quality_markdown(data_quality))}\n\n"
-        f"{details_block('展开查看：运行健康与采样概览', health_overview_details)}\n\n"
-        f"{details_block('展开查看：控制字 / 状态字解析', _word_parse_markdown(latest))}\n\n"
-        f"{details_block('展开查看：完整趋势统计', trend_table)}\n\n"
-        f"{details_block('展开查看：最新采样明细', latest_sample_details)}\n\n"
-        f"{details_block('展开查看：状态与异常分布', distribution_details)}"
-    )
     summary = (
         f"已从 {REAL_DATA_LATEST_TABLE} 获取 {len(rows)} 条 DCMA 运行数据，最新设备 {devices[0] if devices else '未知'} "
-        f"在 {latest_time} 的状态为 {status}，综合判定：{health_level}；{abnormal_text}。"
-    )
-    inference_items = [
-        f"综合判定为“{health_level}”。",
-        f"最近 {len(rows)} 条样本中 {abnormal_count} 条包含有效事件码/告警码，最新连续异常 {latest_streak} 条。",
-        f"最新状态字为 {status}，控制字/状态字为 {_format_value(latest.get('control_word'))}/{_format_value(latest.get('status_word'))}。",
-    ]
-    if fault_codes or alarm_codes:
-        inference_items.append(f"数据库最近记录中{abnormal_text}，需结合厂家手册确认代码含义、反应和复位条件。")
-    else:
-        inference_items.append("数据库最近记录未显示有效事件码/告警码，当前更偏向运行状态巡检结论。")
-    inference_items.extend(row[1] for row in _build_signal_rows(rows, fault_codes, alarm_codes)[1:4])
-    fault_inference = "\n".join(f"- {item}" for item in inference_items)
-    maintenance = "\n".join(
-        f"- {item}"
-        for item in [
-            f"将 {REAL_DATA_LATEST_TABLE} 的最新写入时间、写入频率和事件码占比纳入日常健康检查。",
-            "为高频事件码/故障码建立手册释义、触发条件、复位条件和现场检查项的结构化知识条目。",
-            "对速度偏差、负载率、温度、母线电压设置分级阈值，形成“关注/预警/停机检查”的处置规则。",
-            "保留复位前后各 1-3 分钟运行快照，便于复盘异常是否由工艺负载、供电或控制命令触发。",
-        ]
+        f"在 {latest_time} 的状态为 {_format_value(latest.get('status'))}，综合判定：{health_level}；{abnormal_text}。"
     )
     return SqlReportSummary(
         rows=rows,
         summary=summary,
-        details_markdown=details,
-        fault_inference=fault_inference,
-        maintenance=maintenance,
         chart_payload=_build_chart_payload(rows, data_quality=data_quality),
         health_level=health_level,
         data_quality=data_quality,
     )
-
-
-def _knowledge_report_section(knowledge_artifact: KnowledgeStepArtifact) -> str:
-    raw_output = (knowledge_artifact.raw_output or "").strip()
-    if not raw_output:
-        return "知识库未返回事件码/故障码相关内容。"
-    if not knowledge_artifact.success:
-        return f"知识库检索结果：{raw_output}"
-    return raw_output[:2000].strip()
 
 
 def build_structured_analysis_artifact(
@@ -1666,6 +1152,7 @@ def build_workorder_suggestion(
         analysis_artifact=analysis_artifact,
     )
 
+
 def extract_report_url(save_result: str) -> str | None:
     matched = _REPORT_URL_RE.search(save_result or "")
     return matched.group(1) if matched else None
@@ -1694,105 +1181,25 @@ def build_report_payload(
         report_time=current_time,
         knowledge_artifact=knowledge_artifact,
     )
-    executive_summary = analysis_artifact.conclusion
-    generated_recommendations: list[str] = []
-    preventive_maintenance = sql_report.maintenance
-    if sql_report.rows:
-        status_summary = _build_status_summary(sql_report.rows, sql_report.data_quality)
-        fault_codes = _unique_codes(sql_report.rows, "fault_code")
-        alarm_codes = _unique_codes(sql_report.rows, "alarm_code")
-        generated_recommendations = _build_recommendation_items(
-            sql_report.rows,
-            fault_codes,
-            alarm_codes,
-            knowledge_artifact=knowledge_artifact,
-        )
-        executive_summary = _executive_summary_markdown(
-            status_summary,
-            analysis_artifact.conclusion,
-            sql_report.data_quality,
-        )
-        preventive_maintenance = (
-            f"{sql_report.maintenance}\n\n"
-            f"### 报告能力边界\n{build_capability_boundary_markdown(REAL_DATA_LATEST_TABLE)}"
-        )
-    if "报告能力边界" not in preventive_maintenance and "边界" not in preventive_maintenance:
-        preventive_maintenance = (
-            f"{preventive_maintenance}\n\n"
-            f"### 风险与边界说明\n{build_capability_boundary_markdown(REAL_DATA_LATEST_TABLE)}"
-        )
-    base_recommendations = build_sop_recommendations_markdown(
-        generated_recommendations,
-        analysis_artifact.recommendations,
-    )
-    workorder_section = ""
-    if workorder_suggestion and workorder_suggestion.need_workorder:
-        workorder_section = build_workorder_todo_markdown(
-            title=workorder_suggestion.title,
-            workorder_type=workorder_suggestion.workorder_type,
-            risk_level=workorder_suggestion.risk_level,
-            priority=workorder_suggestion.priority,
-            priority_label=workorder_suggestion.priority_label,
-            assignee_role=workorder_suggestion.assignee_role,
-            suggested_completion_window=workorder_suggestion.suggested_completion_window,
-            key_evidence=workorder_suggestion.key_evidence,
-            processing_steps=workorder_suggestion.processing_steps,
-            acceptance_criteria=workorder_suggestion.acceptance_criteria,
-        )
-    workorder_suffix = f"\n\n{workorder_section}" if workorder_section else ""
-    repair_recommendations = f"{base_recommendations}{workorder_suffix}"
     sql_statement_text = ";\n".join(sql_artifact.sql_used) or "无"
-    operation_report = None
-    if sql_report.rows:
-        operation_report = build_operation_diagnosis_report(
-            request=request,
-            title=title,
-            report_time=current_time,
-            diagnosis_type=diagnosis_type,
-            rows=sql_report.rows,
-            data_quality=sql_report.data_quality or {},
-            status_summary=_build_status_summary(sql_report.rows, sql_report.data_quality),
-            sql_summary=sql_artifact.summary or "无",
-            sql_statement=sql_statement_text,
-            knowledge_artifact=knowledge_artifact,
-            analysis_artifact=analysis_artifact,
-            workorder_suggestion=workorder_suggestion,
-        )
+    operation_report = build_operation_diagnosis_report(
+        request=request,
+        title=title,
+        report_time=current_time,
+        diagnosis_type=diagnosis_type,
+        rows=sql_report.rows,
+        data_quality=sql_report.data_quality or {},
+        status_summary=_build_status_summary(sql_report.rows, sql_report.data_quality),
+        sql_summary=sql_artifact.summary or "无",
+        sql_statement=sql_statement_text,
+        knowledge_artifact=knowledge_artifact,
+        analysis_artifact=analysis_artifact,
+        workorder_suggestion=workorder_suggestion,
+    )
 
     return {
         "title": title,
-        "report_time": current_time,
-        "diagnosis_object": request.equipment_hint or "DCMA 系统",
-        "diagnosis_type": diagnosis_type,
-        "executive_summary": executive_summary,
-        "diagnosis_overview": (
-            f"本报告由限制型单 Agent 生成，当前运行状态定义为数据库 {REAL_DATA_LATEST_TABLE} 的最新采样窗口状态，"
-            f"已按受控 SQL 查询最近运行数据，并结合可用知识检索结果、指标趋势和规则判定形成结论。"
-            "若 DCMA 实际覆盖多个设备，本报告仅代表本次数据窗口覆盖的设备对象。"
-        ),
-        "diagnosis_details": (
-            f"{sql_report.details_markdown}\n\n"
-            f"{details_block('展开查看：知识库原文与长片段', _knowledge_report_section(knowledge_artifact))}"
-        ),
-        "fault_inference": f"{analysis_artifact.conclusion}\n\n{sql_report.fault_inference}",
-        "repair_recommendations": repair_recommendations,
-        "preventive_maintenance": preventive_maintenance,
-        "diagnosis_basis": (
-            "### SQL 摘要\n"
-            f"- {sql_artifact.summary or '无'}\n"
-            f"- SQL 返回：{len(sql_report.rows)} 条可解析 {REAL_DATA_LATEST_TABLE} 行数据\n\n"
-            "### SQL 语句\n"
-            f"```sql\n{sql_statement_text}\n```\n\n"
-            "### 知识与分析依据\n"
-            f"- 知识查询：{knowledge_artifact.query or '无'}\n"
-            f"- 分析依据：{'; '.join(analysis_artifact.basis) or '无'}"
-        ),
         "report_filename": report_filename,
         "chart_payload": sql_report.chart_payload,
-        "operation_report_payload": (
-            json.dumps(operation_report.model_dump(mode="json", exclude_none=True), ensure_ascii=False)
-            if operation_report is not None
-            else None
-        ),
-        "workorder_suggestion": workorder_suggestion.model_dump(exclude_none=True) if workorder_suggestion else None,
+        "operation_report_payload": json.dumps(operation_report.model_dump(mode="json", exclude_none=True), ensure_ascii=False),
     }

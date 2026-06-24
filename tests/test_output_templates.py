@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fault_diagnosis.diagnosis.contracts import (
     AnalysisStepArtifact,
     Claim,
@@ -193,30 +195,61 @@ def test_report_generation_template_returns_summary_and_link_only() -> None:
     assert "证据不足提示" in rendered.content
 
 
-def test_report_html_uses_fixed_report_chapters() -> None:
+def test_report_html_uses_structured_report_chapters() -> None:
+    operation_report_payload = json.dumps(
+        {
+            "title": "DCMA 运行诊断报告",
+            "report_time": "2026-06-23 10:00:00",
+            "asset": "J1号机",
+            "report_type": "运行诊断报告",
+            "data_window": "2026-06-10 12:10:00 ~ 12:13:00",
+            "sample_count": 3,
+            "data_age_text": "13 天",
+            "data_freshness_label": "已滞后",
+            "data_freshness_note": "最新样本距报告时间约 13 天，数据已滞后，仅代表采样窗口。",
+            "data_currentness_level": "stale",
+            "data_currentness_label": "STALE / 不代表实时状态",
+            "asset_risk_level": "warning",
+            "asset_risk_label": "WARNING / 采样窗口异常",
+            "action_priority": "P1",
+            "action_priority_label": "立即确认实时数据与现场状态",
+            "confidence_level": "中",
+            "severity": "warning",
+            "severity_label": "WARNING / 采样窗口异常",
+            "confidence": "中",
+            "event_code": "A07089",
+            "one_sentence_conclusion": "采样窗口内，J1号机持续出现 A07089 事件。",
+            "top_actions": ["重新获取实时数据或确认采样链路"],
+            "kpi_cards": [],
+            "findings": [],
+            "cause_candidates": [],
+            "action_plan": [],
+            "workorder_suggestion": {"decision": "暂不创建维修工单", "trigger_conditions": []},
+            "evidence_summary": [],
+            "limitations": ["本报告仅用于辅助诊断。"],
+            "appendix": {
+                "sql_summary": "测试 SQL",
+                "sql_query": "SELECT 1",
+                "trend_statistics": [],
+                "raw_metric_tables": [],
+                "knowledge_sources": [],
+                "generation_metadata": {"report_time": "2026-06-23 10:00:00"},
+            },
+        },
+        ensure_ascii=False,
+    )
     html = _build_report_html(
-        title="测试报告",
-        report_time="2026-06-23 10:00:00",
-        diagnosis_object="J1号机",
-        diagnosis_type="故障诊断",
-        executive_summary="摘要",
-        diagnosis_overview="范围",
-        diagnosis_details="状态概览",
-        fault_inference="异常分析",
-        repair_recommendations="### 待处理事项\n- 建议生成工单",
-        preventive_maintenance="风险与边界说明",
-        diagnosis_basis="证据依据",
+        operation_report_payload=operation_report_payload,
     )
 
     for title in (
-        "报告摘要",
-        "诊断对象与数据范围",
-        "运行状态概览",
-        "异常与故障分析",
-        "证据依据",
-        "处置与维护建议",
+        "一页结论",
+        "运行快照",
+        "关键发现",
+        "原因候选",
+        "处置计划",
         "工单建议",
-        "风险与边界说明",
+        "证据与边界",
         "附录",
     ):
         assert title in html

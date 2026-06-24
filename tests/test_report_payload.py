@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from fault_diagnosis.diagnosis.contracts import (
     AnalysisStepArtifact,
     DiagnosisRequest,
@@ -18,6 +20,50 @@ from fault_diagnosis.single_agent.output.renderers import render_final_answer
 from fault_diagnosis.single_agent.sql_safety import REAL_DATA_FALLBACK_COLUMNS, REAL_DATA_LATEST_TABLE
 from fault_diagnosis.tools.kb_tools import query_fault_code_from_local_pdfs
 from fault_diagnosis.tools.report_tools import _build_report_html
+
+
+def _operation_report_payload(**overrides) -> str:
+    payload = {
+        "title": "DCMA 运行诊断报告",
+        "report_time": "2026-06-23 10:00:00",
+        "asset": "J1号机",
+        "report_type": "运行诊断报告",
+        "data_window": "2026-06-10 12:10:00 ~ 2026-06-10 12:13:00",
+        "sample_count": 3,
+        "data_age_text": "13 天",
+        "data_freshness_label": "已滞后",
+        "data_freshness_note": "最新样本距报告时间约 13 天，数据已滞后，仅代表采样窗口。",
+        "data_currentness_level": "stale",
+        "data_currentness_label": "STALE / 不代表实时状态",
+        "asset_risk_level": "warning",
+        "asset_risk_label": "WARNING / 采样窗口异常",
+        "action_priority": "P1",
+        "action_priority_label": "立即确认实时数据与现场状态",
+        "confidence_level": "中",
+        "severity": "warning",
+        "severity_label": "WARNING / 采样窗口异常",
+        "confidence": "中",
+        "event_code": "A07089",
+        "one_sentence_conclusion": "采样窗口内，J1号机持续出现 A07089 事件；不代表当前实时状态。",
+        "top_actions": ["重新获取实时数据或确认采样链路"],
+        "kpi_cards": [],
+        "findings": [],
+        "cause_candidates": [],
+        "action_plan": [],
+        "workorder_suggestion": {"decision": "暂不创建维修工单", "trigger_conditions": []},
+        "evidence_summary": [],
+        "limitations": ["本报告仅用于辅助诊断。"],
+        "appendix": {
+            "sql_summary": "测试 SQL 摘要",
+            "sql_query": "SELECT id, create_time FROM real_data_01 LIMIT 5",
+            "trend_statistics": [],
+            "raw_metric_tables": [],
+            "knowledge_sources": [],
+            "generation_metadata": {"report_time": "2026-06-23 10:00:00"},
+        },
+    }
+    payload.update(overrides)
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def test_report_payload_renders_real_data_rows_as_tables() -> None:
@@ -95,30 +141,11 @@ def test_report_payload_renders_real_data_rows_as_tables() -> None:
     )
 
     assert payload["title"] == "DCMA 运行诊断报告"
-    assert payload["diagnosis_type"] == "运行诊断报告"
-    assert "状态等级" in payload["executive_summary"]
-    assert "设备映射" in payload["executive_summary"]
-    assert f"已从 {REAL_DATA_LATEST_TABLE} 获取 1 条 DCMA 运行数据" in payload["executive_summary"]
-    assert "不能等同于当前实时状态" not in payload["executive_summary"]
-    assert "数据时间戳" not in payload["executive_summary"]
-    assert "real_data_01" in payload["executive_summary"]
-    assert "数据时效提示" in payload["executive_summary"]
-    assert "### 诊断证据链" in payload["diagnosis_details"]
-    assert "#### 数据事实" in payload["diagnosis_details"]
-    assert "#### 知识库解释" in payload["diagnosis_details"]
-    assert "#### 规则判断" in payload["diagnosis_details"]
-    assert "#### Agent 推断" in payload["diagnosis_details"]
-    assert "展开查看：数据质量与实时性" in payload["diagnosis_details"]
-    assert "展开查看：运行健康与采样概览" in payload["diagnosis_details"]
-    assert "### 事件码时间线" in payload["diagnosis_details"]
-    assert "### 关键指标工程判定" in payload["diagnosis_details"]
-    assert "展开查看：控制字 / 状态字解析" in payload["diagnosis_details"]
-    assert "展开查看：完整趋势统计" in payload["diagnosis_details"]
-    assert "展开查看：最新采样明细" in payload["diagnosis_details"]
-    assert "展开查看：状态与异常分布" in payload["diagnosis_details"]
-    assert "| 时间 | 设备 | 状态 | 故障/事件码 | 告警码" in payload["diagnosis_details"]
-    assert "G120电机1" in payload["diagnosis_details"]
-    assert "F1030-0/0/0" in payload["fault_inference"]
+    assert set(payload) == {"title", "report_filename", "chart_payload", "operation_report_payload"}
+    operation_report = json.loads(payload["operation_report_payload"])
+    assert operation_report["report_type"] == "运行诊断报告"
+    assert operation_report["event_code"] == "F1030-0/0/0"
+    assert operation_report["appendix"]["sql_query"].startswith("SELECT")
     chart_payload = json.loads(payload["chart_payload"])
     assert chart_payload["source_table"] == REAL_DATA_LATEST_TABLE
     assert chart_payload["status_summary"]["status_level"] == "故障 / 需处理"
@@ -140,26 +167,25 @@ def test_report_html_embeds_echarts_visualization() -> None:
     chart_payload = json.dumps(
         {
             "timestamps": ["2026-06-10 12:12:59"],
-            "trend_metrics": [{"key": "dc_voltage", "name": "母线电压(V)", "values": [555.2]}],
+            "trend_groups": [
+                {
+                    "key": "speed",
+                    "name": "速度跟随",
+                    "metrics": [{"key": "speed_actual", "name": "实际转速", "unit": "rpm", "values": [442.2]}],
+                    "thresholds": [],
+                }
+            ],
             "status_counts": [{"name": "42", "value": 1}],
             "fault_counts": [{"name": "A07089", "value": 1}],
-            "latest_metrics": [{"name": "实际转速", "value": 442.2}],
+            "latest_metric_groups": [
+                {"key": "speed", "name": "速度跟随", "metrics": [{"name": "实际转速", "value": 442.2, "unit": "rpm"}]}
+            ],
         },
         ensure_ascii=False,
     )
 
     html = _build_report_html(
-        title="DCMA 故障诊断报告",
-        report_time="2026-06-11 20:00:00",
-        diagnosis_object="DCMA 系统",
-        diagnosis_type="故障诊断",
-        executive_summary="摘要",
-        diagnosis_overview="概述",
-        diagnosis_details="详情",
-        fault_inference="推断",
-        repair_recommendations="- 建议",
-        preventive_maintenance="- 维护",
-        diagnosis_basis="依据",
+        operation_report_payload=_operation_report_payload(),
         chart_payload=chart_payload,
     )
 
@@ -169,34 +195,27 @@ def test_report_html_embeds_echarts_visualization() -> None:
     assert "A07089" in html
 
 
-def test_report_html_keeps_metric_formula_and_formats_sql_appendix() -> None:
+def test_report_html_formats_structured_sql_appendix() -> None:
     html = _build_report_html(
-        title="DCMA 故障诊断报告",
-        report_time="2026-06-11 20:00:00",
-        diagnosis_object="DCMA 系统",
-        diagnosis_type="故障诊断",
-        executive_summary="摘要",
-        diagnosis_overview="概述",
-        diagnosis_details=(
-            "### 关键指标工程判定\n"
-            "| 指标 | 计算/取值方式 |\n"
-            "| --- | --- |\n"
-            "| 速度跟随偏差 | \\|给定-实际\\| / max(\\|给定\\|, 1) |"
-        ),
-        fault_inference="推断",
-        repair_recommendations="- 建议",
-        preventive_maintenance="- 维护",
-        diagnosis_basis=(
-            "### SQL 语句\n"
-            "```sql\n"
-            "SELECT id, timestamp FROM real_data_01 ORDER BY create_time DESC LIMIT 50\n"
-            "```"
-        ),
+        operation_report_payload=_operation_report_payload(
+            appendix={
+                "sql_summary": "测试 SQL",
+                "sql_query": "SELECT id, timestamp FROM real_data_01 ORDER BY create_time DESC LIMIT 50",
+                "trend_statistics": [],
+                "raw_metric_tables": [],
+                "knowledge_sources": [],
+                "generation_metadata": {"report_time": "2026-06-23 10:00:00"},
+            }
+        )
     )
 
-    assert "|给定-实际| / max(|给定|, 1)" in html
     assert '<pre class="code-block">' in html
     assert "SELECT id, timestamp FROM real_data_01" in html
+
+
+def test_report_html_rejects_missing_structured_payload() -> None:
+    with pytest.raises(ValueError, match="缺少结构化运行诊断报告 payload"):
+        _build_report_html(operation_report_payload="")
 
 
 def test_report_html_renders_grouped_trends_and_metric_snapshot() -> None:
@@ -258,17 +277,7 @@ def test_report_html_renders_grouped_trends_and_metric_snapshot() -> None:
     )
 
     html = _build_report_html(
-        title="DCMA 故障诊断报告",
-        report_time="2026-06-11 20:00:00",
-        diagnosis_object="DCMA 系统",
-        diagnosis_type="故障诊断",
-        executive_summary="摘要",
-        diagnosis_overview="概述",
-        diagnosis_details="详情",
-        fault_inference="推断",
-        repair_recommendations="- 建议",
-        preventive_maintenance="- 维护",
-        diagnosis_basis="依据",
+        operation_report_payload=_operation_report_payload(),
         chart_payload=chart_payload,
     )
 
@@ -276,7 +285,7 @@ def test_report_html_renders_grouped_trends_and_metric_snapshot() -> None:
     assert "负载率" in html
     assert "dcma-trend-chart-1" in html
     assert "数据质量摘要" in html
-    assert "当前运行状态摘要" in html
+    assert "一页结论" in html
     assert "报告类型" in html
     assert "metric-groups" in html
     assert "823.41 rpm" in html
@@ -381,25 +390,12 @@ def test_status_report_downgrades_a_code_to_warning_event() -> None:
     assert operation_report["action_plan"][0]["acceptance_criteria"]
     assert operation_report["action_plan"][0]["escalation_condition"]
     assert operation_report["workorder_suggestion"]["trigger_conditions"]
-    assert "A07089" in payload["diagnosis_details"]
-    assert "不能仅凭事件码证明速度偏差" in payload["diagnosis_details"]
     assert "speed_error_rate" in {metric["key"] for metric in speed_group["metrics"]}
     assert {"name": "关注", "value": 20.0, "unit": "%"} in speed_group["thresholds"]
 
     html = _build_report_html(
-        title=payload["title"],
-        report_time=payload["report_time"],
-        diagnosis_object=payload["diagnosis_object"],
-        diagnosis_type=payload["diagnosis_type"],
-        executive_summary=payload["executive_summary"],
-        diagnosis_overview=payload["diagnosis_overview"],
-        diagnosis_details=payload["diagnosis_details"],
-        fault_inference=payload["fault_inference"],
-        repair_recommendations=payload["repair_recommendations"],
-        preventive_maintenance=payload["preventive_maintenance"],
-        diagnosis_basis=payload["diagnosis_basis"],
-        chart_payload=payload["chart_payload"],
         operation_report_payload=payload["operation_report_payload"],
+        chart_payload=payload["chart_payload"],
     )
     assert "一页结论" in html
     assert "运行快照" in html
@@ -554,7 +550,7 @@ def test_structured_analysis_uses_rag_fault_code_actions() -> None:
     assert "F01002" in evidence_summary
 
 
-def test_final_answer_uses_task_template_without_legacy_fallback_sections() -> None:
+def test_final_answer_uses_task_template_without_fallback_sections() -> None:
     artifact = AnalysisStepArtifact(
         success=True,
         conclusion="设备存在异常码，需结合数据和 RAG 处理。",

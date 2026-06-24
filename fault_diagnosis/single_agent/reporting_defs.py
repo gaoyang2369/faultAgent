@@ -21,9 +21,6 @@ class TrendMetricDef:
 class SqlReportSummary:
     rows: list[dict[str, object]]
     summary: str
-    details_markdown: str
-    fault_inference: str
-    maintenance: str
     chart_payload: str = ""
     health_level: str = "未知"
     data_quality: dict[str, object] | None = None

@@ -284,22 +284,12 @@ SQL 规划在 `sql_safety.py` 中集中处理：
 `save_report` 接收结构化报告字段：
 
 ```text
-title
-report_time
-diagnosis_object
-diagnosis_type
-executive_summary
-diagnosis_overview
-diagnosis_details
-fault_inference
-repair_recommendations
-preventive_maintenance
-diagnosis_basis
 report_filename
 chart_payload
+operation_report_payload
 ```
 
-阶段代码会用 `build_report_payload()` 组装这些字段。报告工具负责 Markdown 子集渲染、HTML 模板、ECharts 图表数据嵌入、文件名安全处理和写入 `REPORTS_DIR`。
+阶段代码会用 `build_report_payload()` 组装唯一的新报告结构。`operation_report_payload` 是结构化运行诊断报告 JSON；报告工具只渲染该结构，不再保留旧 Markdown 章节模板回退。`chart_payload` 只接受新图表结构（`trend_groups`、`latest_metric_groups` 等）。报告工具负责 HTML 模板、ECharts 图表数据嵌入、文件名安全处理和写入 `REPORTS_DIR`。
 
 ### 手动调用示例
 
@@ -334,19 +324,9 @@ print(result)
 from fault_diagnosis.tools.report_tools import save_report
 
 result = save_report.invoke({
-    "title": "测试诊断报告",
-    "report_time": "2026-06-17 10:00:00",
-    "diagnosis_object": "J1号机",
-    "diagnosis_type": "故障诊断",
-    "executive_summary": "测试摘要",
-    "diagnosis_overview": "测试概览",
-    "diagnosis_details": "测试详情",
-    "fault_inference": "测试推断",
-    "repair_recommendations": "测试维修建议",
-    "preventive_maintenance": "测试预防建议",
-    "diagnosis_basis": "测试依据",
     "report_filename": "debug_report",
     "chart_payload": None,
+    "operation_report_payload": "{\"title\":\"测试诊断报告\",\"report_time\":\"2026-06-17 10:00:00\",\"asset\":\"J1号机\",\"report_type\":\"运行诊断报告\",\"data_window\":\"测试窗口\",\"sample_count\":0,\"data_age_text\":\"未评估\",\"data_freshness_label\":\"已滞后\",\"data_freshness_note\":\"测试报告不代表当前实时状态。\",\"data_currentness_level\":\"stale\",\"data_currentness_label\":\"STALE / 不代表实时状态\",\"asset_risk_level\":\"unknown\",\"asset_risk_label\":\"UNKNOWN / 无法判断\",\"action_priority\":\"P1\",\"action_priority_label\":\"立即确认实时数据与现场状态\",\"confidence_level\":\"低\",\"severity\":\"unknown\",\"severity_label\":\"UNKNOWN / 无法判断\",\"confidence\":\"低\",\"one_sentence_conclusion\":\"测试结构化报告。\",\"top_actions\":[],\"kpi_cards\":[],\"findings\":[],\"cause_candidates\":[],\"action_plan\":[],\"workorder_suggestion\":{},\"evidence_summary\":[],\"limitations\":[],\"appendix\":{}}",
 })
 print(result)
 ```

@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
-from .contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
-from ..single_agent.report_sections import build_workorder_todo_markdown
+from .contracts import (
+    AnalysisStepArtifact,
+    DiagnosisArtifactEnvelope,
+    DiagnosisArtifactType,
+    DiagnosisRequest,
+    KnowledgeStepArtifact,
+    SqlStepArtifact,
+    WorkOrderSuggestion,
+)
+from ..single_agent.operation_report import build_operation_diagnosis_report
+from ..single_agent.sql_result_parser import parse_sql_rows
 
 
 def _build_report_filename(prefix: str, thread_id: str) -> str:
@@ -14,22 +24,116 @@ def _build_report_filename(prefix: str, thread_id: str) -> str:
     return f"{prefix}_{timestamp}_{thread_id[-6:]}"
 
 
-def _workorder_section(workorder_decision: dict[str, Any]) -> str:
-    if not workorder_decision or not workorder_decision.get("need_workorder"):
-        return ""
-    section = build_workorder_todo_markdown(
-        title=workorder_decision.get("title"),
-        workorder_type=workorder_decision.get("workorder_type"),
-        risk_level=workorder_decision.get("risk_level"),
-        priority=workorder_decision.get("priority"),
-        priority_label=workorder_decision.get("priority_label"),
-        assignee_role=workorder_decision.get("assignee_role"),
-        suggested_completion_window=workorder_decision.get("suggested_completion_window"),
-        key_evidence=workorder_decision.get("key_evidence") or [],
-        processing_steps=workorder_decision.get("processing_steps") or [],
-        acceptance_criteria=workorder_decision.get("acceptance_criteria") or [],
+def _request_model(request: dict[str, Any], *, goal: str) -> DiagnosisRequest:
+    return DiagnosisRequest(
+        user_message=str(request.get("user_message") or request.get("message") or goal),
+        user_identity=str(request.get("user_identity") or "历史线程"),
+        equipment_hint=request.get("equipment_hint"),
+        metric_hint=request.get("metric_hint"),
+        fault_code_hint=request.get("fault_code_hint"),
+        time_range_hint=request.get("time_range_hint") or "历史线程产物",
+        needs_report=True,
+        report_format="html",
+        analysis_goal=str(request.get("analysis_goal") or goal),
     )
-    return f"\n\n{section}"
+
+
+def _historical_data_quality(rows: list[dict[str, object]]) -> dict[str, object]:
+    def row_time(row: dict[str, object]) -> str:
+        value = row.get("create_time") or row.get("timestamp") or "-"
+        return str(value or "-")
+
+    return {
+        "sample_count": len(rows),
+        "oldest_sample_time": row_time(rows[-1]) if rows else "-",
+        "latest_sample_time": row_time(rows[0]) if rows else "-",
+        "freshness_seconds": 999999999,
+        "freshness_label": "已滞后",
+        "currentness": "本报告基于已保存的历史线程产物生成，不代表当前实时状态",
+        "metric_availability": "未重新评估",
+    }
+
+
+def _status_summary(rows: list[dict[str, object]], request: DiagnosisRequest) -> dict[str, object]:
+    return {
+        "device": request.equipment_hint or "DCMA 系统",
+        "initial_assessment": "基于历史线程产物生成报告，未重新查询实时数据库。",
+    }
+
+
+def _sql_model(sql_artifact: dict[str, Any]) -> SqlStepArtifact:
+    return SqlStepArtifact(
+        success=bool(sql_artifact.get("success", True)),
+        summary=str(sql_artifact.get("summary") or "历史线程 SQL 结果"),
+        sql_used=[str(item) for item in (sql_artifact.get("sql_used") or [])],
+        result_preview=str(sql_artifact.get("result_preview") or ""),
+        raw_output=str(sql_artifact.get("raw_output") or sql_artifact.get("result_preview") or ""),
+        error=sql_artifact.get("error"),
+    )
+
+
+def _knowledge_model(knowledge_artifact: dict[str, Any]) -> KnowledgeStepArtifact:
+    return KnowledgeStepArtifact(
+        success=bool(knowledge_artifact.get("success", False)),
+        query=str(knowledge_artifact.get("query") or ""),
+        snippets=[str(item) for item in (knowledge_artifact.get("snippets") or [])],
+        raw_output=str(knowledge_artifact.get("raw_output") or ""),
+        error=knowledge_artifact.get("error"),
+    )
+
+
+def _analysis_model(analysis_artifact: dict[str, Any], fallback: str) -> AnalysisStepArtifact:
+    return AnalysisStepArtifact(
+        success=bool(analysis_artifact.get("success", True)),
+        conclusion=str(analysis_artifact.get("conclusion") or fallback or "历史线程产物未提供明确结论。"),
+        basis=[str(item) for item in (analysis_artifact.get("basis") or [])],
+        probable_causes=[str(item) for item in (analysis_artifact.get("probable_causes") or [])],
+        verification_items=[str(item) for item in (analysis_artifact.get("verification_items") or [])],
+        recommendations=[str(item) for item in (analysis_artifact.get("recommendations") or [])],
+        risk_notice=analysis_artifact.get("risk_notice"),
+        missing_information=[str(item) for item in (analysis_artifact.get("missing_information") or [])],
+        confidence_details=[str(item) for item in (analysis_artifact.get("confidence_details") or [])],
+        confidence=str(analysis_artifact.get("confidence") or "medium"),
+        error=analysis_artifact.get("error"),
+    )
+
+
+def _workorder_model(workorder_decision: dict[str, Any]) -> WorkOrderSuggestion | None:
+    if not workorder_decision:
+        return None
+    try:
+        return WorkOrderSuggestion(**workorder_decision)
+    except Exception:
+        return None
+
+
+def _operation_payload(
+    *,
+    title: str,
+    diagnosis_type: str,
+    report_time: str,
+    request: DiagnosisRequest,
+    sql_artifact: SqlStepArtifact,
+    knowledge_artifact: KnowledgeStepArtifact,
+    analysis_artifact: AnalysisStepArtifact,
+    workorder_suggestion: WorkOrderSuggestion | None,
+) -> str:
+    rows = parse_sql_rows(sql_artifact.raw_output or sql_artifact.result_preview)
+    report = build_operation_diagnosis_report(
+        request=request,
+        title=title,
+        report_time=report_time,
+        diagnosis_type=diagnosis_type,
+        rows=rows,
+        data_quality=_historical_data_quality(rows),
+        status_summary=_status_summary(rows, request),
+        sql_summary=sql_artifact.summary,
+        sql_statement=";\n".join(sql_artifact.sql_used) or "无",
+        knowledge_artifact=knowledge_artifact,
+        analysis_artifact=analysis_artifact,
+        workorder_suggestion=workorder_suggestion,
+    )
+    return json.dumps(report.model_dump(mode="json", exclude_none=True), ensure_ascii=False)
 
 
 def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[str, Any]:
@@ -46,41 +150,24 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
         analysis_artifact = payload.get("analysis_artifact") or {}
         workorder_decision = payload.get("workorder_decision") or {}
         report_filename = _build_report_filename("dcma_report_generation_fault", envelope.thread_id)
-        repair_recommendations = "\n".join(
-            f"- {item}" for item in (analysis_artifact.get("recommendations") or [])
-        ) or "- 暂无具体处置建议"
-        sql_statement_text = ";\n".join(sql_artifact.get("sql_used") or []) or "无"
+        request_model = _request_model(request, goal="历史故障诊断报告")
+        sql_model = _sql_model(sql_artifact)
+        knowledge_model = _knowledge_model(knowledge_artifact)
+        analysis_model = _analysis_model(analysis_artifact, envelope.final_answer)
         return {
             "title": "DCMA 故障诊断报告",
-            "report_time": report_time,
-            "diagnosis_object": request.get("equipment_hint") or "DCMA 系统",
-            "diagnosis_type": request.get("fault_code_hint") or "故障诊断",
-            "executive_summary": analysis_artifact.get("conclusion") or envelope.final_answer,
-            "diagnosis_overview": "本报告基于当前线程最近一次故障诊断结果生成，无需重新执行 SQL 查询和分析。",
-            "diagnosis_details": (
-                f"【SQL 结果摘要】\n{sql_artifact.get('result_preview') or sql_artifact.get('raw_output') or '无'}\n\n"
-                f"【知识检索摘要】\n{knowledge_artifact.get('raw_output') or '无'}"
-            ),
-            "fault_inference": analysis_artifact.get("conclusion") or envelope.final_answer,
-            "repair_recommendations": f"{repair_recommendations}{_workorder_section(workorder_decision)}",
-            "preventive_maintenance": (
-                "### 风险与边界说明\n"
-                "本报告基于当前线程已保存的结构化诊断产物生成，未重新查询实时数据库。"
-                "若现场状态、告警状态或维修记录已经变化，根因判断和处置优先级需人工复核。\n\n"
-                "建议结合本次诊断结果持续跟踪关键指标，并复核相关部件状态。"
-            ),
-            "diagnosis_basis": (
-                "### 请求摘要\n"
-                f"- {envelope.request_summary or '无'}\n\n"
-                "### SQL 摘要\n"
-                f"- {sql_artifact.get('summary') or '无'}\n\n"
-                "### SQL 语句\n"
-                f"```sql\n{sql_statement_text}\n```\n\n"
-                "### 知识与分析依据\n"
-                f"- 知识查询：{knowledge_artifact.get('query') or '无'}\n"
-                f"- 分析依据：{'; '.join(analysis_artifact.get('basis') or []) or '无'}"
-            ),
             "report_filename": report_filename,
+            "chart_payload": "",
+            "operation_report_payload": _operation_payload(
+                title="DCMA 故障诊断报告",
+                diagnosis_type=request.get("fault_code_hint") or "故障诊断",
+                report_time=report_time,
+                request=request_model,
+                sql_artifact=sql_model,
+                knowledge_artifact=knowledge_model,
+                analysis_artifact=analysis_model,
+                workorder_suggestion=_workorder_model(workorder_decision),
+            ),
         }
 
     if artifact_type == DiagnosisArtifactType.STATUS_INSPECTION.value:
@@ -88,42 +175,32 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
         knowledge_artifact = payload.get("knowledge_artifact") or {}
         inspection_artifact = payload.get("inspection_artifact") or {}
         report_filename = _build_report_filename("dcma_report_generation_inspection", envelope.thread_id)
-        sql_statement_text = ";\n".join(sql_artifact.get("sql_used") or []) or "无"
+        request_model = _request_model(request, goal="历史运行诊断报告")
+        sql_model = _sql_model(sql_artifact)
+        knowledge_model = _knowledge_model(knowledge_artifact)
+        analysis_model = _analysis_model(
+            {
+                "conclusion": inspection_artifact.get("summary") or envelope.final_answer,
+                "basis": inspection_artifact.get("observed_metrics") or [],
+                "recommendations": inspection_artifact.get("suggested_actions") or [],
+                "confidence": "medium",
+            },
+            envelope.final_answer,
+        )
         return {
             "title": "DCMA 运行诊断报告",
-            "report_time": report_time,
-            "diagnosis_object": request.get("equipment_hint") or "DCMA 系统",
-            "diagnosis_type": "运行诊断",
-            "executive_summary": inspection_artifact.get("summary") or envelope.final_answer,
-            "diagnosis_overview": "本报告基于当前线程最近一次状态巡检结果生成，无需重新执行 SQL 查询和巡检分析。",
-            "diagnosis_details": (
-                f"【巡检 SQL 摘要】\n{sql_artifact.get('result_preview') or sql_artifact.get('raw_output') or '无'}\n\n"
-                f"【观察指标】\n{'; '.join(inspection_artifact.get('observed_metrics') or []) or '无'}\n\n"
-                f"【发现异常】\n{'; '.join(inspection_artifact.get('detected_anomalies') or []) or '无'}\n\n"
-                f"【知识补充】\n{knowledge_artifact.get('raw_output') or '无'}"
-            ),
-            "fault_inference": inspection_artifact.get("summary") or envelope.final_answer,
-            "repair_recommendations": "\n".join(
-                f"- {item}" for item in (inspection_artifact.get("suggested_actions") or [])
-            ) or "- 暂无具体建议动作",
-            "preventive_maintenance": (
-                "### 风险与边界说明\n"
-                "本报告基于当前线程已保存的状态巡检产物生成，未重新查询实时数据库。"
-                "若现场状态或数据窗口已变化，需要重新巡检后再定论。\n\n"
-                "建议根据巡检风险等级持续关注关键指标趋势，必要时安排复检。"
-            ),
-            "diagnosis_basis": (
-                "### 请求摘要\n"
-                f"- {envelope.request_summary or '无'}\n\n"
-                "### SQL 摘要\n"
-                f"- {sql_artifact.get('summary') or '无'}\n\n"
-                "### SQL 语句\n"
-                f"```sql\n{sql_statement_text}\n```\n\n"
-                "### 巡检依据\n"
-                f"- 风险等级：{inspection_artifact.get('risk_level') or 'low'}\n"
-                f"- 观察指标：{'; '.join(inspection_artifact.get('observed_metrics') or []) or '无'}"
-            ),
             "report_filename": report_filename,
+            "chart_payload": "",
+            "operation_report_payload": _operation_payload(
+                title="DCMA 运行诊断报告",
+                diagnosis_type="运行诊断",
+                report_time=report_time,
+                request=request_model,
+                sql_artifact=sql_model,
+                knowledge_artifact=knowledge_model,
+                analysis_artifact=analysis_model,
+                workorder_suggestion=None,
+            ),
         }
 
     raise ValueError(f"当前诊断产物类型不支持独立生成报告：{artifact_type}")
