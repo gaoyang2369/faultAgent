@@ -39,3 +39,9 @@ def test_extract_fault_codes_from_sql_output_normalizes_suffixes() -> None:
     codes = extract_fault_codes_from_text("fault_code='F1030-0/0/0', alarm_code='0'; next F01002")
 
     assert codes == ["F1030", "F01002"]
+
+
+def test_extract_fault_codes_ignores_g120_asset_model() -> None:
+    codes = extract_fault_codes_from_text("device_name='G120电机1', alarm_code='A07089'")
+
+    assert codes == ["A07089"]

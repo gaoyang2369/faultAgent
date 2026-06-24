@@ -136,6 +136,8 @@ TTS_SYNTHESIZE_MAX_CHARS = max(1, int(os.getenv("TTS_SYNTHESIZE_MAX_CHARS", "500
 # === Runtime Environment ===
 APP_ENV = os.getenv("APP_ENV", os.getenv("ENV", "development")).strip().lower() or "development"
 IS_PRODUCTION = APP_ENV in {"prod", "production"}
+SINGLE_AGENT_MODEL_TIMEOUT_SECONDS = max(1.0, float(os.getenv("SINGLE_AGENT_MODEL_TIMEOUT_SECONDS", "30")))
+SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS = max(1000, int(os.getenv("SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS", "12000")))
 
 # === Observability / Trace Export ===
 AGENT_TRACE_BACKEND = _env_choice("AGENT_TRACE_BACKEND", "none", {"none", "langfuse"})

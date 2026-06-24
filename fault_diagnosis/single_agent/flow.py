@@ -534,6 +534,7 @@ class SingleAgentFlowMixin:
                 analysis_artifact=analysis_artifact,
                 workorder_suggestion=workorder_suggestion,
                 report_artifact=report_artifact,
+                structured_analysis_artifact=getattr(self, "_last_structured_analysis", None),
             )
             access_metadata = {
                 "role": self.auth_context.role,

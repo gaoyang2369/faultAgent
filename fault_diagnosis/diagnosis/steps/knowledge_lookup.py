@@ -7,7 +7,7 @@ from typing import Callable
 
 from ..contracts import DiagnosisRequest, KnowledgeStepArtifact
 
-_FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{3,5})(?:-[0-9/]+)?(?![A-Z0-9])", re.IGNORECASE)
+_FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([FA]\d{3,5})(?:-[0-9/]+)?(?![A-Z0-9])", re.IGNORECASE)
 
 
 def extract_fault_codes_from_text(text: str, *, limit: int = 5) -> list[str]:

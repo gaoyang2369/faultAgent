@@ -49,7 +49,7 @@ const desktopPetUserRole = ref<string | null>(null)
 const desktopPetPermissionHint = ref<string | null>(null)
 const shouldAutoDismissDesktopPetIdentityDialog = ref(false)
 const isDevIdentitySwitcherVisible = import.meta.env.DEV
-const devIdentityRole = ref<DevAuthRole>('admin')
+const devIdentityRole = ref<DevAuthRole>('guest')
 const isSwitchingDevIdentity = ref(false)
 const route = useRoute()
 const router = useRouter()
@@ -136,6 +136,19 @@ const switchDevIdentity = async () => {
     ElMessage.error(message)
   } finally {
     isSwitchingDevIdentity.value = false
+  }
+}
+
+const refreshBackendIdentity = async () => {
+  if (isSwitchingDevIdentity.value) return
+  userIdentityStore.setStatus('connecting')
+
+  try {
+    const identity = await adminAuthAPI.getIdentity()
+    applyBackendIdentity(identity)
+  } catch (error) {
+    userIdentityStore.setStatus('error')
+    console.warn('同步后端身份失败:', error)
   }
 }
 
@@ -382,6 +395,7 @@ const shouldAutoOpenVoiceAuthOnLoad = () => {
 }
 
 onMounted(() => {
+  refreshBackendIdentity()
   if (showVoiceAuthDialog.value) return
   if (shouldAutoOpenVoiceAuthOnLoad()) {
     openVoiceAuthDialog()

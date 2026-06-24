@@ -334,6 +334,9 @@ class ChatService:
                 requested_thread_id=summarize_thread_id(context.requested_thread_id),
                 stream_id=summarize_identifier_for_log(context.stream_id, keep=8),
                 user_identity=context.trusted_user_identity,
+                auth_role=context.auth_context.role,
+                auth_user_id=context.auth_context.user_id,
+                auth_method=context.auth_context.auth_method,
                 message_len=len(message),
                 message_preview=summarize_text_for_log(message, limit=72),
             )
@@ -346,6 +349,9 @@ class ChatService:
                 stream_id=summarize_identifier_for_log(context.stream_id, keep=8),
                 channel=context.channel,
                 minted_new_thread=context.minted_new_thread,
+                auth_role=context.auth_context.role,
+                auth_user_id=context.auth_context.user_id,
+                auth_method=context.auth_context.auth_method,
             )
             cancel_handle = await register_stream_handle(
                 request.app,
@@ -462,6 +468,9 @@ class ChatService:
                 user_turn_index=user_turn_index,
                 kept_message_count=len(kept_messages),
                 original_message_count=len(history_messages),
+                auth_role=auth_context.role,
+                auth_user_id=auth_context.user_id,
+                auth_method=auth_context.auth_method,
                 message_len=len(normalized_message),
                 message_preview=summarize_text_for_log(normalized_message, limit=72),
             )
@@ -551,6 +560,9 @@ class ChatService:
             session_id=summarize_session_id(context.session_id),
             thread_id=summarize_thread_id(context.thread_id),
             stream_id=summarize_identifier_for_log(context.stream_id, keep=8),
+            auth_role=context.auth_context.role,
+            auth_user_id=context.auth_context.user_id,
+            auth_method=context.auth_context.auth_method,
             message_len=len(message),
             message_preview=summarize_text_for_log(message, limit=72),
         )

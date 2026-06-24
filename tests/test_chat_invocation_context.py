@@ -10,6 +10,7 @@ FastAPI = fastapi.FastAPI
 TestClient = testclient.TestClient
 
 from fault_diagnosis.agent_runtime.sse_adapter import adapt_sse_chunk
+from fault_diagnosis import config
 from fault_diagnosis.api import chat as chat_api
 from fault_diagnosis.api.auth import router as auth_router
 from fault_diagnosis.api.chat import router as chat_router
@@ -147,3 +148,23 @@ def test_explicit_thread_id_is_reused_by_both_entrypoints(monkeypatch) -> None:
     assert voice_response.json()["thread_id"] == thread_id
     assert '"auth_context"' in text_response.text
 
+
+def test_dev_login_cookie_controls_stream_auth_context(monkeypatch) -> None:
+    monkeypatch.setattr(config, "DEV_AUTH_ENABLED", True)
+    calls: list[dict[str, object]] = []
+    _install_fake_stream(monkeypatch, calls)
+
+    app = _build_app()
+
+    with TestClient(app) as client:
+        login_response = client.post("/auth/dev-login", json={"role": "admin"})
+        stream_response = client.get(
+            "/chat/stream",
+            params={"message": "生成dcma运行报告", "user_identity": "管理员"},
+        )
+
+    assert login_response.status_code == 200
+    assert stream_response.status_code == 200
+    assert calls[-1]["user_identity"] == "管理员"
+    assert calls[-1]["auth_context"]["role"] == "admin"
+    assert calls[-1]["auth_context"]["auth_method"] == "dev-login"

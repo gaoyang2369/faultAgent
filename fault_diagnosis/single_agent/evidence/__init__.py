@@ -16,6 +16,7 @@ from ...diagnosis.contracts import (
     SqlStepArtifact,
     WorkOrderSuggestion,
 )
+from ...diagnosis.analysis.contracts import StructuredAnalysisArtifact
 from ..contracts import SingleAgentDecision
 from .claims import build_claims
 from .knowledge import build_knowledge_evidence_items
@@ -80,6 +81,7 @@ def build_evidence_bundle(
     analysis_artifact: AnalysisStepArtifact,
     workorder_suggestion: WorkOrderSuggestion,
     report_artifact: ReportStepArtifact,
+    structured_analysis_artifact: StructuredAnalysisArtifact | None = None,
 ) -> EvidenceBundle:
     """Build and validate a complete evidence bundle for one run."""
 
@@ -89,14 +91,20 @@ def build_evidence_bundle(
             _user_request_evidence(request),
             *build_sql_evidence_items(sql_artifact, request=request),
             *build_knowledge_evidence_items(knowledge_artifact, request=request),
+            *(structured_analysis_artifact.evidence_items if structured_analysis_artifact is not None else []),
         ]
     )
     evidence_ids = [item.evidence_id for item in evidence_items if item.evidence_id]
-    claims = build_claims(
-        request=request,
-        analysis_artifact=analysis_artifact,
-        workorder_suggestion=workorder_suggestion,
-        evidence_ids=evidence_ids,
+    claims = _dedupe_claims(
+        [
+            *(structured_analysis_artifact.claims if structured_analysis_artifact is not None else []),
+            *build_claims(
+                request=request,
+                analysis_artifact=analysis_artifact,
+                workorder_suggestion=workorder_suggestion,
+                evidence_ids=evidence_ids,
+            ),
+        ]
     )
     final_claim_ids = [claim.claim_id for claim in claims if claim.status in {"candidate", "confirmed", "final"}]
     bundle.evidence_items = evidence_items
@@ -181,6 +189,18 @@ def _dedupe_evidence(items: list[EvidenceItem]) -> list[EvidenceItem]:
     seen: set[str] = set()
     for item in items:
         key = item.evidence_id or item.summary
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _dedupe_claims(items: list[Any]) -> list[Any]:
+    deduped: list[Any] = []
+    seen: set[str] = set()
+    for item in items:
+        key = getattr(item, "claim_id", "") or getattr(item, "statement", "")
         if key in seen:
             continue
         seen.add(key)

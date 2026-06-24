@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 from fault_diagnosis.agent_runtime.sse_adapter import parse_sse_chunk
+from fault_diagnosis.diagnosis.contracts import DiagnosisRequest, KnowledgeStepArtifact, SqlStepArtifact
 from fault_diagnosis.observability.tracing import NoopTraceRun
 from fault_diagnosis.single_agent.intent import (
     build_lightweight_conversation_reply,
@@ -126,6 +127,10 @@ def test_analysis_payload_routes_actions_out_of_verification_items(monkeypatch) 
     assert artifact.missing_information == ["现场操作历史"]
 
 
+def test_structured_analysis_uses_rule_artifact_without_model(monkeypatch) -> None:
+    asyncio.run(_assert_structured_analysis_uses_rule_artifact_without_model(monkeypatch))
+
+
 async def _assert_stream_events_short_circuits_greeting_without_model(monkeypatch) -> None:
     from fault_diagnosis.single_agent import runner as runner_module
 
@@ -150,3 +155,82 @@ async def _assert_stream_events_short_circuits_greeting_without_model(monkeypatc
     assert complete_payload["final_content"] == token_payload["content"]
     assert complete_payload["decision"]["reason"] == "轻量问候直接回答"
     assert runner._tool_call_count == 0
+
+
+async def _assert_structured_analysis_uses_rule_artifact_without_model(monkeypatch) -> None:
+    from fault_diagnosis.single_agent import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "get_trace_exporter", lambda: _NoopTraceExporter())
+    runner = runner_module.RestrictedSingleAgentRunner(
+        message="生成dcma运行报告",
+        thread_id="thread.test",
+        user_identity="管理员",
+        request_id="request.test",
+        stream_id="stream.test",
+        trace_id="trace.test",
+        model=_ExplodingModel(),
+    )
+    runner._reset_trace_run()
+    request = DiagnosisRequest(
+        user_message="生成dcma运行报告",
+        user_identity="管理员",
+        equipment_hint=None,
+        metric_hint=None,
+        fault_code_hint=None,
+        time_range_hint="最近",
+        needs_report=True,
+        report_format="markdown",
+        analysis_goal="生成运行状态报告",
+    )
+    sql_artifact = SqlStepArtifact(
+        success=True,
+        summary="查询 real_data_01 最近 50 条运行状态、异常码和关键运行指标。",
+        raw_output=str(
+            [
+                (
+                    566,
+                    "2026/01/14 18:27:24",
+                    "G120电机1",
+                    "G120电机1",
+                    "2026/01/14",
+                    "18:27:24 000ms",
+                    "45",
+                    "0",
+                    "A07089",
+                    "5120",
+                    "8384",
+                    563.5,
+                    823.41,
+                    442.21,
+                    0,
+                    0,
+                    0,
+                    -200,
+                    20.09,
+                    23.3,
+                    0,
+                    0,
+                    0,
+                    "24.7",
+                    20.09,
+                    78.47,
+                    78.47,
+                    2,
+                    0.44,
+                    0,
+                    "2026-01-14 18:27:24",
+                )
+            ]
+        ),
+    )
+    knowledge_artifact = KnowledgeStepArtifact(
+        success=True,
+        query="A07089 含义 处理",
+        raw_output="故障码：A07089\n文档片段：A07089 单位转换激活异常。处理：恢复单位参数后重新激活功能块。",
+    )
+
+    artifact = await runner.analyze(request, sql_artifact, knowledge_artifact, "2026-06-24 15:42:40")
+
+    assert artifact.success is True
+    assert "A07089" in artifact.conclusion
+    assert artifact.recommendations

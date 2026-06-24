@@ -8,6 +8,7 @@ from typing import Any, AsyncGenerator
 
 from ..common.logger import get_logger
 from ..diagnosis.adapters import build_sql_tools_map, find_sql_tool
+from ..diagnosis.analysis import diagnose_dcma_runtime
 from ..diagnosis.artifact_store import get_thread_artifact, save_thread_artifact
 from ..diagnosis.contracts import (
     AnalysisStepArtifact,
@@ -42,12 +43,9 @@ from .intent import (
 from .final_answer import build_templated_final_answer
 from .prompts import (
     build_single_agent_analysis_prompt,
-    build_single_agent_evidence_synthesis_prompt,
     build_single_agent_understanding_prompt,
 )
 from .reporting import (
-    build_analysis_evidence_summary,
-    build_structured_analysis_artifact,
     build_report_payload,
     extract_report_filename,
     extract_report_url,
@@ -280,50 +278,36 @@ class SingleAgentStagesMixin:
             )
             self._record_artifact("analysis", artifact, stage="analysis")
             return artifact
-        structured_artifact = build_structured_analysis_artifact(
-            request=request,
+        structured_analysis = diagnose_dcma_runtime(
             sql_artifact=sql_artifact,
             knowledge_artifact=knowledge_artifact,
+            request=request,
+            decision=decision,
         )
-        if structured_artifact is not None:
-            evidence_summary = build_analysis_evidence_summary(
-                request=request,
-                sql_artifact=sql_artifact,
-                knowledge_artifact=knowledge_artifact,
-            )
-            try:
-                payload = await self._invoke_json_model(
-                    build_single_agent_evidence_synthesis_prompt(
-                        request,
-                        evidence_summary,
-                        structured_artifact.conclusion,
-                        structured_artifact.basis,
-                        structured_artifact.recommendations,
-                        current_time,
-                    )
-                )
-                artifact = self._build_analysis_artifact_from_payload(payload, fallback=structured_artifact)
-                self._record_artifact("analysis", artifact, stage="analysis")
-                return artifact
-            except Exception as exc:  # noqa: BLE001
-                _log.warning(
-                    "诊断证据合成模型失败，使用结构化规则结果",
-                    thread_id=self.thread_id,
-                    error=str(exc),
-                )
-            self._record_artifact("analysis", structured_artifact, stage="analysis")
-            return structured_artifact
+        if structured_analysis.assessment.success:
+            self._last_structured_analysis = structured_analysis
+            self._record_artifact("structured_analysis", structured_analysis.assessment, stage="analysis")
+            self._record_artifact("analysis", structured_analysis.analysis_artifact, stage="analysis")
+            return structured_analysis.analysis_artifact
 
-        payload = await self._invoke_json_model(
-            build_single_agent_analysis_prompt(
-                request,
-                sql_artifact.summary,
-                sql_artifact.result_preview or sql_artifact.raw_output,
-                knowledge_artifact.raw_output,
-                current_time,
+        try:
+            payload = await self._invoke_json_model(
+                build_single_agent_analysis_prompt(
+                    request,
+                    sql_artifact.summary,
+                    sql_artifact.result_preview or sql_artifact.raw_output,
+                    knowledge_artifact.raw_output,
+                    current_time,
+                )
             )
-        )
-        artifact = self._build_analysis_artifact_from_payload(payload)
+            artifact = self._build_analysis_artifact_from_payload(payload)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning(
+                "规则分析失败后的模型兜底也失败，使用模板 fallback",
+                thread_id=self.thread_id,
+                error=str(exc),
+            )
+            artifact = structured_analysis.analysis_artifact
         if not artifact.conclusion:
             raise SingleAgentExecutionError("分析阶段未生成结论")
         self._record_artifact("analysis", artifact, stage="analysis")

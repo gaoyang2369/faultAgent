@@ -17,6 +17,8 @@ from ..config import (
     AGENT_TRACE_CONSOLE,
     AGENT_TRACE_CONSOLE_PREVIEW_CHARS,
     AGENT_TRACE_CONSOLE_VERBOSE,
+    SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS,
+    SINGLE_AGENT_MODEL_TIMEOUT_SECONDS,
 )
 from ..observability import NoopTraceRun, TraceRunContext, get_trace_exporter, write_local_trace
 from ..diagnosis.adapters import invoke_tool
@@ -85,6 +87,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self.evidence_bundle: Any | None = None
         self.output_guardrail_result: dict[str, Any] | None = None
         self._last_rendered_answer: Any | None = None
+        self._last_structured_analysis: Any | None = None
         self.authorization_decision: Any | None = None
         self._active_allowed_tools: tuple[str, ...] | None = None
         self._workflow_task_decision: Any | None = None
@@ -99,6 +102,9 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         context_fields = {
             "request_id": self.request_id,
             "trace_id": self.trace_id,
+            "auth_role": self.auth_context.role,
+            "auth_user_id": self.auth_context.user_id,
+            "auth_method": self.auth_context.auth_method,
         }
         if AGENT_TRACE_CONSOLE_VERBOSE:
             context_fields["thread_id"] = preview(self.thread_id, limit=80)
@@ -171,6 +177,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         self.evidence_bundle = None
         self.output_guardrail_result = None
         self._last_rendered_answer = None
+        self._last_structured_analysis = None
         self.authorization_decision = None
         self._active_allowed_tools = None
         self._workflow_task_decision = None
@@ -480,6 +487,8 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
 
     async def _invoke_text_model(self, prompt: str, *, operation: str = "model.invoke_text") -> str:
         model = self._resolve_model()
+        if len(prompt) > SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS:
+            prompt = prompt[:SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS] + "\n\n[TRUNCATED_BY_SINGLE_AGENT_INPUT_LIMIT]"
         model_name = str(getattr(model, "model_name", None) or os.getenv("MODEL_NAME") or "unknown")
         started_at = time.monotonic()
         self._console_trace(
@@ -501,7 +510,10 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             },
             model=model_name,
         ) as observation:
-            response = await model.ainvoke(prompt)
+            response = await asyncio.wait_for(
+                model.ainvoke(prompt),
+                timeout=SINGLE_AGENT_MODEL_TIMEOUT_SECONDS,
+            )
             content = str(getattr(response, "content", "") or "")
             self._console_trace(
                 "Agent model call finished",

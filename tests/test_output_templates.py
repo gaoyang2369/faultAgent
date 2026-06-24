@@ -195,6 +195,29 @@ def test_report_generation_template_returns_summary_and_link_only() -> None:
     assert "证据不足提示" in rendered.content
 
 
+def test_degraded_report_generation_does_not_claim_report_created() -> None:
+    rendered = render_final_answer(
+        decision=SingleAgentDecision(
+            primary_task_type="report_generation",
+            authorization={
+                "mode": "degrade",
+                "denied_nodes": {"report": "missing_report_permission"},
+            },
+        ),
+        evidence_bundle=_evidence_bundle(),
+        analysis_artifact=_analysis(),
+        report_artifact=ReportStepArtifact(
+            success=False,
+            save_result="本次请求未要求生成报告",
+        ),
+    )
+
+    assert "报告状态：报告未生成：当前身份无报告生成权限" in rendered.content
+    assert "报告链接：报告未生成" in rendered.content
+    assert "报告已生成" not in rendered.content
+    assert "不形成故障诊断报告" in rendered.content
+
+
 def test_report_html_uses_structured_report_chapters() -> None:
     operation_report_payload = json.dumps(
         {

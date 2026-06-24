@@ -194,7 +194,11 @@ def _custom_section(
 
     if contract.task_type.value == "report_generation":
         if key == "report_status":
-            return "报告已生成。", [], []
+            if _report_generated(context):
+                return "报告已生成。", [], []
+            if _report_blocked_by_authorization(context):
+                return "报告未生成：当前身份无报告生成权限，仅返回权限范围内的状态摘要。", [], []
+            return "报告未生成。", [], []
         if key == "report_title":
             title = _report_title(context)
             return title, [], []
@@ -207,7 +211,12 @@ def _custom_section(
                 ],
                 limit=5,
             )
-            return _numbered(summary_items, "报告已生成，但当前结构化摘要不足。"), context.evidence_ids(), context.missing_evidence()
+            fallback = (
+                "权限受限摘要已返回，但没有生成诊断报告文件。"
+                if not _report_generated(context)
+                else "报告已生成，但当前结构化摘要不足。"
+            )
+            return _numbered(summary_items, fallback), context.evidence_ids(), context.missing_evidence()
         if key == "report_link":
             return _report_link(context), [], []
         if key == "missing_evidence_notice":
@@ -387,6 +396,8 @@ def _evidence_summaries(context: _RenderContext, evidence_ids: list[str], *, lim
 
 
 def _limitations_text(context: _RenderContext) -> str:
+    if context.decision.primary_task_type == "report_generation" and _report_blocked_by_authorization(context):
+        return "当前身份缺少报告生成权限，本次不形成故障诊断报告、根因结论或健康评估。"
     missing = context.missing_evidence()
     if missing:
         return (
@@ -406,6 +417,8 @@ def _report_title(context: _RenderContext) -> str:
         title = str(getattr(artifact, "report_title", "") or "").strip()
         if title:
             return title
+    if context.decision.primary_task_type == "report_generation" and not _report_generated(context):
+        return "DCMA 权限受限状态摘要"
     goal = str(context.decision.user_goal or "").strip()
     if "运行" in goal and "报告" in goal:
         return "DCMA 运行诊断报告"
@@ -415,6 +428,8 @@ def _report_title(context: _RenderContext) -> str:
 
 
 def _report_link(context: _RenderContext) -> str:
+    if not _report_generated(context):
+        return "报告未生成"
     artifact = context.report_artifact
     if artifact is None:
         return "未返回报告链接"
@@ -423,6 +438,30 @@ def _report_link(context: _RenderContext) -> str:
         return explicit_url
     save_result_url = extract_report_url(artifact.save_result)
     return save_result_url or artifact.report_filename or "未返回报告链接"
+
+
+def _report_generated(context: _RenderContext) -> bool:
+    artifact = context.report_artifact
+    if artifact is None or not artifact.success:
+        return False
+    return bool(
+        str(getattr(artifact, "report_url", "") or "").strip()
+        or str(getattr(artifact, "report_filename", "") or "").strip()
+        or extract_report_url(getattr(artifact, "save_result", "") or "")
+    )
+
+
+def _report_blocked_by_authorization(context: _RenderContext) -> bool:
+    authorization = context.decision.authorization or {}
+    denied_nodes = authorization.get("denied_nodes") if isinstance(authorization, dict) else {}
+    return (
+        isinstance(denied_nodes, dict)
+        and denied_nodes.get("report") == "missing_report_permission"
+    ) or (
+        isinstance(authorization, dict)
+        and authorization.get("mode") == "degrade"
+        and not _report_generated(context)
+    )
 
 
 def _numbered(items: list[str], fallback: str) -> str:

@@ -50,10 +50,10 @@ const resolveDisplayIdentityLabel = (
 }
 
 export const useUserIdentityStore = defineStore('userIdentity', () => {
-  const userId = ref<string | null>('admin')
-  const userRole = ref<string | null>('管理员')
-  const rawDisplayName = ref<string | null>('管理员')
-  const status = ref<ConnectionStatus>('connected')
+  const userId = ref<string | null>(null)
+  const userRole = ref<string | null>(null)
+  const rawDisplayName = ref<string | null>(null)
+  const status = ref<ConnectionStatus>('idle')
 
   const hasIdentity = computed(() => Boolean(userId.value))
   const speakerName = computed(() => {
