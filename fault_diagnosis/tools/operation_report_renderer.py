@@ -445,7 +445,7 @@ def build_operation_report_html(
           <h2>一页结论</h2>
         </div>
         <div class="risk-strip">
-          <span class="severity-pill sev-{severity_class}">{escape(icon)} 设备风险：{escape(str(payload.get("asset_risk_label") or payload.get("severity_label") or severity_label))}</span>
+          <span class="severity-pill sev-{severity_class}">{escape(icon)} 采样窗口风险：{escape(str(payload.get("asset_risk_label") or payload.get("severity_label") or severity_label))}</span>
           <span class="severity-pill sev-{data_class}">{escape(data_icon)} 数据时效：{escape(str(payload.get("data_currentness_label") or data_label))}</span>
           <span class="severity-pill sev-notice">◆ 处置优先级：{escape(str(payload.get("action_priority") or "-"))} / {escape(str(payload.get("action_priority_label") or "-"))}</span>
         </div>
@@ -453,7 +453,7 @@ def build_operation_report_html(
       <p class="conclusion">一句话结论：{escape(str(payload.get("one_sentence_conclusion") or "-"))}</p>
       <div class="exec-grid">
         <div class="exec-facts">
-          <div class="exec-fact"><span>设备</span><strong>{escape(str(payload.get("asset") or "-"))}</strong></div>
+          <div class="exec-fact"><span>报告对象</span><strong>{escape(str(payload.get("asset") or "-"))}</strong></div>
           <div class="exec-fact"><span>事件码</span><strong>{escape(str(payload.get("event_code") or "无"))}</strong></div>
           <div class="exec-fact"><span>诊断置信度</span><strong>{escape(str(payload.get("confidence_level") or payload.get("confidence") or "-"))}</strong></div>
           <div class="exec-fact"><span>数据时效</span><strong>{escape(str(payload.get("data_freshness_label") or "-"))}</strong></div>

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from ..diagnosis.contracts import DiagnosisRequest
-from ..security.assets import real_data_filter_terms, select_asset_table
+from ..security.assets import data_source_terms_for_table, select_asset_table
 
 _SQL_TABLE_RE = re.compile(r"\b(?:from|join)\s+`?([a-zA-Z_][\w]*)`?", re.IGNORECASE)
 
@@ -146,28 +146,53 @@ def _in_predicate(column: str, values: list[str]) -> str:
     return f"{column} IN ({literals})"
 
 
-def build_fallback_sql_query(request: DiagnosisRequest, *, table_name: str | None = None) -> str:
+def _real_data_asset_predicate(table_name: str, assets: list[str]) -> str:
+    cleaned_assets = [
+        asset
+        for asset in dict.fromkeys(str(asset or "").strip() for asset in assets)
+        if asset and not is_generic_equipment_hint(asset)
+    ]
+    if not cleaned_assets:
+        return ""
+    source_terms = data_source_terms_for_table(table_name, cleaned_assets)
+    predicates = [
+        predicate
+        for predicate in (
+            _in_predicate("device_name", source_terms.get("device_name", [])),
+            _in_predicate("inverter_name", source_terms.get("inverter_name", [])),
+        )
+        if predicate
+    ]
+    if predicates:
+        return "(" + " OR ".join(predicates) + ")"
+    fallback_predicates = []
+    for asset in cleaned_assets:
+        equipment_literal = sql_literal(asset)
+        fallback_predicates.extend(
+            [
+                f"device_name = {equipment_literal}",
+                f"inverter_name = {equipment_literal}",
+            ]
+        )
+    return "(" + " OR ".join(fallback_predicates) + ")" if fallback_predicates else ""
+
+
+def build_fallback_sql_query(
+    request: DiagnosisRequest,
+    *,
+    table_name: str | None = None,
+    asset_filters: list[str] | None = None,
+) -> str:
     table_name = table_name if table_name in REAL_DATA_TABLES else select_real_data_table(request)
     equipment_hint = (request.equipment_hint or "").strip()
     fault_code_hint = (request.fault_code_hint or "").strip()
     conditions = []
-    if equipment_hint and not is_generic_equipment_hint(equipment_hint):
-        source_terms = real_data_filter_terms(equipment_hint, table_name)
-        equipment_predicates = [
-            predicate
-            for predicate in (
-                _in_predicate("device_name", source_terms.get("device_name", [])),
-                _in_predicate("inverter_name", source_terms.get("inverter_name", [])),
-            )
-            if predicate
-        ]
-        if not equipment_predicates:
-            equipment_literal = sql_literal(equipment_hint)
-            equipment_predicates = [
-                f"device_name = {equipment_literal}",
-                f"inverter_name = {equipment_literal}",
-            ]
-        conditions.append("(" + " OR ".join(equipment_predicates) + ")")
+    assets = list(asset_filters or [])
+    if not assets and equipment_hint:
+        assets = [equipment_hint]
+    asset_predicate = _real_data_asset_predicate(table_name, assets)
+    if asset_predicate:
+        conditions.append(asset_predicate)
     if fault_code_hint:
         fault_code_literal = sql_literal(fault_code_hint)
         conditions.append(f"(fault_code = {fault_code_literal} OR alarm_code = {fault_code_literal})")
@@ -179,7 +204,11 @@ def build_fallback_sql_query(request: DiagnosisRequest, *, table_name: str | Non
     )
 
 
-def build_fast_sql_plan(request: DiagnosisRequest) -> tuple[str, str] | None:
+def build_fast_sql_plan(
+    request: DiagnosisRequest,
+    *,
+    asset_filters: list[str] | None = None,
+) -> tuple[str, str] | None:
     """Return a deterministic SQL plan for common DCMA running-data status/report queries."""
 
     text = " ".join(
@@ -196,7 +225,7 @@ def build_fast_sql_plan(request: DiagnosisRequest) -> tuple[str, str] | None:
         return None
     table_name = select_real_data_table(request)
     return (
-        build_fallback_sql_query(request, table_name=table_name),
+        build_fallback_sql_query(request, table_name=table_name, asset_filters=asset_filters),
         f"查询 {table_name} 最近 50 条运行状态、异常码和关键运行指标，用于生成 DCMA 运行报告。",
     )
 

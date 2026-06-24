@@ -68,6 +68,14 @@ def test_fallback_sql_queries_latest_rows_without_default_device_filter() -> Non
     assert "SPINDLE-01" not in sql
 
 
+def test_report_sql_can_inherit_decision_asset_filters() -> None:
+    sql = build_fallback_sql_query(_request(), asset_filters=["J1号机"])
+
+    assert "WHERE 1=1" not in sql
+    assert "device_name IN ('G120电机1')" in sql
+    assert "inverter_name IN" not in sql
+
+
 def test_fallback_sql_treats_dcma_as_system_scope() -> None:
     sql = build_fallback_sql_query(_request(equipment_hint="dcma"))
 
@@ -93,3 +101,15 @@ def test_fast_sql_plan_handles_status_report_requests() -> None:
     assert f"ORDER BY {REAL_DATA_LATEST_TABLE}.create_time DESC, id DESC LIMIT 50" in sql
     assert "device_name = 'dcma'" not in sql
     assert f"{REAL_DATA_LATEST_TABLE} 最近 50 条" in summary
+
+
+def test_fast_sql_plan_inherits_asset_filters_for_single_device_report() -> None:
+    plan = build_fast_sql_plan(
+        _request(user_message="生成运行报告"),
+        asset_filters=["J1号机"],
+    )
+
+    assert plan is not None
+    sql, _summary = plan
+    assert "WHERE 1=1" not in sql
+    assert "device_name IN ('G120电机1')" in sql

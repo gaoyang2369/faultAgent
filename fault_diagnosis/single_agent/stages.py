@@ -117,7 +117,8 @@ class SingleAgentStagesMixin:
         return request, decision
 
     async def stream_sql_step(self, request: DiagnosisRequest) -> AsyncGenerator[str, None]:
-        fast_plan = build_fast_sql_plan(request)
+        asset_filters = self._sql_asset_filters_for_request(request)
+        fast_plan = build_fast_sql_plan(request, asset_filters=asset_filters)
         skip_checker = fast_plan is not None
         if fast_plan is not None:
             sql_query, summary = fast_plan
@@ -129,7 +130,7 @@ class SingleAgentStagesMixin:
                 default_summary="已生成 SQL 查询",
             )
             if not sql_query or not is_readonly_sql(sql_query) or has_unknown_sql_table(sql_query):
-                sql_query = build_fallback_sql_query(request)
+                sql_query = build_fallback_sql_query(request, asset_filters=asset_filters)
                 summary = "已使用受限 fallback 查询最近设备故障与关键指标数据"
 
         acl_result = apply_sql_acl(
@@ -206,6 +207,23 @@ class SingleAgentStagesMixin:
         )
         self._record_artifact("sql", artifact, stage="sql")
         self._last_step_result = artifact
+
+    def _sql_asset_filters_for_request(self, request: DiagnosisRequest) -> list[str]:
+        assets: list[str] = []
+        decision = self._workflow_task_decision
+        objects = getattr(decision, "objects", {}) or {}
+        for key in ("device_ids", "devices", "device", "diagnosis_object"):
+            value = objects.get(key) if isinstance(objects, dict) else None
+            if isinstance(value, list):
+                assets.extend(str(item).strip() for item in value if str(item).strip())
+            elif value:
+                assets.append(str(value).strip())
+        equipment_hint = (request.equipment_hint or "").strip()
+        if equipment_hint:
+            assets.append(equipment_hint)
+        if not assets:
+            assets.extend(str(item).strip() for item in getattr(self.auth_context, "asset_scope", []) if str(item).strip())
+        return list(dict.fromkeys(asset for asset in assets if asset))
 
     async def stream_knowledge_step(
         self,

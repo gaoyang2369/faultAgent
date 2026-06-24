@@ -144,6 +144,7 @@ def test_report_payload_renders_real_data_rows_as_tables() -> None:
     assert set(payload) == {"title", "report_filename", "chart_payload", "operation_report_payload"}
     operation_report = json.loads(payload["operation_report_payload"])
     assert operation_report["report_type"] == "运行诊断报告"
+    assert operation_report["asset"].startswith("real_data_01 最新采样窗口")
     assert operation_report["event_code"] == "F1030-0/0/0"
     assert operation_report["appendix"]["sql_query"].startswith("SELECT")
     chart_payload = json.loads(payload["chart_payload"])
@@ -373,9 +374,12 @@ def test_status_report_downgrades_a_code_to_warning_event() -> None:
     speed_group = next(group for group in chart_payload["trend_groups"] if group["key"] == "speed")
     assert chart_payload["status_summary"]["status_level"] == "告警 / 需确认"
     assert chart_payload["status_summary"]["current_event"] == "A07089"
+    assert operation_report["asset"].startswith("real_data_01 最新采样窗口")
+    assert "覆盖设备：G120电机1" in operation_report["asset"]
     assert operation_report["severity"] == "warning"
     assert operation_report["severity_label"] == "WARNING / 采样窗口异常"
     assert operation_report["asset_risk_level"] == "warning"
+    assert operation_report["asset_risk_label"] == "采样窗口风险 WARNING / 当前状态 UNKNOWN"
     assert operation_report["data_currentness_level"] == "stale"
     assert operation_report["action_priority"] == "P1"
     assert operation_report["event_code"] == "A07089"
@@ -383,7 +387,17 @@ def test_status_report_downgrades_a_code_to_warning_event() -> None:
     assert operation_report["data_age_text"].endswith("天")
     assert "约 已滞后" not in operation_report["data_freshness_note"]
     assert "采样窗口内" in operation_report["one_sentence_conclusion"]
+    assert "手册要点" in operation_report["one_sentence_conclusion"]
     assert "当前处于告警状态" not in operation_report["one_sentence_conclusion"]
+    assert "SQL 未限定单设备" in " ".join(operation_report["limitations"])
+    assert "手册释义" in operation_report["findings"][0]["title"]
+    assert "反应：无" in operation_report["findings"][0]["engineering_meaning"]
+    speed_card = next(card for card in operation_report["kpi_cards"] if card["name"] == "速度偏差率")
+    assert "最新值等级" in speed_card["judgement"]
+    assert "窗口峰值等级" in speed_card["judgement"]
+    voltage_card = next(card for card in operation_report["kpi_cards"] if card["name"] == "母线电压")
+    assert "窗口范围" in voltage_card["value"]
+    assert voltage_card["window_max"]
     assert len(operation_report["findings"]) <= 5
     assert len(operation_report["cause_candidates"]) <= 3
     assert len(operation_report["action_plan"]) <= 5
@@ -399,7 +413,7 @@ def test_status_report_downgrades_a_code_to_warning_event() -> None:
     )
     assert "一页结论" in html
     assert "运行快照" in html
-    assert "设备风险" in html
+    assert "采样窗口风险" in html
     assert "数据时效" in html
     assert "处置优先级" in html
     assert "趋势与持续性" in html
@@ -411,6 +425,68 @@ def test_status_report_downgrades_a_code_to_warning_event() -> None:
     assert "Executive Diagnosis" not in html
     assert "Operational Snapshot" not in html
     assert "CRITICAL / 严重" not in html
+
+
+def test_report_renders_alarm_code_zero_as_no_effective_alarm() -> None:
+    request = DiagnosisRequest(
+        user_message="生成 DCMA 当前运行状态报告",
+        user_identity="游客",
+        equipment_hint=None,
+        metric_hint=None,
+        fault_code_hint=None,
+        time_range_hint="当前",
+        needs_report=True,
+        report_format="markdown",
+        analysis_goal="生成运行状态报告",
+    )
+    row = (
+        566,
+        "2026/06/10 12:12:59",
+        "G120电机1",
+        "G120电机1",
+        "2026/06/10",
+        "12:12:59 000ms",
+        "42",
+        "0",
+        "0",
+        "5246",
+        "10679",
+        555.228,
+        823.412,
+        823.0,
+        0.775,
+        0,
+        0,
+        25.2,
+        46.811,
+        31.123,
+        0.018,
+        0.12,
+        0.18,
+        "24.7",
+        31.123,
+        12.0,
+        18.0,
+        2,
+        0.44,
+        0,
+        "2026-06-10 12:12:59",
+    )
+    payload = build_report_payload(
+        request=request,
+        sql_artifact=SqlStepArtifact(success=True, summary="ok", raw_output=str([row])),
+        knowledge_artifact=KnowledgeStepArtifact(success=False, query="", raw_output=""),
+        analysis_artifact=AnalysisStepArtifact(success=True, conclusion="ok"),
+        current_time="2026-06-23 12:13:00",
+        report_filename="dcma-status",
+    )
+    chart_payload = json.loads(payload["chart_payload"])
+    operation_report = json.loads(payload["operation_report_payload"])
+    event_card = next(card for card in operation_report["kpi_cards"] if card["name"] == "事件码")
+
+    assert chart_payload["status_summary"]["current_event"] == "无有效事件码/故障码；告警码：无有效告警码"
+    assert event_card["latest_value"] == "无有效告警码"
+    assert "无有效告警码" in event_card["value"]
 
 
 def test_structured_analysis_avoids_stale_timestamp_language() -> None:

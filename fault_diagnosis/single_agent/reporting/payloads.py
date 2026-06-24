@@ -313,7 +313,7 @@ def _status_priority(status_level: str) -> str:
 
 def _current_event_text(fault_codes: list[str], alarm_codes: list[str]) -> str:
     codes = _effective_codes(fault_codes, alarm_codes)
-    return ", ".join(codes) if codes else "无有效异常码"
+    return ", ".join(codes) if codes else "无有效事件码/故障码；告警码：无有效告警码"
 
 
 def _key_phenomenon(rows: list[dict[str, object]]) -> str:

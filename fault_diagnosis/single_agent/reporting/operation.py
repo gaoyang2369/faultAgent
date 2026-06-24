@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Any
 
@@ -37,7 +38,7 @@ from .utils import (
     unique_codes as _unique_codes,
     unique_non_empty as _unique_non_empty,
 )
-from ..sql_safety import REAL_DATA_LATEST_TABLE
+from ..sql_safety import REAL_DATA_LATEST_TABLE, is_generic_equipment_hint
 
 
 class ReportSeverity(str, Enum):
@@ -171,6 +172,8 @@ _DATA_CURRENTNESS_LABELS = {
 }
 
 _CRITICAL_WORDS = ("停机", "急停", "禁止运行", "禁止继续运行", "保护动作", "立即停机", "隔离")
+_KNOWLEDGE_ACTION_LABELS = ("含义", "说明", "反应", "原因", "触发", "处理", "排除", "措施", "检查", "维修", "复位")
+_KNOWLEDGE_SOURCE_PREFIXES = ("来源", "source_type", "file_id", "extract_backend", "corrected", "correction_source", "检索方式", "故障码")
 
 
 def _speed_deviation_values(rows: list[dict[str, object]]) -> list[float]:
@@ -192,6 +195,39 @@ def _event_counts(rows: list[dict[str, object]]) -> dict[str, int]:
     return counts
 
 
+def _sql_has_device_filter(sql_statement: str) -> bool:
+    normalized = str(sql_statement or "").lower()
+    matched = re.search(r"\bwhere\b(?P<where>.*?)(?:\border\s+by\b|\blimit\b|$)", normalized, re.DOTALL)
+    where_clause = matched.group("where") if matched else ""
+    return bool(re.search(r"\b(?:device_name|inverter_name)\b\s*(?:=|in\b|like\b)", where_clause))
+
+
+def _covered_devices_text(rows: list[dict[str, object]]) -> str:
+    return ", ".join(_unique_non_empty(rows, "device_name")) or "未识别"
+
+
+def _report_asset_label(
+    request: DiagnosisRequest,
+    rows: list[dict[str, object]],
+    status_summary: dict[str, object],
+    sql_statement: str,
+) -> str:
+    devices_text = _covered_devices_text(rows)
+    if _sql_has_device_filter(sql_statement):
+        request_asset = (request.equipment_hint or "").strip()
+        if request_asset and not is_generic_equipment_hint(request_asset):
+            return request_asset
+        return devices_text if devices_text != "未识别" else str(status_summary.get("device") or "DCMA 系统")
+    suffix = f"（覆盖设备：{devices_text}）" if devices_text != "未识别" else ""
+    return f"{REAL_DATA_LATEST_TABLE} 最新采样窗口{suffix}"
+
+
+def _risk_label(severity: ReportSeverity, currentness_level: DataCurrentnessLevel) -> str:
+    if _is_stale_data(currentness_level):
+        return f"采样窗口风险 {severity.name} / 当前状态 UNKNOWN"
+    return _SEVERITY_LABELS[severity]
+
+
 def _highest(*severities: ReportSeverity) -> ReportSeverity:
     if not severities:
         return ReportSeverity.UNKNOWN
@@ -206,6 +242,17 @@ def _high_threshold_severity(value: float | None, warning: float, critical: floa
     if value >= warning:
         return ReportSeverity.WARNING
     return ReportSeverity.NORMAL
+
+
+def _severity_short_label(severity: ReportSeverity) -> str:
+    return {
+        ReportSeverity.CRITICAL: "CRITICAL",
+        ReportSeverity.HIGH: "HIGH",
+        ReportSeverity.WARNING: "WARNING",
+        ReportSeverity.NOTICE: "NOTICE",
+        ReportSeverity.NORMAL: "NORMAL",
+        ReportSeverity.UNKNOWN: "UNKNOWN",
+    }[severity]
 
 
 def _high_threshold_judgement(value: float | None, warning: float, critical: float, unit: str = "") -> str:
@@ -232,6 +279,57 @@ def _voltage_severity(value: float | None) -> ReportSeverity:
 def _has_critical_language(*texts: object) -> bool:
     joined = " ".join(str(text or "") for text in texts)
     return any(word in joined for word in _CRITICAL_WORDS)
+
+
+def _is_source_metadata_line(line: str) -> bool:
+    normalized = line.strip()
+    return any(normalized.startswith(prefix) for prefix in _KNOWLEDGE_SOURCE_PREFIXES)
+
+
+def _line_has_knowledge_action(line: str) -> bool:
+    normalized = line.strip()
+    return any(label in normalized for label in _KNOWLEDGE_ACTION_LABELS)
+
+
+def _knowledge_blocks(knowledge_artifact: KnowledgeStepArtifact) -> list[str]:
+    if knowledge_artifact.snippets:
+        return [str(item).strip() for item in knowledge_artifact.snippets if str(item).strip()]
+    return [item.strip() for item in (knowledge_artifact.raw_output or "").split("\n\n") if item.strip()]
+
+
+def _knowledge_action_summaries(
+    knowledge_artifact: KnowledgeStepArtifact,
+    codes: list[str],
+    *,
+    per_code_limit: int = 4,
+) -> list[str]:
+    if not knowledge_artifact.success:
+        return []
+    summaries: list[str] = []
+    target_codes = [code.upper() for code in codes if code]
+    blocks = _knowledge_blocks(knowledge_artifact)
+    if not target_codes:
+        target_codes = [""]
+    for code in target_codes:
+        selected_lines: list[str] = []
+        for block in blocks:
+            if code and code not in block.upper():
+                continue
+            for raw_line in block.splitlines():
+                line = raw_line.strip()
+                if not line or _is_source_metadata_line(line):
+                    continue
+                if _line_has_knowledge_action(line) or (code and code in line.upper()):
+                    if line not in selected_lines:
+                        selected_lines.append(line)
+                if len(selected_lines) >= per_code_limit:
+                    break
+            if len(selected_lines) >= per_code_limit:
+                break
+        if selected_lines:
+            prefix = f"{code}：" if code else ""
+            summaries.append(f"{prefix}{'；'.join(selected_lines[:per_code_limit])}")
+    return summaries
 
 
 def _overall_severity(
@@ -336,6 +434,7 @@ def _build_window_conclusion(
     primary_code: str | None,
     data_currentness: DataCurrentnessLevel,
     data_age_text: str,
+    knowledge_artifact: KnowledgeStepArtifact,
 ) -> str:
     if not rows:
         return "本次报告缺少可解析运行样本，不能判断设备当前或采样窗口内状态。"
@@ -353,14 +452,16 @@ def _build_window_conclusion(
     if load_max is not None and load_max >= LOAD_WARNING:
         metric_parts.append(f"负载率最高 {_format_float(load_max)}%")
     metric_text = "，且" + "、".join(metric_parts) if metric_parts else ""
+    knowledge_summaries = _knowledge_action_summaries(knowledge_artifact, [primary_code] if primary_code else [])
+    knowledge_text = f" 手册要点：{_truncate(knowledge_summaries[0], 64)}。" if knowledge_summaries else ""
     stale_tail = (
         f"；但由于最新样本已滞后约 {data_age_text}，不能直接判断设备当前仍处于异常状态。"
         if _is_stale_data(data_currentness)
         else "。"
     )
     return _truncate(
-        f"采样窗口内，{asset}{code_text}{metric_text}，需要确认参数/单位制、运行模式和反馈链路{stale_tail}",
-        140,
+        f"采样窗口内，{asset}{code_text}{metric_text}。{knowledge_text}需要确认参数/单位制、运行模式和反馈链路{stale_tail}",
+        190,
     )
 
 
@@ -379,6 +480,16 @@ def _build_kpi_cards(rows: list[dict[str, object]]) -> list[ReportKpiCard]:
     primary_code = next(iter(counts.keys()), "")
     speed_error = _speed_deviation_percent(latest)
     speed_error_max = max(_speed_deviation_values(rows), default=None)
+    speed_latest_severity = _high_threshold_severity(
+        speed_error,
+        SPEED_ERROR_WARNING_PERCENT,
+        SPEED_ERROR_CRITICAL_PERCENT,
+    )
+    speed_window_severity = _high_threshold_severity(
+        speed_error_max,
+        SPEED_ERROR_WARNING_PERCENT,
+        SPEED_ERROR_CRITICAL_PERCENT,
+    )
     max_load = _metric_max(rows, "inverter_load_rate", "motor_load_rate")
     latest_load = max(
         value for value in (
@@ -392,15 +503,18 @@ def _build_kpi_cards(rows: list[dict[str, object]]) -> list[ReportKpiCard]:
     latest_inverter_temp = _to_float(latest.get("inverter_temp"))
     max_inverter_temp = _metric_max(rows, "inverter_temp", "inverter_radiator_temp")
     dc_voltage = _to_float(latest.get("dc_voltage"))
+    dc_voltage_values = _metric_values(rows, "dc_voltage")
+    dc_voltage_min = min(dc_voltage_values) if dc_voltage_values else None
+    dc_voltage_max = max(dc_voltage_values) if dc_voltage_values else None
     cards = [
         ReportKpiCard(
             name="事件码",
             value=(
                 f"{primary_code}，{counts[primary_code]}/{len(rows)} 持续"
                 if primary_code
-                else "无有效事件码/故障码"
+                else "无有效事件码/故障码；告警码：无有效告警码"
             ),
-            latest_value=primary_code or "无",
+            latest_value=primary_code or "无有效告警码",
             window_max=f"{counts[primary_code]}/{len(rows)}" if primary_code else "0",
             reference="持续出现" if primary_code and counts[primary_code] == len(rows) else "样本窗口统计",
             judgement="需核对事件含义、参数变更记录和现场模式" if primary_code else "未触发事件码风险",
@@ -417,15 +531,20 @@ def _build_kpi_cards(rows: list[dict[str, object]]) -> list[ReportKpiCard]:
         ReportKpiCard(
             name="速度偏差率",
             value=(
-                f"最新 {_format_float(speed_error)}%，窗口最大 {_format_float(speed_error_max)}%"
+                f"最新 {_format_float(speed_error)}%（{_severity_short_label(speed_latest_severity)}），"
+                f"窗口最大 {_format_float(speed_error_max)}%（{_severity_short_label(speed_window_severity)}）"
                 if speed_error is not None and speed_error_max is not None
                 else "缺少速度给定/反馈"
             ),
             latest_value=f"{_format_float(speed_error)}%" if speed_error is not None else None,
             window_max=f"{_format_float(speed_error_max)}%" if speed_error_max is not None else None,
             reference=f"关注 ≥{_format_float(SPEED_ERROR_WARNING_PERCENT)}%，高危 ≥{_format_float(SPEED_ERROR_CRITICAL_PERCENT)}%",
-            judgement=_high_threshold_judgement(speed_error_max, SPEED_ERROR_WARNING_PERCENT, SPEED_ERROR_CRITICAL_PERCENT, "%"),
-            severity=_high_threshold_severity(speed_error_max, SPEED_ERROR_WARNING_PERCENT, SPEED_ERROR_CRITICAL_PERCENT),
+            judgement=(
+                f"最新值等级 {_severity_short_label(speed_latest_severity)}；"
+                f"窗口峰值等级 {_severity_short_label(speed_window_severity)}。"
+                f"{_high_threshold_judgement(speed_error_max, SPEED_ERROR_WARNING_PERCENT, SPEED_ERROR_CRITICAL_PERCENT, '%')}"
+            ),
+            severity=speed_window_severity,
             evidence_source="speed_setpoint / speed_actual / speed_error_rate",
             evidence_id="E2",
         ),
@@ -468,9 +587,13 @@ def _build_kpi_cards(rows: list[dict[str, object]]) -> list[ReportKpiCard]:
         ),
         ReportKpiCard(
             name="母线电压",
-            value=f"{_format_float(dc_voltage)}V" if dc_voltage is not None else "缺少母线电压",
+            value=(
+                f"最新 {_format_float(dc_voltage)}V，窗口范围 {_format_float(dc_voltage_min)}-{_format_float(dc_voltage_max)}V"
+                if dc_voltage is not None and dc_voltage_min is not None and dc_voltage_max is not None
+                else "缺少母线电压"
+            ),
             latest_value=f"{_format_float(dc_voltage)}V" if dc_voltage is not None else None,
-            window_max=None,
+            window_max=f"{_format_float(dc_voltage_min)}-{_format_float(dc_voltage_max)}V" if dc_voltage_min is not None and dc_voltage_max is not None else None,
             reference=f"默认参考 {_format_float(DC_VOLTAGE_LOWER)}-{_format_float(DC_VOLTAGE_UPPER)}V",
             judgement="处于默认参考范围" if _voltage_severity(dc_voltage) == ReportSeverity.NORMAL else "超出默认参考范围或缺少数据",
             severity=_voltage_severity(dc_voltage),
@@ -505,14 +628,26 @@ def _build_findings(
     findings: list[ReportFinding] = []
     if counts:
         code, count = next(iter(counts.items()))
+        knowledge_summaries = _knowledge_action_summaries(knowledge_artifact, [code])
+        knowledge_summary = knowledge_summaries[0] if knowledge_summaries else ""
         findings.append(
             ReportFinding(
                 finding_id="F1",
-                title=f"{code} 在 {count}/{len(rows)} 条记录中出现",
+                title=(
+                    f"{code} 手册释义与采样持续性"
+                    if knowledge_summary
+                    else f"{code} 在 {count}/{len(rows)} 条记录中出现"
+                ),
                 severity=ReportSeverity.HIGH if code.upper().startswith("F") else ReportSeverity.WARNING,
                 evidence_summary=f"{REAL_DATA_LATEST_TABLE} + {'知识库' if knowledge_artifact.success else 'SQL 结果'}",
                 impact="需确认事件含义、触发条件和是否影响运行",
-                engineering_meaning="参数/单位制/功能块激活相关事件需确认" if code.upper().startswith("A") else "故障码触发条件需按手册确认",
+                engineering_meaning=(
+                    knowledge_summary
+                    if knowledge_summary
+                    else "参数/单位制/功能块激活相关事件需确认"
+                    if code.upper().startswith("A")
+                    else "故障码触发条件需按手册确认"
+                ),
                 supporting_evidence=f"{REAL_DATA_LATEST_TABLE}、知识库 {code}" if knowledge_artifact.success else REAL_DATA_LATEST_TABLE,
                 missing_evidence="参数变更记录、现场运行模式、复测结果",
                 confidence="高" if count == len(rows) else "中",
@@ -909,8 +1044,8 @@ def build_operation_diagnosis_report(
     analysis_artifact: AnalysisStepArtifact,
     workorder_suggestion: WorkOrderSuggestion | None,
 ) -> OperationDiagnosisReport:
-    devices = _unique_non_empty(rows, "device_name")
-    asset = request.equipment_hint or ", ".join(devices) or str(status_summary.get("device") or "DCMA 系统")
+    asset = _report_asset_label(request, rows, status_summary, sql_statement)
+    unfiltered_window = not _sql_has_device_filter(sql_statement)
     data_window = (
         f"{data_quality.get('oldest_sample_time', '-')} ~ {data_quality.get('latest_sample_time', '-')}"
         if rows
@@ -953,7 +1088,18 @@ def build_operation_diagnosis_report(
         primary_code=primary_code,
         data_currentness=currentness_level,
         data_age_text=data_age_text,
+        knowledge_artifact=knowledge_artifact,
     )
+    limitations = [
+        "本报告基于本次采样窗口、知识库和确定性规则生成，仅用于辅助诊断。",
+        "由于最新样本已滞后，结论不能直接等同于当前实时状态。",
+        "涉及停机、复位、参数恢复等动作，必须由有权限人员按现场规程确认。",
+    ]
+    if unfiltered_window:
+        limitations.insert(
+            1,
+            f"本报告 SQL 未限定单设备，报告对象为 {REAL_DATA_LATEST_TABLE} 最新采样窗口；覆盖设备：{_covered_devices_text(rows)}。",
+        )
     return OperationDiagnosisReport(
         title=title,
         report_time=report_time,
@@ -967,7 +1113,7 @@ def build_operation_diagnosis_report(
         data_currentness_level=currentness_level,
         data_currentness_label=_DATA_CURRENTNESS_LABELS[currentness_level],
         asset_risk_level=severity,
-        asset_risk_label=severity_label,
+        asset_risk_label=_risk_label(severity, currentness_level),
         action_priority=action_priority,
         action_priority_label=action_priority_label,
         confidence_level=_confidence(severity, data_quality, knowledge_artifact, analysis_artifact),
@@ -983,10 +1129,6 @@ def build_operation_diagnosis_report(
         action_plan=action_plan,
         workorder_suggestion=_workorder_suggestion(severity, rows, workorder_suggestion),
         evidence_summary=_evidence_summary(rows, data_quality, knowledge_artifact, analysis_artifact),
-        limitations=[
-            "本报告基于本次采样窗口、知识库和确定性规则生成，仅用于辅助诊断。",
-            "由于最新样本已滞后，结论不能直接等同于当前实时状态。",
-            "涉及停机、复位、参数恢复等动作，必须由有权限人员按现场规程确认。",
-        ],
+        limitations=limitations,
         appendix=_build_appendix(rows, sql_summary, sql_statement, knowledge_artifact, report_time),
     )
