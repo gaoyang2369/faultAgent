@@ -301,9 +301,16 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
     """Resolve policy nodes and runtime tool allowlist for a route."""
 
     policy = get_policy(route.primary_task_type)
+    node_names = set(policy.enabled_nodes)
+    node_names.update(_nodes_required_by_intents(route))
     resolved_nodes = {
-        node_name: _resolve_node(node_name, setting, route=route, needs_report=needs_report)
-        for node_name, setting in policy.enabled_nodes.items()
+        node_name: _resolve_node(
+            node_name,
+            policy.enabled_nodes.get(node_name, "conditional"),
+            route=route,
+            needs_report=needs_report,
+        )
+        for node_name in sorted(node_names)
     }
     return WorkflowPlan(
         route=route,
@@ -317,8 +324,38 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
                 for item in route.subgoals
                 if item.status == "blocked"
             ],
+            "intent_stack": list(route.intent_stack),
+            "candidate_task_types": [item.value for item in route.candidate_task_types],
         },
     )
+
+
+def _nodes_required_by_intents(route: TaskRoute) -> set[str]:
+    intents = set(route.intent_stack)
+    nodes: set[str] = {"analysis"}
+    if "explain_alarm_code" in intents:
+        nodes.add("knowledge")
+    if "check_current_status" in intents:
+        nodes.add("sql")
+    if intents.intersection({"fault_impact", "severity_assessment"}):
+        nodes.update({"sql", "knowledge", "analysis"})
+    if "resolution_recommendation" in intents:
+        nodes.update({"knowledge", "analysis", "resolution_recommendation"})
+    if "report_generation" in intents:
+        nodes.add("report")
+    if "action_request" in intents:
+        nodes.update(
+            {
+                "permission_check",
+                "risk_check",
+                "sql",
+                "knowledge",
+                "analysis",
+                "resolution_recommendation",
+                "audit_log",
+            }
+        )
+    return nodes
 
 
 def _resolve_node(
@@ -332,6 +369,13 @@ def _resolve_node(
         return setting
     flags = route.flags
     if node_name == "sql":
+        if "check_current_status" in route.intent_stack and not route.has_device_context():
+            return False
+        if (
+            set(route.intent_stack).intersection({"fault_impact", "severity_assessment"})
+            and route.has_device_context()
+        ):
+            return True
         if route.primary_task_type in {TaskType.ALARM_TRIAGE, TaskType.KNOWLEDGE_QA}:
             return bool(route.has_device_context() and flags.get("need_sql"))
         if route.primary_task_type == TaskType.REPORT_GENERATION:
@@ -342,7 +386,12 @@ def _resolve_node(
             or route.primary_task_type == TaskType.ACTION_REQUEST
         )
     if node_name == "knowledge":
-        return bool(flags.get("need_knowledge") or route.objects.alarm_codes or flags.get("need_resolution"))
+        return bool(
+            flags.get("need_knowledge")
+            or route.objects.alarm_codes
+            or flags.get("need_resolution")
+            or "explain_alarm_code" in route.intent_stack
+        )
     if node_name == "resolution_recommendation":
         return bool(flags.get("need_resolution") or flags.get("need_analysis"))
     if node_name == "workorder_decision":

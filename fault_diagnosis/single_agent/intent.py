@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from ..diagnosis.contracts import DiagnosisRequest
+from .context import ConversationDiagnosisState
 from .contracts import SingleAgentDecision
 from .workflow import build_workflow_plan, route_task
 
@@ -200,6 +201,7 @@ def decide_capabilities(
     request: DiagnosisRequest,
     message: str,
     report_from_previous_artifact: bool,
+    conversation_state: ConversationDiagnosisState | None = None,
 ) -> SingleAgentDecision:
     normalized = (request.user_message or message or "").strip()
     payload_sql = payload.get("needs_sql")
@@ -230,6 +232,10 @@ def decide_capabilities(
             needs_report=True,
             report_from_previous_artifact=True,
             primary_task_type=route.primary_task_type.value,
+            candidate_task_types=[item.value for item in route.candidate_task_types],
+            intent_stack=route.intent_stack,
+            context_resolution=route.context_resolution,
+            active_case_id=conversation_state.active_case_id if conversation_state else None,
             route_confidence=route.route_confidence,
             user_goal=route.user_goal,
             objects=route.objects.model_dump(exclude_none=True),
@@ -256,12 +262,18 @@ def decide_capabilities(
     ]
     if plan.metadata.get("blocked_subgoals"):
         reason_parts.append("存在可继续但需披露的 blocked subgoal")
+    if route.intent_stack:
+        reason_parts.append(f"意图栈 {', '.join(route.intent_stack)}")
     return SingleAgentDecision(
         needs_sql=needs_sql,
         needs_knowledge=needs_knowledge,
         needs_report=needs_report,
         report_from_previous_artifact=False,
         primary_task_type=route.primary_task_type.value,
+        candidate_task_types=[item.value for item in route.candidate_task_types],
+        intent_stack=route.intent_stack,
+        context_resolution=route.context_resolution,
+        active_case_id=conversation_state.active_case_id if conversation_state else None,
         route_confidence=route.route_confidence,
         user_goal=route.user_goal,
         objects=route.objects.model_dump(exclude_none=True),

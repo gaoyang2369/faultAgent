@@ -31,6 +31,7 @@ from ..diagnosis.steps import (
 from ..diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from ..security.sql_acl import apply_sql_acl
 from .artifacts import build_diagnosis_artifact_envelope
+from .context import apply_context_resolution, load_conversation_diagnosis_state
 from .contracts import SingleAgentDecision
 from .errors import SingleAgentExecutionError
 from .intent import (
@@ -63,9 +64,13 @@ class SingleAgentStagesMixin:
     """Stage-level behavior split out from the public runner facade."""
 
     async def understand_request(self) -> tuple[DiagnosisRequest, SingleAgentDecision]:
+        conversation_state = load_conversation_diagnosis_state(self.thread_id)
         report_from_previous_artifact = (
             looks_like_report_handoff(self.message)
-            and get_thread_artifact(self.thread_id) is not None
+            and (
+                get_thread_artifact(self.thread_id) is not None
+                or bool(conversation_state.active_case and conversation_state.active_case.last_evidence_bundle_id)
+            )
         )
         if report_from_previous_artifact:
             payload = fallback_understanding_payload(self.message, self.user_identity)
@@ -85,6 +90,11 @@ class SingleAgentStagesMixin:
                 )
                 payload = fallback_understanding_payload(self.message, self.user_identity)
         payload["equipment_hint"] = normalize_equipment_hint(payload.get("equipment_hint"))
+        apply_context_resolution(
+            payload=payload,
+            message=self.message,
+            state=conversation_state,
+        )
 
         request = build_request_from_payload(
             self.message,
@@ -98,6 +108,7 @@ class SingleAgentStagesMixin:
             request=request,
             message=self.message,
             report_from_previous_artifact=report_from_previous_artifact,
+            conversation_state=conversation_state,
         )
         self.trace.add_event(
             "decision",
@@ -612,6 +623,22 @@ class SingleAgentStagesMixin:
                 "Agent 不直接执行设备控制、配置修改、告警关闭或工单派发，"
                 "只能提供草稿、审批提示或人工确认建议。"
             )
+        if len(decision.intent_stack) > 1 or decision.flags.get("safe_union_workflow"):
+            goal_labels = {
+                "explain_alarm_code": "解释故障码",
+                "check_current_status": "核查当前状态",
+                "fault_impact": "评估影响范围",
+                "severity_assessment": "评估严重程度",
+                "resolution_recommendation": "给出处置建议",
+                "report_generation": "生成报告",
+                "action_request": "动作请求保护",
+                "fault_diagnosis": "故障诊断",
+            }
+            adopted_goals = [
+                goal_labels.get(intent, intent)
+                for intent in decision.intent_stack
+            ]
+            prefixes.append(f"【子目标】本轮按安全并集处理：{'、'.join(adopted_goals)}。")
         blocked_subgoals = [
             item for item in decision.subgoals if item.get("status") == "blocked" and item.get("missing_slots")
         ]

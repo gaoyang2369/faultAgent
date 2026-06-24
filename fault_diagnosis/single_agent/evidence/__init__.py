@@ -42,6 +42,10 @@ def initialize_evidence_bundle(
     task = {
         "task_type": decision.primary_task_type or "fault_diagnosis",
         "primary_task_type": decision.primary_task_type or "fault_diagnosis",
+        "candidate_task_types": decision.candidate_task_types,
+        "intent_stack": decision.intent_stack,
+        "context_resolution": decision.context_resolution,
+        "active_case_id": decision.active_case_id,
         "workflow_id": workflow_id,
         "workflow_version": workflow_version,
         "policy_id": workflow_policy.get("policy_id"),

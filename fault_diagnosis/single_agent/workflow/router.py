@@ -38,6 +38,7 @@ _FAULT_DIAGNOSIS_KEYWORDS = ("为什么", "原因", "诊断", "异常", "故障"
 _STATUS_KEYWORDS = ("现在", "当前", "多少", "是否在线", "状态", "运行情况", "在线", "离线")
 _RESOLUTION_KEYWORDS = ("怎么处理", "如何处理", "解决", "处置", "建议", "排查", "维修")
 _CURRENT_STATUS_KEYWORDS = ("现在", "当前", "还在", "是否", "状态", "在线", "active")
+_SEVERITY_KEYWORDS = ("严重", "严不严重", "风险", "影响", "危险", "要不要停机", "要不要派人")
 
 _METRIC_KEYWORDS = {
     "温度": ("温度", "高温", "过热"),
@@ -61,14 +62,20 @@ def route_task(
     objects = _extract_objects(payload, normalized)
     task_type, confidence = _classify_task(normalized, objects, report_from_previous_artifact)
     requested_output = _requested_output(task_type, normalized)
+    intent_stack = _intent_stack(task_type, normalized, objects, requested_output, report_from_previous_artifact)
+    candidate_task_types = _candidate_task_types(task_type, intent_stack)
     time_window = _time_window(task_type, payload, normalized)
     flags = _flags_for_task(task_type, normalized, objects, requested_output, report_from_previous_artifact)
+    _apply_intent_flags(flags, intent_stack, objects)
     missing_slots = _missing_slots(task_type, objects, time_window, normalized)
     subgoals = _subgoals(task_type, objects, flags, missing_slots)
     action_type = _action_type(normalized) if task_type == TaskType.ACTION_REQUEST else None
 
     return TaskRoute(
         primary_task_type=task_type,
+        candidate_task_types=candidate_task_types,
+        intent_stack=intent_stack,
+        context_resolution=dict(payload.get("context_resolution") or {}),
         route_confidence=confidence,
         user_goal=str(payload.get("analysis_goal") or normalized or task_type.value),
         objects=objects,
@@ -101,6 +108,8 @@ def _classify_task(
     has_alarm = bool(objects.alarm_codes) or _has_any(compact, _ALARM_KEYWORDS)
     if has_alarm and _has_any(compact, _TRIAGE_KEYWORDS):
         return TaskType.ALARM_TRIAGE, 0.88
+    if _has_any(compact, _SEVERITY_KEYWORDS):
+        return TaskType.HEALTH_ASSESSMENT, 0.74
     if _has_any(compact, _KNOWLEDGE_KEYWORDS) and not _has_any(compact, _CURRENT_STATUS_KEYWORDS):
         return TaskType.KNOWLEDGE_QA, 0.84
     if has_alarm and not objects.device_ids:
@@ -110,6 +119,88 @@ def _classify_task(
     if _has_any(compact, _STATUS_KEYWORDS):
         return TaskType.STATUS_QUERY, 0.78
     return TaskType.STATUS_QUERY, 0.58
+
+
+def _intent_stack(
+    task_type: TaskType,
+    text: str,
+    objects: WorkflowObjects,
+    requested_output: str,
+    report_from_previous_artifact: bool,
+) -> list[str]:
+    compact = text.replace(" ", "").lower()
+    if report_from_previous_artifact:
+        return ["report_generation"]
+    intents: list[str] = []
+    has_alarm = bool(objects.alarm_codes) or _has_any(compact, _ALARM_KEYWORDS)
+    if task_type == TaskType.ACTION_REQUEST:
+        intents.append("action_request")
+    if requested_output == "report" or report_from_previous_artifact:
+        intents.append("report_generation")
+    if has_alarm and (_has_any(compact, _KNOWLEDGE_KEYWORDS + _ALARM_KEYWORDS) or objects.alarm_codes):
+        intents.append("explain_alarm_code")
+    if _has_any(compact, _CURRENT_STATUS_KEYWORDS) or task_type == TaskType.STATUS_QUERY:
+        intents.append("check_current_status")
+    if _has_any(compact, ("影响", "范围", "后果")):
+        intents.append("fault_impact")
+    if _has_any(compact, _SEVERITY_KEYWORDS):
+        intents.append("severity_assessment")
+    if _has_any(compact, _RESOLUTION_KEYWORDS):
+        intents.append("resolution_recommendation")
+    if (
+        task_type in {TaskType.FAULT_DIAGNOSIS, TaskType.ROOT_CAUSE_ANALYSIS}
+        or _has_any(compact, _FAULT_DIAGNOSIS_KEYWORDS)
+    ):
+        intents.append("fault_diagnosis")
+    if not intents:
+        intents.append("check_current_status")
+    return _dedupe(intents)
+
+
+def _candidate_task_types(primary: TaskType, intent_stack: list[str]) -> list[TaskType]:
+    candidates = [primary]
+    intent_map: dict[str, list[TaskType]] = {
+        "explain_alarm_code": [TaskType.KNOWLEDGE_QA, TaskType.ALARM_TRIAGE],
+        "check_current_status": [TaskType.STATUS_QUERY],
+        "fault_impact": [TaskType.FAULT_DIAGNOSIS, TaskType.HEALTH_ASSESSMENT],
+        "severity_assessment": [TaskType.HEALTH_ASSESSMENT, TaskType.ALARM_TRIAGE],
+        "resolution_recommendation": [TaskType.KNOWLEDGE_QA, TaskType.FAULT_DIAGNOSIS],
+        "report_generation": [TaskType.REPORT_GENERATION],
+        "action_request": [TaskType.ACTION_REQUEST],
+        "fault_diagnosis": [TaskType.FAULT_DIAGNOSIS],
+    }
+    for intent in intent_stack:
+        candidates.extend(intent_map.get(intent, []))
+    return list(dict.fromkeys(candidates))
+
+
+def _apply_intent_flags(flags: dict[str, bool], intent_stack: list[str], objects: WorkflowObjects) -> None:
+    intents = set(intent_stack)
+    if "explain_alarm_code" in intents:
+        flags["need_knowledge"] = True
+    if "check_current_status" in intents and objects.device_ids:
+        flags["need_sql"] = True
+    if intents.intersection({"fault_impact", "severity_assessment"}):
+        flags["need_analysis"] = True
+        flags["need_knowledge"] = True
+        if objects.device_ids:
+            flags["need_sql"] = True
+    if "resolution_recommendation" in intents:
+        flags["need_knowledge"] = True
+        flags["need_analysis"] = True
+        flags["need_resolution"] = True
+    if "report_generation" in intents:
+        flags["need_report"] = True
+    if "action_request" in intents:
+        flags.update(
+            need_sql=True,
+            need_knowledge=True,
+            need_analysis=True,
+            need_resolution=True,
+            may_involve_write_action=True,
+        )
+    if len(intents) > 1:
+        flags["safe_union_workflow"] = True
 
 
 def _extract_objects(payload: dict[str, Any], text: str) -> WorkflowObjects:

@@ -60,6 +60,9 @@ class TaskRoute(BaseModel):
     """Structured output of the intent router."""
 
     primary_task_type: TaskType = TaskType.FAULT_DIAGNOSIS
+    candidate_task_types: list[TaskType] = Field(default_factory=list)
+    intent_stack: list[str] = Field(default_factory=list)
+    context_resolution: dict[str, Any] = Field(default_factory=dict)
     route_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
     user_goal: str = ""
     objects: WorkflowObjects = Field(default_factory=WorkflowObjects)

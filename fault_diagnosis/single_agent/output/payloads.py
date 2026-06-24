@@ -79,6 +79,10 @@ def build_report_handoff_complete_payload(
         "todos": todos,
         "workflow_route": {
             "primary_task_type": decision.primary_task_type,
+            "candidate_task_types": decision.candidate_task_types,
+            "intent_stack": decision.intent_stack,
+            "context_resolution": decision.context_resolution,
+            "active_case_id": decision.active_case_id,
             "subgoals": decision.subgoals,
             "missing_slots": decision.missing_slots,
         },
@@ -144,6 +148,10 @@ def build_diagnosis_complete_payload(
         ),
         "workflow_route": {
             "primary_task_type": decision.primary_task_type,
+            "candidate_task_types": decision.candidate_task_types,
+            "intent_stack": decision.intent_stack,
+            "context_resolution": decision.context_resolution,
+            "active_case_id": decision.active_case_id,
             "route_confidence": decision.route_confidence,
             "objects": decision.objects,
             "time_window": decision.time_window,

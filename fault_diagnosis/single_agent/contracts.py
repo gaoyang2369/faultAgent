@@ -31,6 +31,10 @@ class SingleAgentDecision(BaseModel):
     needs_report: bool = False
     report_from_previous_artifact: bool = False
     primary_task_type: str = "fault_diagnosis"
+    candidate_task_types: list[str] = Field(default_factory=list)
+    intent_stack: list[str] = Field(default_factory=list)
+    context_resolution: dict[str, Any] = Field(default_factory=dict)
+    active_case_id: str | None = None
     route_confidence: float = 0.0
     user_goal: str = ""
     objects: dict[str, Any] = Field(default_factory=dict)

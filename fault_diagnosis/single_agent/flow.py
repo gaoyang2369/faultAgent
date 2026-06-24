@@ -203,6 +203,10 @@ class SingleAgentFlowMixin:
                 "workflow_route",
                 {
                     "primary_task_type": decision.primary_task_type,
+                    "candidate_task_types": decision.candidate_task_types,
+                    "intent_stack": decision.intent_stack,
+                    "context_resolution": decision.context_resolution,
+                    "active_case_id": decision.active_case_id,
                     "route_confidence": decision.route_confidence,
                     "user_goal": decision.user_goal,
                     "objects": decision.objects,

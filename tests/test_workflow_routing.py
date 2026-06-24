@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from fault_diagnosis.diagnosis.contracts import DiagnosisRequest
+from fault_diagnosis.single_agent.context import (
+    ConversationDiagnosisState,
+    DiagnosisCase,
+    apply_context_resolution,
+)
 from fault_diagnosis.single_agent.intent import decide_capabilities, fallback_understanding_payload
 from fault_diagnosis.single_agent.workflow import TaskType, route_task
 
@@ -99,3 +104,117 @@ def test_device_running_report_collects_fresh_sql_evidence() -> None:
     assert decision.needs_sql is True
     assert decision.enabled_nodes["sql"] is True
     assert "sql_db_query" in decision.runtime_tools
+
+
+def _state(
+    *,
+    asset: str | None = None,
+    fault_codes: list[str] | None = None,
+    evidence_bundle_id: str | None = None,
+    report_url: str | None = None,
+) -> ConversationDiagnosisState:
+    case = DiagnosisCase(
+        case_id=evidence_bundle_id or "case.test",
+        thread_id="thread.test",
+        active_asset=asset,
+        active_fault_codes=fault_codes or [],
+        last_evidence_bundle_id=evidence_bundle_id,
+        last_report_url=report_url,
+    )
+    return ConversationDiagnosisState(thread_id="thread.test", active_case_id=case.case_id, cases=[case])
+
+
+def _decision_with_state(message: str, state: ConversationDiagnosisState):
+    payload = fallback_understanding_payload(message, "维修员")
+    apply_context_resolution(payload=payload, message=message, state=state)
+    request = _request(message, payload)
+    return decide_capabilities(
+        payload=payload,
+        request=request,
+        message=message,
+        report_from_previous_artifact=False,
+        conversation_state=state,
+    )
+
+
+def test_context_reuses_previous_j1_for_pronoun_severity_question() -> None:
+    decision = _decision_with_state("它严重吗", _state(asset="J1"))
+
+    assert decision.objects["device_ids"] == ["J1"]
+    assert decision.context_resolution["used_active_asset"] is True
+    assert "severity_assessment" in decision.intent_stack
+    assert decision.needs_sql is True
+    assert decision.needs_knowledge is True
+
+
+def test_context_reuses_previous_fault_code_for_resolution_question() -> None:
+    decision = _decision_with_state("怎么处理", _state(fault_codes=["A07089"]))
+
+    assert decision.objects["alarm_codes"] == ["A07089"]
+    assert decision.context_resolution["used_active_fault_codes"] is True
+    assert "resolution_recommendation" in decision.intent_stack
+    assert decision.needs_knowledge is True
+
+
+def test_composite_alarm_question_builds_intent_stack_and_safe_union() -> None:
+    message = "A07089 是什么，现在设备有故障吗，怎么解决"
+    payload = fallback_understanding_payload(message, "维修员")
+    decision = decide_capabilities(
+        payload=payload,
+        request=_request(message, payload),
+        message=message,
+        report_from_previous_artifact=False,
+    )
+
+    assert decision.primary_task_type == "alarm_triage"
+    assert decision.candidate_task_types
+    assert "explain_alarm_code" in decision.intent_stack
+    assert "check_current_status" in decision.intent_stack
+    assert "resolution_recommendation" in decision.intent_stack
+    assert decision.flags["safe_union_workflow"] is True
+    assert decision.needs_knowledge is True
+
+
+def test_report_handoff_uses_previous_evidence_bundle_context() -> None:
+    state = _state(asset="J1", fault_codes=["A07089"], evidence_bundle_id="eb_trace")
+    message = "基于刚才结果生成报告"
+    payload = fallback_understanding_payload(message, "维修员")
+    apply_context_resolution(payload=payload, message=message, state=state)
+    decision = decide_capabilities(
+        payload=payload,
+        request=_request(message, payload),
+        message=message,
+        report_from_previous_artifact=True,
+        conversation_state=state,
+    )
+
+    assert decision.primary_task_type == "report_generation"
+    assert decision.report_from_previous_artifact is True
+    assert decision.context_resolution["last_evidence_bundle_id"] == "eb_trace"
+    assert decision.active_case_id == "eb_trace"
+    assert "report_generation" in decision.intent_stack
+
+
+def test_switch_to_j2_overrides_previous_active_asset() -> None:
+    decision = _decision_with_state("换 J2 看一下", _state(asset="J1"))
+
+    assert decision.objects["device_ids"] == ["J2"]
+    assert decision.context_resolution["source"] == "current_message"
+    assert decision.context_resolution["used_active_asset"] is False
+    assert "check_current_status" in decision.intent_stack
+    assert decision.needs_sql is True
+
+
+def test_pronoun_with_multiple_candidate_assets_requests_clarification() -> None:
+    cases = [
+        DiagnosisCase(case_id="case.j1", thread_id="thread.test", active_asset="J1"),
+        DiagnosisCase(case_id="case.j2", thread_id="thread.test", active_asset="J2"),
+    ]
+    state = ConversationDiagnosisState(thread_id="thread.test", active_case_id="case.j1", cases=cases)
+    payload = fallback_understanding_payload("它严重吗", "维修员")
+
+    resolution = apply_context_resolution(payload=payload, message="它严重吗", state=state)
+
+    assert payload["equipment_hint"] is None
+    assert resolution["source"] == "ambiguous"
+    assert resolution["unresolved_questions"]
