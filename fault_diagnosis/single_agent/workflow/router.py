@@ -24,12 +24,29 @@ _ACTION_KEYWORDS = (
     "关闭告警",
     "屏蔽告警",
     "确认创建工单",
+    "创建工单草稿",
+    "生成工单草稿",
     "确认派发",
     "派发工单",
+    "直接派发",
+    "下发工单",
     "下发",
     "执行",
 )
-_WORKORDER_KEYWORDS = ("创建工单", "生成工单", "派人", "派单", "维修单", "巡检")
+_WORKORDER_KEYWORDS = ("创建工单", "生成工单", "派人", "派单", "维修单", "巡检", "工单")
+_WORKORDER_DECISION_KEYWORDS = (
+    "要不要生成工单",
+    "是否生成工单",
+    "是不是要生成工单",
+    "要不要工单",
+    "是否需要工单",
+    "应不应该派单",
+    "要不要派单",
+    "是否派人处理",
+    "要不要派人",
+)
+_CREATE_WORKORDER_DRAFT_KEYWORDS = ("生成工单草稿", "创建工单草稿", "待确认工单草稿", "工单草稿")
+_DISPATCH_WORKORDER_KEYWORDS = ("直接派发", "派给维修", "下发工单", "派发工单", "确认派发", "派单")
 _HEALTH_KEYWORDS = ("健康", "风险", "劣化", "趋势", "预测", "评分", "寿命")
 _ALARM_KEYWORDS = ("故障码", "告警码", "报警码", "告警", "报警", "异常码")
 _TRIAGE_KEYWORDS = ("现在", "当前", "是否故障", "还在", "严重", "怎么处理", "如何处理", "解决", "要不要派人")
@@ -76,6 +93,7 @@ def route_task(
         candidate_task_types=candidate_task_types,
         intent_stack=intent_stack,
         context_resolution=dict(payload.get("context_resolution") or {}),
+        action_target=_action_target(intent_stack),
         route_confidence=confidence,
         user_goal=str(payload.get("analysis_goal") or normalized or task_type.value),
         objects=objects,
@@ -106,6 +124,8 @@ def _classify_task(
     if _has_any(compact, _HEALTH_KEYWORDS):
         return TaskType.HEALTH_ASSESSMENT, 0.86
     has_alarm = bool(objects.alarm_codes) or _has_any(compact, _ALARM_KEYWORDS)
+    if _has_any(compact, _WORKORDER_DECISION_KEYWORDS):
+        return TaskType.FAULT_DIAGNOSIS, 0.72
     if has_alarm and _has_any(compact, _TRIAGE_KEYWORDS):
         return TaskType.ALARM_TRIAGE, 0.88
     if _has_any(compact, _SEVERITY_KEYWORDS):
@@ -135,6 +155,12 @@ def _intent_stack(
     has_alarm = bool(objects.alarm_codes) or _has_any(compact, _ALARM_KEYWORDS)
     if task_type == TaskType.ACTION_REQUEST:
         intents.append("action_request")
+    if _has_any(compact, _DISPATCH_WORKORDER_KEYWORDS):
+        intents.append("dispatch_workorder")
+    elif _has_any(compact, _CREATE_WORKORDER_DRAFT_KEYWORDS):
+        intents.append("create_workorder_draft")
+    elif _has_any(compact, _WORKORDER_DECISION_KEYWORDS):
+        intents.append("workorder_decision")
     if requested_output == "report" or report_from_previous_artifact:
         intents.append("report_generation")
     if has_alarm and (_has_any(compact, _KNOWLEDGE_KEYWORDS + _ALARM_KEYWORDS) or objects.alarm_codes):
@@ -167,6 +193,9 @@ def _candidate_task_types(primary: TaskType, intent_stack: list[str]) -> list[Ta
         "resolution_recommendation": [TaskType.KNOWLEDGE_QA, TaskType.FAULT_DIAGNOSIS],
         "report_generation": [TaskType.REPORT_GENERATION],
         "action_request": [TaskType.ACTION_REQUEST],
+        "workorder_decision": [TaskType.FAULT_DIAGNOSIS],
+        "create_workorder_draft": [TaskType.ACTION_REQUEST],
+        "dispatch_workorder": [TaskType.ACTION_REQUEST],
         "fault_diagnosis": [TaskType.FAULT_DIAGNOSIS],
     }
     for intent in intent_stack:
@@ -191,6 +220,22 @@ def _apply_intent_flags(flags: dict[str, bool], intent_stack: list[str], objects
         flags["need_resolution"] = True
     if "report_generation" in intents:
         flags["need_report"] = True
+    if "workorder_decision" in intents:
+        flags["need_workorder_decision"] = True
+    if "create_workorder_draft" in intents:
+        flags.update(
+            need_workorder_decision=True,
+            need_permission_check=True,
+            need_risk_check=True,
+            may_involve_write_action=True,
+        )
+    if "dispatch_workorder" in intents:
+        flags.update(
+            need_workorder_decision=True,
+            need_permission_check=True,
+            need_risk_check=True,
+            may_involve_write_action=True,
+        )
     if "action_request" in intents:
         flags.update(
             need_sql=True,
@@ -309,7 +354,13 @@ def _flags_for_task(
             need_workorder_decision=False,
         )
     elif task_type == TaskType.ACTION_REQUEST:
-        flags.update(need_sql=True, need_knowledge=True, need_resolution=True, need_workorder_decision=asks_workorder)
+        is_workorder_only = _has_any(text, _CREATE_WORKORDER_DRAFT_KEYWORDS + _DISPATCH_WORKORDER_KEYWORDS)
+        flags.update(
+            need_sql=not is_workorder_only,
+            need_knowledge=not is_workorder_only,
+            need_resolution=True,
+            need_workorder_decision=asks_workorder,
+        )
     return flags
 
 
@@ -410,7 +461,7 @@ def _requested_output(task_type: TaskType, text: str) -> str:
 def _risk_level(task_type: TaskType, text: str) -> str:
     if task_type != TaskType.ACTION_REQUEST:
         return "read_only"
-    if _has_any(text, ("重启", "停机", "修改", "改成", "关闭告警", "屏蔽告警", "下发")):
+    if _has_any(text, ("重启", "停机", "修改", "改成", "关闭告警", "屏蔽告警", "下发", "派发")):
         return "high_risk"
     return "requires_confirmation"
 
@@ -424,12 +475,20 @@ def _action_type(text: str) -> str | None:
         ("acknowledge_alarm", ("确认告警",)),
         ("close_alarm", ("关闭告警", "屏蔽告警")),
         ("create_workorder", ("创建工单", "生成工单")),
-        ("dispatch_workorder", ("派发工单", "派单")),
+        ("dispatch_workorder", ("派发工单", "派单", "直接派发")),
     ]
     for action_type, keywords in mapping:
         if _has_any(compact, keywords):
             return action_type
     return "other_write_action" if _has_any(compact, _ACTION_KEYWORDS) else None
+
+
+def _action_target(intent_stack: list[str]) -> str | None:
+    if any(intent in intent_stack for intent in ("workorder_decision", "create_workorder_draft", "dispatch_workorder")):
+        return "workorder"
+    if "action_request" in intent_stack:
+        return "device_or_configuration"
+    return None
 
 
 def _has_any(text: str, keywords: tuple[str, ...]) -> bool:

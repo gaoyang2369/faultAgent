@@ -301,6 +301,26 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
     """Resolve policy nodes and runtime tool allowlist for a route."""
 
     policy = get_policy(route.primary_task_type)
+    plan_mode_nodes = _nodes_for_plan_mode(route.plan_mode)
+    if plan_mode_nodes is not None:
+        return WorkflowPlan(
+            route=route,
+            policy=policy,
+            resolved_nodes=plan_mode_nodes,
+            runtime_tools=_runtime_tools_for_nodes(plan_mode_nodes),
+            metadata={
+                "missing_required_slots": _missing_required_slots(route, policy),
+                "blocked_subgoals": [
+                    item.model_dump(exclude_none=True)
+                    for item in route.subgoals
+                    if item.status == "blocked"
+                ],
+                "intent_stack": list(route.intent_stack),
+                "candidate_task_types": [item.value for item in route.candidate_task_types],
+                "plan_mode": route.plan_mode,
+                "evidence_mode": route.evidence_mode,
+            },
+        )
     node_names = set(policy.enabled_nodes)
     node_names.update(_nodes_required_by_intents(route))
     resolved_nodes = {
@@ -326,8 +346,42 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
             ],
             "intent_stack": list(route.intent_stack),
             "candidate_task_types": [item.value for item in route.candidate_task_types],
+            "plan_mode": route.plan_mode,
+            "evidence_mode": route.evidence_mode,
         },
     )
+
+
+def _nodes_for_plan_mode(plan_mode: str) -> dict[str, bool] | None:
+    if plan_mode == "workorder_decision_from_artifact":
+        return {
+            "permission_check": True,
+            "risk_check": True,
+            "sql": False,
+            "knowledge": False,
+            "analysis": False,
+            "resolution_recommendation": False,
+            "workorder_decision": True,
+            "report": False,
+            "evidence_validation": True,
+            "output_guardrail": True,
+            "audit_log": True,
+        }
+    if plan_mode == "status_refresh_then_workorder":
+        return {
+            "permission_check": True,
+            "risk_check": True,
+            "sql": True,
+            "knowledge": False,
+            "analysis": False,
+            "resolution_recommendation": False,
+            "workorder_decision": True,
+            "report": False,
+            "evidence_validation": True,
+            "output_guardrail": True,
+            "audit_log": True,
+        }
+    return None
 
 
 def _nodes_required_by_intents(route: TaskRoute) -> set[str]:
@@ -355,6 +409,12 @@ def _nodes_required_by_intents(route: TaskRoute) -> set[str]:
                 "audit_log",
             }
         )
+    if "workorder_decision" in intents:
+        nodes.update({"permission_check", "risk_check", "workorder_decision", "audit_log"})
+    if "create_workorder_draft" in intents:
+        nodes.update({"permission_check", "risk_check", "workorder_decision", "audit_log"})
+    if "dispatch_workorder" in intents:
+        nodes.update({"permission_check", "risk_check", "workorder_decision", "audit_log"})
     return nodes
 
 
@@ -395,7 +455,9 @@ def _resolve_node(
     if node_name == "resolution_recommendation":
         return bool(flags.get("need_resolution") or flags.get("need_analysis"))
     if node_name == "workorder_decision":
-        return bool(flags.get("need_workorder_decision") and route.has_device_context())
+        return bool(flags.get("need_workorder_decision") and (route.has_device_context() or route.referenced_artifact_id))
+    if node_name in {"permission_check", "risk_check", "audit_log"}:
+        return bool(flags.get(f"need_{node_name}") or route.action_target == "workorder")
     if node_name == "report":
         return bool(needs_report or flags.get("need_report") or route.requested_output == "report")
     if node_name == "collect_asset_context":

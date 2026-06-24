@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 from ..diagnosis.contracts import (
     AnalysisStepArtifact,
+    DiagnosisArtifactEnvelope,
     DiagnosisRequest,
     KnowledgeStepArtifact,
     SqlStepArtifact,
     WorkOrderSuggestion,
 )
+from .contracts import SingleAgentDecision
 from .reporting.defs import (
     DC_VOLTAGE_LOWER as _DC_VOLTAGE_LOWER,
     DC_VOLTAGE_UPPER as _DC_VOLTAGE_UPPER,
@@ -393,3 +397,247 @@ def build_workorder_suggestion(
         trigger_source="故障诊断 Agent",
         status="待派单",
     )
+
+
+def build_workorder_suggestion_from_artifact(
+    *,
+    envelope: DiagnosisArtifactEnvelope,
+    decision: SingleAgentDecision,
+    user_identity: str | None = None,
+) -> WorkOrderSuggestion:
+    """Build a work-order draft suggestion by reusing a previous diagnosis artifact."""
+
+    payload = envelope.payload or {}
+    context = _artifact_context(payload)
+    objects = decision.objects or {}
+    devices = _dedupe(
+        [
+            *_as_text_list((objects or {}).get("device_ids")),
+            context.get("asset"),
+            context.get("device_name"),
+            context.get("equipment_object"),
+            context.get("active_asset"),
+            (payload.get("request") or {}).get("equipment_hint") if isinstance(payload.get("request"), dict) else None,
+        ]
+    )
+    codes = _dedupe(
+        [
+            *_as_text_list((objects or {}).get("alarm_codes")),
+            *_as_text_list(context.get("active_fault_codes")),
+            *_extract_codes(str(context.get("current_event") or "")),
+            *_extract_codes(str(context.get("event_code") or "")),
+            *_extract_codes(str(context.get("fault_code") or "")),
+            *_extract_codes(" ".join(str(value) for value in context.values())),
+        ]
+    )
+    primary_code = codes[0] if codes else ""
+    active_asset = devices[0] if devices else "DCMA 系统"
+    status_level = _first_non_empty([context.get("status_level"), context.get("asset_risk_label")])
+    freshness_label = _first_non_empty([context.get("freshness_label"), context.get("data_freshness_label")])
+    currentness = _first_non_empty([context.get("currentness"), context.get("data_currentness_label"), context.get("data_currentness_level")])
+    stale = _is_stale(freshness_label, currentness)
+    key_phenomenon = _first_non_empty(
+        [
+            context.get("key_phenomenon"),
+            context.get("top_finding"),
+            context.get("abnormal_summary"),
+            context.get("one_sentence_conclusion"),
+            context.get("conclusion"),
+        ]
+    )
+    evidence_text = " ".join(
+        [
+            key_phenomenon or "",
+            status_level or "",
+            str(context.get("evidence_summary") or ""),
+            str(context.get("findings") or ""),
+            str(context.get("sql_artifact") or ""),
+            str(context.get("analysis_artifact") or ""),
+        ]
+    )
+    speed_deviation = _extract_percent(evidence_text, ("速度偏差", "速度误差"))
+    max_load = _extract_percent(evidence_text, ("负载率", "最高负载"))
+    sustained_event = bool(primary_code and any(keyword in evidence_text for keyword in ("持续", "多次", "最近", "出现")))
+    warning_status = bool(status_level and any(keyword in status_level for keyword in ("告警", "需确认", "异常", "中", "高")))
+    speed_trigger = speed_deviation is not None and speed_deviation >= _SPEED_ERROR_WARNING_PERCENT
+    load_trigger = max_load is not None and max_load >= _LOAD_WARNING
+    a_config_event = bool(re.match(r"^A\d{3,5}$", primary_code or ""))
+    need_workorder = bool(warning_status or sustained_event or speed_trigger or load_trigger or primary_code)
+    risk_level = "中" if need_workorder else "低"
+    priority = "P2" if need_workorder else "P3"
+    if a_config_event:
+        workorder_type = "参数/配置核查工单"
+    elif primary_code:
+        workorder_type = "运行异常确认工单"
+    else:
+        workorder_type = "运行异常确认工单" if need_workorder else ""
+
+    key_evidence: list[str] = []
+    if primary_code:
+        key_evidence.append(f"事件：{primary_code} 出现在上一轮诊断/报告结果中")
+    if key_phenomenon:
+        key_evidence.append(key_phenomenon)
+    if speed_deviation is not None:
+        key_evidence.append(f"速度偏差 {format_float(speed_deviation)}%")
+    if max_load is not None:
+        key_evidence.append(f"负载率最高 {format_float(max_load)}%")
+    if status_level:
+        key_evidence.append(f"状态/风险：{status_level}")
+    if stale:
+        key_evidence.append("数据已滞后 / 仅代表采样窗口，派发前需刷新当前状态或由工程师确认")
+
+    reason_parts = ["基于上一轮报告/诊断结果"]
+    if primary_code:
+        reason_parts.append(f"事件 {primary_code} 出现")
+    if speed_deviation is not None:
+        reason_parts.append(f"速度偏差 {format_float(speed_deviation)}%")
+    if max_load is not None:
+        reason_parts.append(f"负载率最高 {format_float(max_load)}%")
+    if status_level:
+        reason_parts.append(f"状态为 {status_level}")
+    if stale:
+        reason_parts.append("但数据已滞后，因此只建议生成待确认工单草稿，派发前刷新当前状态")
+    elif need_workorder:
+        reason_parts.append("建议生成待确认工单草稿，确认后再派发")
+    else:
+        reason_parts.append("暂未达到直接建议建单条件")
+
+    processing_steps = ["刷新当前状态，确认异常是否仍存在"]
+    if a_config_event:
+        processing_steps.extend(["复核单位制与功能块配置", "备份并核对相关参数变更记录"])
+    if speed_trigger:
+        processing_steps.append("复核速度设定与反馈链路")
+    if load_trigger:
+        processing_steps.append("检查负载波动、机械阻滞和制动状态")
+    processing_steps.append("由管理员或工程师确认后再派发")
+
+    title_code = primary_code or "运行异常"
+    return WorkOrderSuggestion(
+        need_workorder=need_workorder,
+        reason="；".join(reason_parts),
+        workorder_type=workorder_type,
+        priority=priority,
+        priority_label=_workorder_priority_label(risk_level),
+        risk_level=risk_level,
+        assignee_role="电气维护人员" if need_workorder else "",
+        suggested_completion_window=_workorder_completion_window(risk_level) if need_workorder else "",
+        diagnosis_conclusion=str(context.get("conclusion") or key_phenomenon or "基于上一轮结果形成工单续问判断"),
+        key_evidence=dedupe_items(key_evidence)[:6],
+        processing_steps=dedupe_items(processing_steps)[:8],
+        acceptance_criteria=[
+            f"{primary_code} 不再持续出现" if primary_code else "异常状态已复核",
+            "派发前已刷新当前状态或完成现场确认",
+        ],
+        task_mappings=[
+            {
+                "evidence": item,
+                "tasks": ["纳入待确认工单草稿", "派发前复核当前状态"],
+            }
+            for item in dedupe_items(key_evidence)[:4]
+        ],
+        equipment_object=active_asset,
+        fault_code=primary_code or None,
+        title=f"{active_asset} {title_code} 待确认工单草稿" if need_workorder else "",
+        trigger_source=f"故障诊断 Agent / artifact follow-up / {user_identity or 'unknown'}",
+        status="待确认",
+    )
+
+
+def _artifact_context(payload: dict[str, Any]) -> dict[str, Any]:
+    expanded = _expand_json_strings(payload)
+    result: dict[str, Any] = {}
+    interesting = {
+        "asset",
+        "device_name",
+        "equipment_object",
+        "active_asset",
+        "active_fault_codes",
+        "status_level",
+        "asset_risk_label",
+        "freshness_label",
+        "data_freshness_label",
+        "currentness",
+        "data_currentness_label",
+        "data_currentness_level",
+        "key_phenomenon",
+        "top_finding",
+        "abnormal_summary",
+        "one_sentence_conclusion",
+        "conclusion",
+        "evidence_summary",
+        "findings",
+        "current_event",
+        "event_code",
+        "fault_code",
+        "sql_artifact",
+        "analysis_artifact",
+    }
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, value in item.items():
+                if key in interesting and key not in result and value not in (None, "", [], {}):
+                    result[key] = value
+                if isinstance(value, (dict, list)):
+                    visit(value)
+        elif isinstance(item, list):
+            for value in item:
+                visit(value)
+
+    visit(expanded)
+    return result
+
+
+def _expand_json_strings(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _expand_json_strings(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_expand_json_strings(child) for child in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("{", "[")):
+            try:
+                return _expand_json_strings(json.loads(stripped))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return value
+    return value
+
+
+def _extract_codes(text: str) -> list[str]:
+    return [match.group(1).upper() for match in re.finditer(r"(?<![A-Z0-9])([A-Z]\d{3,5})(?![A-Z0-9])", text, re.I)]
+
+
+def _extract_percent(text: str, labels: tuple[str, ...]) -> float | None:
+    for label in labels:
+        match = re.search(rf"{re.escape(label)}[^0-9-]*(-?\d+(?:\.\d+)?)\s*%", text)
+        if match:
+            try:
+                return abs(float(match.group(1)))
+            except ValueError:
+                return None
+    return None
+
+
+def _as_text_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if value:
+        return [str(value).strip()]
+    return []
+
+
+def _dedupe(values: list[Any]) -> list[str]:
+    return list(dict.fromkeys(str(item).strip() for item in values if str(item or "").strip()))
+
+
+def _first_non_empty(values: list[Any]) -> str | None:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _is_stale(freshness_label: str | None, currentness: str | None) -> bool:
+    text = f"{freshness_label or ''} {currentness or ''}"
+    return any(keyword in text for keyword in ("已滞后", "滞后", "stale", "非实时", "不代表实时"))

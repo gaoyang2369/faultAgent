@@ -11,6 +11,7 @@ from .contracts import (
 )
 from .policies import build_workflow_plan, get_policy
 from .router import route_task
+from .evidence_gap import EvidenceGapPlan, analyze_evidence_gap
 from .todos import build_workflow_todos, summarize_workflow_todos, workflow_stage_sequence
 
 __all__ = [
@@ -22,6 +23,8 @@ __all__ = [
     "WorkflowSubgoal",
     "WorkflowTimeWindow",
     "build_workflow_plan",
+    "EvidenceGapPlan",
+    "analyze_evidence_gap",
     "get_policy",
     "route_task",
     "build_workflow_todos",

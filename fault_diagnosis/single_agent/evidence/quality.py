@@ -5,7 +5,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ...diagnosis.contracts import EvidenceBundle, EvidenceItem
+from ...diagnosis.contracts import (
+    AnalysisStepArtifact,
+    DiagnosisArtifactEnvelope,
+    EvidenceBundle,
+    EvidenceItem,
+    KnowledgeStepArtifact,
+    SqlStepArtifact,
+    WorkOrderSuggestion,
+)
 from ..contracts import SingleAgentDecision
 from ..output.contracts import RenderedAnswer
 from ..output.renderers import ACTION_SAFE_FALLBACK, DANGEROUS_ACTION_COMPLETION_PATTERNS
@@ -51,6 +59,11 @@ def build_output_guardrail_result(
     bundle: EvidenceBundle | None,
     decision: SingleAgentDecision | None = None,
     rendered_answer: RenderedAnswer | None = None,
+    sql_artifact: SqlStepArtifact | None = None,
+    knowledge_artifact: KnowledgeStepArtifact | None = None,
+    analysis_artifact: AnalysisStepArtifact | None = None,
+    workorder_suggestion: WorkOrderSuggestion | None = None,
+    referenced_artifact: DiagnosisArtifactEnvelope | None = None,
 ) -> dict[str, Any]:
     """Build a lightweight output guardrail result for trace and artifact metadata."""
 
@@ -62,6 +75,19 @@ def build_output_guardrail_result(
     if decision is not None and decision.primary_task_type == "action_request":
         if _contains_dangerous_action_completion(final_answer):
             warnings.append("unsafe_action_execution_claim")
+    if decision is not None and decision.action_type in {"create_workorder", "dispatch_workorder"}:
+        if _contains_workorder_completion(final_answer):
+            warnings.append("unsafe_workorder_completion_claim")
+    invariant_result = validate_artifact_invariants(
+        decision=decision or SingleAgentDecision(),
+        sql_artifact=sql_artifact,
+        knowledge_artifact=knowledge_artifact,
+        analysis_artifact=analysis_artifact,
+        workorder_suggestion=workorder_suggestion,
+        referenced_artifact=referenced_artifact,
+        final_answer=final_answer,
+    )
+    warnings.extend(invariant_result.get("warnings", []))
     quality_checks = bundle.quality_checks if bundle is not None else {}
     if quality_checks and not quality_checks.get("no_dangling_evidence_refs", True):
         warnings.append("dangling_evidence_refs")
@@ -88,7 +114,39 @@ def build_output_guardrail_result(
         "template_id": rendered_answer.template_id if rendered_answer is not None else None,
         "used_evidence_ids": rendered_answer.used_evidence_ids if rendered_answer is not None else [],
         "missing_evidence": rendered_answer.missing_evidence if rendered_answer is not None else [],
+        "invariants": invariant_result,
     }
+
+
+def validate_artifact_invariants(
+    *,
+    decision: SingleAgentDecision,
+    sql_artifact: SqlStepArtifact | None,
+    knowledge_artifact: KnowledgeStepArtifact | None,
+    analysis_artifact: AnalysisStepArtifact | None,
+    workorder_suggestion: WorkOrderSuggestion | None,
+    referenced_artifact: DiagnosisArtifactEnvelope | None = None,
+    final_answer: str = "",
+) -> dict[str, Any]:
+    """Validate deterministic cross-stage consistency invariants."""
+
+    warnings: list[str] = []
+    workorder_reason = str(getattr(workorder_suggestion, "reason", "") or "")
+    if _sql_has_rows(sql_artifact) and "SQL 未返回可解析运行数据" in workorder_reason:
+        warnings.append("sql_rows_contradict_workorder_no_data_reason")
+    freshness = _referenced_freshness_text(referenced_artifact)
+    stale = any(keyword in freshness for keyword in ("已滞后", "滞后", "stale", "非实时", "不代表实时"))
+    if stale and not any(keyword in f"{workorder_reason} {final_answer}" for keyword in ("滞后", "采样窗口", "非实时", "不代表实时")):
+        warnings.append("stale_referenced_data_not_disclosed")
+    knowledge_text = str(getattr(knowledge_artifact, "raw_output", "") or "")
+    knowledge_codes = set(re.findall(r"(?<![A-Z0-9])([A-Z]\d{3,5})(?![A-Z0-9])", knowledge_text, flags=re.I))
+    if knowledge_codes and any(keyword in final_answer for keyword in ("知识库无结果", "知识检索未命中", "没有知识库结果")):
+        warnings.append("knowledge_hit_contradicted_by_final_answer")
+    if decision.action_type in {"create_workorder", "dispatch_workorder"} and _contains_workorder_completion(final_answer):
+        warnings.append("unsafe_workorder_completion_claim")
+    if decision.plan_mode == "workorder_decision_from_artifact" and not decision.referenced_artifact_id:
+        warnings.append("artifact_followup_missing_referenced_artifact")
+    return {"passed": not warnings, "warnings": list(dict.fromkeys(warnings))}
 
 
 def _first_asset_id(items: list[EvidenceItem]) -> str | None:
@@ -138,3 +196,40 @@ def _contains_dangerous_action_completion(text: str) -> bool:
     if any(pattern in text for pattern in DANGEROUS_ACTION_COMPLETION_PATTERNS):
         return True
     return bool(re.search(r"已(?:重启|停机|关闭告警|屏蔽告警|修改|改成|派发|下发|执行)", text))
+
+
+def _contains_workorder_completion(text: str) -> bool:
+    return bool(re.search(r"已(?:创建|生成|派发|下发)(?:维修)?工单", text or ""))
+
+
+def _sql_has_rows(sql_artifact: SqlStepArtifact | None) -> bool:
+    if sql_artifact is None:
+        return False
+    text = f"{sql_artifact.result_preview or ''} {sql_artifact.raw_output or ''}"
+    return bool(re.search(r"[\[\(]\s*(?:\{|\'|\"|\d)", text) or re.search(r"\bdevice_name\b|\bcreate_time\b|A\d{3,5}", text))
+
+
+def _referenced_freshness_text(envelope: DiagnosisArtifactEnvelope | None) -> str:
+    if envelope is None:
+        return ""
+    values: list[str] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, value in item.items():
+                if key in {
+                    "freshness_label",
+                    "data_freshness_label",
+                    "currentness",
+                    "data_currentness_level",
+                    "data_currentness_label",
+                }:
+                    values.append(str(value))
+                if isinstance(value, (dict, list)):
+                    visit(value)
+        elif isinstance(item, list):
+            for value in item:
+                visit(value)
+
+    visit(envelope.payload or {})
+    return " ".join(values)

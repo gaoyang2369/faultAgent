@@ -20,6 +20,19 @@ class DiagnosisCase(BaseModel):
     active_time_window: dict[str, Any] = Field(default_factory=dict)
     last_evidence_bundle_id: str | None = None
     last_report_url: str | None = None
+    status_level: str | None = None
+    severity: str | None = None
+    priority: str | None = None
+    freshness_label: str | None = None
+    currentness: str | None = None
+    latest_sample_time: str | None = None
+    sample_count: int | None = None
+    current_event: str | None = None
+    key_phenomenon: str | None = None
+    initial_assessment: str | None = None
+    next_action: str | None = None
+    evidence_summary: list[str] = Field(default_factory=list)
+    available_followups: list[str] = Field(default_factory=list)
     unresolved_questions: list[str] = Field(default_factory=list)
 
 
@@ -76,6 +89,7 @@ def diagnosis_case_from_artifact(envelope: DiagnosisArtifactEnvelope) -> Diagnos
         if isinstance(decision.get("context_resolution"), dict)
         else {}
     )
+    report_context = _flatten_context(payload)
 
     active_asset = _first_non_empty(
         [
@@ -127,6 +141,23 @@ def diagnosis_case_from_artifact(envelope: DiagnosisArtifactEnvelope) -> Diagnos
     )
     if not any([active_asset, active_fault_codes, last_evidence_bundle_id, last_report_url]):
         return None
+    current_event = _first_non_empty(
+        [
+            report_context.get("current_event"),
+            report_context.get("event_code"),
+            report_context.get("fault_code"),
+            _first_list_item(active_fault_codes),
+        ]
+    )
+    evidence_summary = _dedupe(
+        [
+            *_as_text_list(report_context.get("evidence_summary")),
+            *_as_text_list(report_context.get("findings")),
+            *_as_text_list(report_context.get("key_evidence")),
+            report_context.get("one_sentence_conclusion"),
+            report_context.get("conclusion"),
+        ]
+    )[:8]
     return DiagnosisCase(
         case_id=str(case_id),
         thread_id=envelope.thread_id,
@@ -135,6 +166,43 @@ def diagnosis_case_from_artifact(envelope: DiagnosisArtifactEnvelope) -> Diagnos
         active_time_window=active_time_window,
         last_evidence_bundle_id=last_evidence_bundle_id,
         last_report_url=last_report_url,
+        status_level=_first_non_empty([report_context.get("status_level"), report_context.get("asset_risk_label")]),
+        severity=_first_non_empty([report_context.get("severity"), report_context.get("severity_label")]),
+        priority=_first_non_empty([report_context.get("priority"), report_context.get("action_priority")]),
+        freshness_label=_first_non_empty(
+            [
+                report_context.get("freshness_label"),
+                report_context.get("data_freshness_label"),
+                report_context.get("currentness_label"),
+            ]
+        ),
+        currentness=_first_non_empty(
+            [
+                report_context.get("currentness"),
+                report_context.get("data_currentness_level"),
+                report_context.get("data_currentness_label"),
+            ]
+        ),
+        latest_sample_time=_first_non_empty(
+            [report_context.get("latest_sample_time"), report_context.get("last_sample_time"), report_context.get("sample_time")]
+        ),
+        sample_count=_as_int(report_context.get("sample_count")),
+        current_event=current_event,
+        key_phenomenon=_first_non_empty(
+            [report_context.get("key_phenomenon"), report_context.get("top_finding"), report_context.get("abnormal_summary")]
+        ),
+        initial_assessment=_first_non_empty(
+            [
+                report_context.get("initial_assessment"),
+                report_context.get("one_sentence_conclusion"),
+                report_context.get("conclusion"),
+            ]
+        ),
+        next_action=_first_non_empty(
+            [report_context.get("next_action"), report_context.get("action_priority_label"), report_context.get("recommended_action")]
+        ),
+        evidence_summary=evidence_summary,
+        available_followups=_available_followups(active_asset, active_fault_codes, last_report_url),
         unresolved_questions=unresolved_questions,
     )
 
@@ -249,7 +317,28 @@ def _has_context_reference(message: str) -> bool:
 def _context_reference_labels(message: str) -> list[str]:
     text = (message or "").replace(" ", "")
     labels: list[str] = []
-    for keyword in ("它", "这个故障", "这个设备", "刚才那个", "刚才结果", "刚才", "上一轮", "上一次"):
+    for keyword in (
+        "它",
+        "这个",
+        "这个故障",
+        "这个设备",
+        "刚才",
+        "刚才结果",
+        "刚才报告",
+        "上一轮",
+        "上一次",
+        "上面",
+        "结果",
+        "从结果来看",
+        "报告里",
+        "该故障",
+        "该设备",
+        "继续",
+        "那",
+        "所以",
+        "是不是",
+        "要不要",
+    ):
         if keyword in text:
             labels.append(keyword)
     return _dedupe(labels)
@@ -259,7 +348,7 @@ def _should_reuse_asset(message: str) -> bool:
     text = (message or "").replace(" ", "")
     return bool(text) and any(
         keyword in text
-        for keyword in ("严重", "状态", "现在", "当前", "看一下", "查一下", "故障", "报警", "告警", "报告")
+        for keyword in ("严重", "状态", "现在", "当前", "看一下", "查一下", "故障", "报警", "告警", "报告", "工单", "派人")
     )
 
 
@@ -267,8 +356,85 @@ def _should_reuse_fault_code(message: str) -> bool:
     text = (message or "").replace(" ", "")
     return bool(text) and any(
         keyword in text
-        for keyword in ("怎么处理", "如何处理", "解决", "处置", "严重", "影响", "是什么", "含义", "原因", "故障")
+        for keyword in ("怎么处理", "如何处理", "解决", "处置", "严重", "影响", "是什么", "含义", "原因", "故障", "工单", "派人")
     )
+
+
+def _flatten_context(value: Any) -> dict[str, Any]:
+    """Flatten useful report/status fields from arbitrary artifact payloads."""
+
+    result: dict[str, Any] = {}
+    interesting = {
+        "status_level",
+        "current_event",
+        "key_phenomenon",
+        "priority",
+        "action_priority",
+        "latest_sample_time",
+        "last_sample_time",
+        "sample_time",
+        "sample_count",
+        "freshness_label",
+        "data_freshness_label",
+        "currentness",
+        "data_currentness_level",
+        "data_currentness_label",
+        "currentness_label",
+        "next_action",
+        "action_priority_label",
+        "recommended_action",
+        "severity",
+        "severity_label",
+        "asset_risk_label",
+        "one_sentence_conclusion",
+        "conclusion",
+        "initial_assessment",
+        "evidence_summary",
+        "findings",
+        "key_evidence",
+        "event_code",
+        "fault_code",
+        "abnormal_summary",
+        "top_finding",
+    }
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if key in interesting and key not in result and child not in (None, "", [], {}):
+                    result[key] = child
+                if isinstance(child, (dict, list)):
+                    visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return result
+
+
+def _available_followups(
+    active_asset: str | None,
+    active_fault_codes: list[str],
+    last_report_url: str | None,
+) -> list[str]:
+    followups = ["explain_current_frame"]
+    if active_asset:
+        followups.append("refresh_current_status")
+    if active_fault_codes or active_asset:
+        followups.append("workorder_decision")
+    if last_report_url:
+        followups.append("render_previous_result")
+    return followups
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(float(str(value)))
+    except (TypeError, ValueError):
+        return None
 
 
 def _as_text_list(value: Any) -> list[str]:

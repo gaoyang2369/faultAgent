@@ -207,6 +207,16 @@ class SingleAgentFlowMixin:
                     "intent_stack": decision.intent_stack,
                     "context_resolution": decision.context_resolution,
                     "active_case_id": decision.active_case_id,
+                    "relation_to_previous": decision.relation_to_previous,
+                    "plan_mode": decision.plan_mode,
+                    "evidence_mode": decision.evidence_mode,
+                    "referenced_artifact_id": decision.referenced_artifact_id,
+                    "referenced_case_id": decision.referenced_case_id,
+                    "required_evidence": decision.required_evidence,
+                    "satisfied_evidence": decision.satisfied_evidence,
+                    "missing_or_stale_evidence": decision.missing_or_stale_evidence,
+                    "should_refresh_runtime_data": decision.should_refresh_runtime_data,
+                    "action_target": decision.action_target,
                     "route_confidence": decision.route_confidence,
                     "user_goal": decision.user_goal,
                     "objects": decision.objects,
@@ -294,6 +304,197 @@ class SingleAgentFlowMixin:
                 if self._is_cancelled():
                     yield self._build_cancel_complete_frame()
                     return
+
+            if decision.plan_mode == "workorder_decision_from_artifact" and workflow_node_enabled(decision, "workorder_decision"):
+                stage_started = self._start_stage("workorder_decision", "基于当前线程已有诊断结果判断是否建议生成工单")
+                async for chunk in self.stream_workorder_decision_from_previous_artifact():
+                    yield chunk
+                    event_count += 1
+                (
+                    final_answer,
+                    workorder_suggestion,
+                    referenced_envelope,
+                    sql_artifact,
+                    knowledge_artifact,
+                    analysis_artifact,
+                    report_artifact,
+                ) = self._last_step_result
+                self._finish_stage(
+                    "workorder_decision",
+                    stage_started,
+                    message=workorder_suggestion.reason,
+                )
+                task_frame = self._build_workflow_task_update_frame(completed_stage="workorder_decision")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
+                if self._is_cancelled():
+                    yield self._build_cancel_complete_frame()
+                    return
+
+                stage_started = self._start_stage("evidence_validation", "复用上一轮证据链并校验工单续问")
+                self.evidence_bundle = build_evidence_bundle(
+                    trace_id=self.trace_id,
+                    request=request,
+                    decision=decision,
+                    sql_artifact=sql_artifact,
+                    knowledge_artifact=knowledge_artifact,
+                    analysis_artifact=analysis_artifact,
+                    workorder_suggestion=workorder_suggestion,
+                    report_artifact=report_artifact,
+                    structured_analysis_artifact=None,
+                )
+                self.evidence_bundle.artifacts["referenced_artifact_id"] = decision.referenced_artifact_id
+                self.evidence_bundle.artifacts["referenced_thread_artifact_created_at"] = referenced_envelope.created_at
+                access_metadata = {
+                    "role": self.auth_context.role,
+                    "asset_scope": list(self.auth_context.asset_scope),
+                    "table_scope": list(self.auth_context.table_scope),
+                    "authorized_purpose": decision.access_scope.get("authorized_purpose", "diagnosis"),
+                    "reused_previous_artifact": True,
+                }
+                for evidence_item in self.evidence_bundle.evidence_items:
+                    evidence_item.metadata.update({"authorized": True, "access_scope": access_metadata})
+                self.evidence_bundle.quality_checks["no_unauthorized_evidence_refs"] = True
+                self._record_artifact("evidence_bundle", self.evidence_bundle, stage="evidence_validation")
+                self._finish_stage(
+                    "evidence_validation",
+                    stage_started,
+                    message=f"已复用上一轮 artifact：{decision.referenced_artifact_id or referenced_envelope.created_at}",
+                )
+                task_frame = self._build_workflow_task_update_frame(completed_stage="evidence_validation")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
+
+                stage_started = self._start_stage("final_answer", "整理工单续问回答")
+                self._finish_stage("final_answer", stage_started, message="工单续问回答已生成")
+                task_frame = self._build_workflow_task_update_frame(completed_stage="final_answer")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
+
+                stage_started = self._start_stage("output_guardrail", "检查工单续问输出一致性")
+                self.output_guardrail_result = build_output_guardrail_result(
+                    final_answer,
+                    self.evidence_bundle,
+                    decision,
+                    rendered_answer=None,
+                    sql_artifact=sql_artifact,
+                    knowledge_artifact=knowledge_artifact,
+                    analysis_artifact=analysis_artifact,
+                    workorder_suggestion=workorder_suggestion,
+                    referenced_artifact=referenced_envelope,
+                )
+                self._record_artifact("output_guardrail", self.output_guardrail_result, stage="output_guardrail")
+                self._finish_stage(
+                    "output_guardrail",
+                    stage_started,
+                    status="completed" if self.output_guardrail_result.get("passed") else "warning",
+                    message="输出校验通过" if self.output_guardrail_result.get("passed") else "输出校验存在提示",
+                )
+                task_frame = self._build_workflow_task_update_frame(completed_stage="output_guardrail")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
+
+                audit_log_result: dict[str, Any] = {}
+                if workflow_node_enabled(decision, "audit_log"):
+                    stage_started = self._start_stage("audit_log", "记录工单续问审计信息")
+                    audit_log_result = build_audit_log_result(
+                        decision=decision,
+                        permission_check=permission_check_result,
+                        risk_check=risk_check_result,
+                        output_guardrail=self.output_guardrail_result or {},
+                    )
+                    self._record_artifact("audit_log", audit_log_result, stage="audit_log")
+                    self._finish_stage("audit_log", stage_started, message="工单续问审计信息已记录")
+                    task_frame = self._build_workflow_task_update_frame(completed_stage="audit_log")
+                    if task_frame:
+                        yield task_frame
+                        event_count += 1
+
+                stage_started = self._start_stage("save_artifact", "保存工单续问产物与证据链")
+                saved_envelope = self.save_artifact_envelope(
+                    request,
+                    sql_artifact,
+                    knowledge_artifact,
+                    analysis_artifact,
+                    workorder_suggestion,
+                    report_artifact,
+                    final_answer,
+                    decision,
+                    evidence_bundle=self.evidence_bundle,
+                    output_guardrail=self.output_guardrail_result,
+                    rendered_answer=None,
+                    workflow_artifacts={
+                        "authorization": self.authorization_decision.model_dump(),
+                        "permission_check": permission_check_result,
+                        "risk_check": risk_check_result,
+                        "resolution_recommendation": {},
+                        "audit_log": audit_log_result,
+                        "referenced_artifact": referenced_envelope.model_dump(exclude_none=True),
+                    },
+                )
+                self._finish_stage("save_artifact", stage_started, message="工单续问产物与证据链已保存")
+                task_frame = self._build_workflow_task_update_frame(
+                    completed_stage="save_artifact",
+                    status_hint="本轮回答已完成",
+                )
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
+                self.trace.finish(status="completed", final_answer=final_answer)
+                yield encode_sse_event("token", {"type": "token", "content": final_answer}, trace_id=self.trace_id)
+                token_count += 1
+                event_count += 1
+                self._finish_open_stage_observations(status="completed")
+                self._finalize_trace_run(
+                    status="completed",
+                    final_answer=final_answer,
+                    metadata={
+                        "event_count": event_count,
+                        "token_count": token_count,
+                        "decision": decision.model_dump(),
+                        "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
+                        "workflow_policy_id": decision.workflow_policy.get("policy_id"),
+                        "primary_task_type": decision.primary_task_type,
+                    },
+                )
+                complete_payload = build_diagnosis_complete_payload(
+                    thread_id=self.thread_id,
+                    trace_id=self.trace_id,
+                    request_id=self.request_id,
+                    final_answer=final_answer,
+                    decision=decision,
+                    sql_artifact=sql_artifact,
+                    knowledge_artifact=knowledge_artifact,
+                    analysis_artifact=analysis_artifact,
+                    permission_check_result=permission_check_result,
+                    risk_check_result=risk_check_result,
+                    resolution_recommendation={},
+                    audit_log_result=audit_log_result,
+                    workorder_suggestion=workorder_suggestion,
+                    report_artifact=report_artifact,
+                    evidence_bundle=self.evidence_bundle,
+                    output_guardrail=self.output_guardrail_result or {},
+                    rendered_answer=None,
+                    saved_envelope=saved_envelope,
+                    trace=self.trace,
+                    todos=self._current_workflow_todos_payload(status_hint="本轮回答已完成").get("todos", []),
+                    event_count=event_count,
+                )
+                yield encode_sse_event("complete", complete_payload, trace_id=self.trace_id)
+                _log.info(
+                    "限制型单 Agent 工单续问完成",
+                    thread_id=self.thread_id,
+                    stream_id=self.stream_id,
+                    duration_ms=round((time.monotonic() - started_at) * 1000, 1),
+                    event_count=event_count,
+                    token_count=token_count,
+                    tool_call_count=self._tool_call_count,
+                )
+                return
 
             if decision.report_from_previous_artifact:
                 stage_started = self._start_stage("report", "基于当前线程已有结果生成报告")
@@ -594,6 +795,10 @@ class SingleAgentFlowMixin:
                 self.evidence_bundle,
                 decision,
                 rendered_answer=self._last_rendered_answer,
+                sql_artifact=sql_artifact,
+                knowledge_artifact=knowledge_artifact,
+                analysis_artifact=analysis_artifact,
+                workorder_suggestion=workorder_suggestion,
             )
             safe_rewrite = str(self.output_guardrail_result.get("safe_rewrite") or "").strip()
             if safe_rewrite:

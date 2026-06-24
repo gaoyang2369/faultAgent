@@ -35,6 +35,16 @@ class SingleAgentDecision(BaseModel):
     intent_stack: list[str] = Field(default_factory=list)
     context_resolution: dict[str, Any] = Field(default_factory=dict)
     active_case_id: str | None = None
+    relation_to_previous: str = "new_task"
+    plan_mode: str = "normal"
+    evidence_mode: str = "collect_new"
+    referenced_artifact_id: str | None = None
+    referenced_case_id: str | None = None
+    required_evidence: list[str] = Field(default_factory=list)
+    satisfied_evidence: list[str] = Field(default_factory=list)
+    missing_or_stale_evidence: list[str] = Field(default_factory=list)
+    should_refresh_runtime_data: bool = False
+    action_target: str | None = None
     route_confidence: float = 0.0
     user_goal: str = ""
     objects: dict[str, Any] = Field(default_factory=dict)

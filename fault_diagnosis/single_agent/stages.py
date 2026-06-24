@@ -55,7 +55,7 @@ from .support.serialization import preview, stringify
 from .sql_safety import build_fallback_sql_query, build_sql_prompt, has_unknown_sql_table, is_readonly_sql
 from .sql_safety import build_fast_sql_plan
 from .support.tool_access import get_knowledge_tool, get_report_tool
-from .workorder_suggestions import build_workorder_suggestion
+from .workorder_suggestions import build_workorder_suggestion, build_workorder_suggestion_from_artifact
 
 _log = get_logger("single_agent.stages")
 
@@ -357,6 +357,105 @@ class SingleAgentStagesMixin:
         )
         self._record_artifact("workorder_decision", suggestion, stage="workorder_decision")
         return suggestion
+
+    async def stream_workorder_decision_from_previous_artifact(self) -> AsyncGenerator[str, None]:
+        """Build a work-order decision by reusing the latest thread artifact."""
+
+        envelope = get_thread_artifact(self.thread_id)
+        if envelope is None:
+            raise SingleAgentExecutionError("当前线程没有可用于工单决策的诊断或报告结果")
+        decision = self._workflow_task_decision or SingleAgentDecision()
+        suggestion = build_workorder_suggestion_from_artifact(
+            envelope=envelope,
+            decision=decision,
+            user_identity=self.user_identity,
+        )
+        referenced = self._artifacts_from_previous_envelope(envelope)
+        self._record_artifact("referenced_diagnosis_artifact", envelope, stage="workorder_decision")
+        self._record_artifact("workorder_decision", suggestion, stage="workorder_decision")
+        final_answer = self._build_workorder_followup_answer(suggestion, decision)
+        self._last_step_result = (final_answer, suggestion, envelope, *referenced)
+        if False:  # pragma: no cover - keeps this as an async generator without yielding tool events
+            yield ""
+
+    def _artifacts_from_previous_envelope(
+        self,
+        envelope: DiagnosisArtifactEnvelope,
+    ) -> tuple[SqlStepArtifact, KnowledgeStepArtifact, AnalysisStepArtifact, ReportStepArtifact]:
+        payload = envelope.payload or {}
+        sql_payload = payload.get("sql_artifact") if isinstance(payload.get("sql_artifact"), dict) else {}
+        knowledge_payload = payload.get("knowledge_artifact") if isinstance(payload.get("knowledge_artifact"), dict) else {}
+        analysis_payload = payload.get("analysis_artifact") if isinstance(payload.get("analysis_artifact"), dict) else {}
+        report_payload = payload.get("report_artifact") if isinstance(payload.get("report_artifact"), dict) else {}
+        try:
+            sql_artifact = SqlStepArtifact.model_validate(sql_payload)
+        except Exception:
+            sql_artifact = self._build_skipped_sql_artifact("本轮复用上一轮 artifact，未重新查询 SQL")
+        try:
+            knowledge_artifact = KnowledgeStepArtifact.model_validate(knowledge_payload)
+        except Exception:
+            knowledge_artifact = self._build_skipped_knowledge_artifact("本轮复用上一轮 artifact，未重新检索知识库")
+        try:
+            analysis_artifact = AnalysisStepArtifact.model_validate(analysis_payload)
+        except Exception:
+            analysis_artifact = AnalysisStepArtifact(
+                success=True,
+                conclusion=envelope.request_summary or "已复用上一轮诊断/报告结果进行工单决策。",
+                basis=[envelope.final_answer] if envelope.final_answer else [],
+                recommendations=[],
+                confidence="medium",
+            )
+            self._record_artifact("analysis", analysis_artifact, stage="workorder_decision")
+        try:
+            report_artifact = ReportStepArtifact.model_validate(report_payload)
+        except Exception:
+            report_artifact = ReportStepArtifact(
+                success=False,
+                report_filename=envelope.report_filename,
+                report_url=envelope.report_filename,
+                save_result="本轮未生成新报告，复用上一轮报告结果",
+            )
+            self._record_artifact("report", report_artifact, stage="workorder_decision")
+        return sql_artifact, knowledge_artifact, analysis_artifact, report_artifact
+
+    def _build_workorder_followup_answer(
+        self,
+        suggestion: WorkOrderSuggestion,
+        decision: SingleAgentDecision,
+    ) -> str:
+        direct_dispatch_guard = "不建议直接自动派发。"
+        headline = (
+            "从上一轮报告/诊断结果看，建议生成“待确认工单草稿”，但"
+            if suggestion.need_workorder
+            else "从上一轮报告/诊断结果看，暂不建议直接生成工单；"
+        )
+        lines = [
+            f"{headline}{direct_dispatch_guard}",
+            "",
+            "依据：",
+            f"1. 设备：{suggestion.equipment_object or decision.context_resolution.get('active_asset') or '未识别'}",
+        ]
+        if suggestion.fault_code:
+            lines.append(f"2. 事件：{suggestion.fault_code}")
+        for item in suggestion.key_evidence[:4]:
+            lines.append(f"{len(lines) - 2}. {item}")
+        if decision.missing_or_stale_evidence:
+            lines.append(f"{len(lines) - 2}. 数据边界：{'; '.join(decision.missing_or_stale_evidence)}")
+        lines.extend(
+            [
+                "",
+                "建议工单类型：",
+                suggestion.workorder_type or "运行异常确认工单",
+                "",
+                "建议处理：",
+            ]
+        )
+        lines.extend(f"- {item}" for item in (suggestion.processing_steps or ["刷新当前状态后再判断是否派发"]))
+        lines.append("")
+        lines.append("动作边界：我没有创建或派发工单，只生成待确认草稿建议；派发前需要管理员或工程师确认。")
+        if any("滞后" in item or "latest_realtime_status" in item for item in [suggestion.reason, *decision.missing_or_stale_evidence]):
+            lines.append("数据边界：上一轮数据已滞后或仅代表采样窗口，派发前请刷新当前状态。")
+        return "\n".join(lines)
 
     def _build_analysis_artifact_from_payload(
         self,

@@ -63,6 +63,16 @@ class TaskRoute(BaseModel):
     candidate_task_types: list[TaskType] = Field(default_factory=list)
     intent_stack: list[str] = Field(default_factory=list)
     context_resolution: dict[str, Any] = Field(default_factory=dict)
+    relation_to_previous: str = "new_task"
+    plan_mode: str = "normal"
+    evidence_mode: str = "collect_new"
+    referenced_artifact_id: str | None = None
+    referenced_case_id: str | None = None
+    required_evidence: list[str] = Field(default_factory=list)
+    satisfied_evidence: list[str] = Field(default_factory=list)
+    missing_or_stale_evidence: list[str] = Field(default_factory=list)
+    should_refresh_runtime_data: bool = False
+    action_target: str | None = None
     route_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
     user_goal: str = ""
     objects: WorkflowObjects = Field(default_factory=WorkflowObjects)

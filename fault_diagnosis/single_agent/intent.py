@@ -8,7 +8,7 @@ from typing import Any
 from ..diagnosis.contracts import DiagnosisRequest
 from .context import ConversationDiagnosisState
 from .contracts import SingleAgentDecision
-from .workflow import build_workflow_plan, route_task
+from .workflow import analyze_evidence_gap, build_workflow_plan, route_task
 
 _FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{3,5})(?![A-Z0-9])", re.IGNORECASE)
 _DEVICE_RE = re.compile(
@@ -213,12 +213,15 @@ def decide_capabilities(
         message=normalized,
         report_from_previous_artifact=report_from_previous_artifact,
     )
+    gap_plan = analyze_evidence_gap(route, conversation_state)
+    _apply_evidence_gap_to_route(route, gap_plan)
     if isinstance(payload_sql, bool) and payload_sql:
         route.flags["need_sql"] = True
     if isinstance(payload_knowledge, bool) and payload_knowledge:
         route.flags["need_knowledge"] = True
     if needs_report:
         route.flags["need_report"] = True
+    _apply_plan_mode_flags(route)
 
     plan = build_workflow_plan(route, needs_report=needs_report)
     needs_sql = plan.resolved_nodes.get("sql", False)
@@ -236,6 +239,16 @@ def decide_capabilities(
             intent_stack=route.intent_stack,
             context_resolution=route.context_resolution,
             active_case_id=conversation_state.active_case_id if conversation_state else None,
+            relation_to_previous=route.relation_to_previous,
+            plan_mode=route.plan_mode,
+            evidence_mode=route.evidence_mode,
+            referenced_artifact_id=route.referenced_artifact_id,
+            referenced_case_id=route.referenced_case_id,
+            required_evidence=route.required_evidence,
+            satisfied_evidence=route.satisfied_evidence,
+            missing_or_stale_evidence=route.missing_or_stale_evidence,
+            should_refresh_runtime_data=route.should_refresh_runtime_data,
+            action_target=route.action_target,
             route_confidence=route.route_confidence,
             user_goal=route.user_goal,
             objects=route.objects.model_dump(exclude_none=True),
@@ -274,6 +287,16 @@ def decide_capabilities(
         intent_stack=route.intent_stack,
         context_resolution=route.context_resolution,
         active_case_id=conversation_state.active_case_id if conversation_state else None,
+        relation_to_previous=route.relation_to_previous,
+        plan_mode=route.plan_mode,
+        evidence_mode=route.evidence_mode,
+        referenced_artifact_id=route.referenced_artifact_id,
+        referenced_case_id=route.referenced_case_id,
+        required_evidence=route.required_evidence,
+        satisfied_evidence=route.satisfied_evidence,
+        missing_or_stale_evidence=route.missing_or_stale_evidence,
+        should_refresh_runtime_data=route.should_refresh_runtime_data,
+        action_target=route.action_target,
         route_confidence=route.route_confidence,
         user_goal=route.user_goal,
         objects=route.objects.model_dump(exclude_none=True),
@@ -291,3 +314,49 @@ def decide_capabilities(
         guardrails=plan.policy.guardrails,
         reason="；".join(reason_parts),
     )
+
+
+def _apply_evidence_gap_to_route(route: Any, gap_plan: Any) -> None:
+    route.plan_mode = gap_plan.plan_mode
+    route.evidence_mode = gap_plan.evidence_mode
+    route.relation_to_previous = gap_plan.relation_to_previous
+    route.referenced_case_id = gap_plan.referenced_case_id
+    route.referenced_artifact_id = gap_plan.referenced_artifact_id
+    route.required_evidence = list(gap_plan.required_evidence)
+    route.satisfied_evidence = list(gap_plan.satisfied_evidence)
+    route.missing_or_stale_evidence = list(gap_plan.missing_or_stale_evidence)
+    route.should_refresh_runtime_data = bool(gap_plan.should_refresh_runtime_data)
+    if gap_plan.reason:
+        route.flags["evidence_gap_reason"] = True
+    if gap_plan.plan_mode in {"workorder_decision_from_artifact", "status_refresh_then_workorder", "new_diagnosis_then_workorder"}:
+        if "workorder_decision" not in route.intent_stack:
+            route.intent_stack.append("workorder_decision")
+        route.action_target = "workorder"
+
+
+def _apply_plan_mode_flags(route: Any) -> None:
+    if route.plan_mode == "workorder_decision_from_artifact":
+        route.flags.update(
+            need_sql=False,
+            need_knowledge=False,
+            need_analysis=False,
+            need_resolution=False,
+            need_report=False,
+            need_workorder_decision=True,
+            need_permission_check=True,
+            need_risk_check=True,
+        )
+    elif route.plan_mode == "status_refresh_then_workorder":
+        route.flags.update(
+            need_sql=True,
+            need_knowledge=False,
+            need_analysis=False,
+            need_resolution=False,
+            need_report=False,
+            need_workorder_decision=True,
+            need_permission_check=True,
+            need_risk_check=True,
+            lightweight_analysis=True,
+        )
+    elif route.plan_mode == "new_diagnosis_then_workorder":
+        route.flags["need_workorder_decision"] = True
