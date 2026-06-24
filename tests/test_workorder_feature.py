@@ -11,7 +11,7 @@ from fault_diagnosis.diagnosis.contracts import (
 from fault_diagnosis.repositories.workorder_repository import FileWorkOrderRepository
 from fault_diagnosis.services.workorder_service import CreateWorkOrderPayload, UpdateWorkOrderPayload, WorkOrderService
 from fault_diagnosis.security.permissions import build_auth_context
-from fault_diagnosis.single_agent.report_sections import build_workorder_todo_markdown
+from fault_diagnosis.single_agent.reporting.sections import build_workorder_todo_markdown
 from fault_diagnosis.single_agent.reporting import build_workorder_suggestion
 
 

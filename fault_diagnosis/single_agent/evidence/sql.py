@@ -7,11 +7,22 @@ from datetime import datetime
 from typing import Any
 
 from ...diagnosis.contracts import DiagnosisRequest, EvidenceItem, EvidenceQuality, SqlStepArtifact
+from ..reporting.utils import (
+    format_float as _format_float,
+    format_value as _format_value,
+    is_abnormal_row as _is_abnormal_row,
+    metric_max as _metric_max,
+    metric_values as _metric_values,
+    normalize_code as _normalize_code,
+    speed_deviation_percent as _speed_deviation_percent,
+    to_float as _to_float,
+    unique_codes as _unique_codes,
+    unique_non_empty as _unique_values,
+)
 from ..sql_result_parser import parse_sql_rows
 from ..sql_safety import REAL_DATA_LATEST_TABLE
 from .utils import dedupe, first_non_empty
 
-_EMPTY_CODE_VALUES = {"", "0", "0.0", "none", "null", "无", "正常", "nan"}
 _FRESH_SECONDS = 5 * 60
 _RECENT_SECONDS = 60 * 60
 _SPEED_WARNING_PERCENT = 20.0
@@ -219,62 +230,6 @@ def _sql_metric_evidence(rows: list[dict[str, Any]], *, asset_id: str | None, la
             )
         )
     return items
-
-
-def _unique_values(rows: list[dict[str, Any]], key: str) -> list[str]:
-    return dedupe([_format_value(row.get(key)) for row in rows if _format_value(row.get(key)) != "-"])
-
-
-def _unique_codes(rows: list[dict[str, Any]], key: str) -> list[str]:
-    return dedupe([_normalize_code(row.get(key)) for row in rows if _normalize_code(row.get(key))])
-
-
-def _normalize_code(value: Any) -> str:
-    text = str(value or "").strip()
-    return "" if text.lower() in _EMPTY_CODE_VALUES else text
-
-
-def _format_value(value: Any) -> str:
-    if value is None:
-        return "-"
-    text = str(value).strip()
-    return text if text else "-"
-
-
-def _format_float(value: Any, digits: int = 2) -> str:
-    try:
-        return f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
-    except (TypeError, ValueError):
-        return _format_value(value)
-
-
-def _to_float(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _metric_values(rows: list[dict[str, Any]], key: str) -> list[float]:
-    chronological_rows = list(reversed(rows))
-    return [value for row in chronological_rows if (value := _to_float(row.get(key))) is not None]
-
-
-def _metric_max(rows: list[dict[str, Any]], *keys: str) -> float | None:
-    values = [value for key in keys for value in _metric_values(rows, key)]
-    return max(values) if values else None
-
-
-def _speed_deviation_percent(latest: dict[str, Any]) -> float | None:
-    setpoint = _to_float(latest.get("speed_setpoint"))
-    actual = _to_float(latest.get("speed_actual"))
-    if setpoint is None or actual is None or abs(setpoint) < 1:
-        return None
-    return round(abs(actual - setpoint) / max(abs(setpoint), 1) * 100, 2)
-
-
-def _is_abnormal_row(row: dict[str, Any]) -> bool:
-    return bool(_normalize_code(row.get("fault_code")) or _normalize_code(row.get("alarm_code")))
 
 
 def _freshness_from_timestamp(value: str) -> str:

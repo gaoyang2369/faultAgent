@@ -58,9 +58,13 @@ single_agent/
   artifacts.py                线程级诊断产物 envelope 构建
   final_answer.py             最终回答 fallback 模板
   prompts.py                  理解、分析、证据合成 prompt
-  reporting.py                报告 payload、图表 payload、分析摘要兼容入口
-  report_sections.py          报告文本章节构建
-  reporting_defs.py           报告结构定义
+  reporting/
+    __init__.py               报告能力公共出口
+    payloads.py               报告 payload、图表 payload、分析摘要入口
+    operation.py              结构化运行诊断报告模型与规则构建
+    sections.py               报告文本章节构建
+    defs.py                   报告结构定义和阈值常量
+    utils.py                  报表/证据/工单共享的格式化与指标 helper
   sql_safety.py               SQL schema、只读校验、fallback 查询
   sql_result_parser.py        SQL 工具输出解析
   workorder_suggestions.py    诊断产物到工单草稿建议
@@ -203,7 +207,7 @@ start
 | `risk_check` | `workflow/nodes.py` | 动作请求风险等级和人工确认要求 |
 | `sql` | `stages.py`、`sql_safety.py` | `SqlStepArtifact`，后续转 SQL evidence |
 | `knowledge` | `stages.py`、`tools/kb_tools.py` | `KnowledgeStepArtifact`，后续转知识库 evidence |
-| `analysis` | `stages.py`、`reporting.py`、`prompts.py` | `AnalysisStepArtifact` |
+| `analysis` | `stages.py`、`reporting/payloads.py`、`prompts.py` | `AnalysisStepArtifact` |
 | `resolution_recommendation` | `workflow/nodes.py` | 处置建议节点产物 |
 | `workorder_decision` | `workorder_suggestions.py` | `WorkOrderSuggestion` |
 | `report` | `stages.py`、`tools/report_tools.py` | `ReportStepArtifact` 和 HTML 文件 |

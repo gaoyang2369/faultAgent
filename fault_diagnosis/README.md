@@ -111,9 +111,10 @@ SQL 时间权限窗口默认按环境区分：生产环境 `DCMA_SQL_TIME_ANCHOR
 - `workflow/`：任务分类、workflow policy、节点开关和任务清单。
 - `output/`：`complete` 事件与前端兼容输出字段构建，后续输出模板优先从这里扩展。
 - `evidence/`：EvidenceBundle 门面、SQL/知识库来源证据、Claim 和质量校验。
+- `reporting/`：报告 payload、结构化运行诊断报告、报告章节、阈值定义和共享指标 helper。
 - `support/`：序列化、JSON 修复、工具懒加载等 agent 内部支撑能力。
-- `workorder_suggestions.py`：把诊断产物转换为工单草稿建议，`reporting.py` 仅保留兼容入口。
-- `intent.py`、`sql_safety.py`、`reporting.py`、`artifacts.py`：可单测的业务 helper。
+- `workorder_suggestions.py`：把诊断产物转换为工单草稿建议。
+- `intent.py`、`sql_safety.py`、`artifacts.py`：可单测的业务 helper。
 
 ## 诊断产物
 

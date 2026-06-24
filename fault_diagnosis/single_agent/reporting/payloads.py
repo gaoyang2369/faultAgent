@@ -7,15 +7,15 @@ import re
 from datetime import datetime
 from typing import Any
 
-from ..diagnosis.contracts import (
+from ...diagnosis.contracts import (
     AnalysisStepArtifact,
     DiagnosisRequest,
     KnowledgeStepArtifact,
     SqlStepArtifact,
     WorkOrderSuggestion,
 )
-from .operation_report import build_operation_diagnosis_report
-from .reporting_defs import (
+from .operation import build_operation_diagnosis_report
+from .defs import (
     DATA_FRESHNESS_DELAYED_SECONDS as _DATA_FRESHNESS_DELAYED_SECONDS,
     DATA_FRESHNESS_FRESH_SECONDS as _DATA_FRESHNESS_FRESH_SECONDS,
     INVERTER_TEMP_CRITICAL as _INVERTER_TEMP_CRITICAL,
@@ -30,11 +30,28 @@ from .reporting_defs import (
     TREND_METRIC_DEFS as _TREND_METRIC_DEFS,
     SqlReportSummary,
 )
-from .sql_result_parser import parse_sql_rows
-from .sql_safety import REAL_DATA_LATEST_TABLE
+from .utils import (
+    dedupe_items as _dedupe_items,
+    effective_codes as _effective_codes,
+    format_float as _format_float,
+    format_value as _format_value,
+    is_alarm_event_code as _is_alarm_event_code,
+    is_abnormal_row as _is_abnormal_row,
+    is_fault_code as _is_fault_code,
+    latest_code_streak as _latest_code_streak,
+    metric_max as _metric_max,
+    metric_values as _metric_values,
+    normalize_code as _normalize_code,
+    speed_deviation as _speed_deviation,
+    speed_deviation_percent as _speed_deviation_percent,
+    to_float as _to_float,
+    unique_codes as _unique_codes,
+    unique_non_empty as _unique_non_empty,
+)
+from ..sql_result_parser import parse_sql_rows
+from ..sql_safety import REAL_DATA_LATEST_TABLE
 
 _REPORT_URL_RE = re.compile(r"(/reports/[A-Za-z0-9._\-]+\.(?:md|html))", re.IGNORECASE)
-_EMPTY_CODE_VALUES = {"", "0", "0.0", "none", "null", "无", "正常", "nan"}
 _STATUS_REPORT_HINTS = ("运行状态", "状态报告", "当前状态", "运行情况", "运行报告", "巡检", "当前运行")
 _DIAGNOSIS_REPORT_HINTS = ("故障诊断", "故障原因", "根因", "维修", "维修方案", "怎么处理", "处置建议")
 _KNOWLEDGE_ACTION_LABELS = (
@@ -60,34 +77,6 @@ _KNOWLEDGE_SOURCE_PREFIXES = (
     "检索方式",
     "故障码",
 )
-
-
-
-def _normalize_code(value: object) -> str:
-    text = str(value or "").strip()
-    return "" if text.lower() in _EMPTY_CODE_VALUES else text
-
-
-def _format_value(value: object) -> str:
-    if value is None:
-        return "-"
-    text = str(value).strip()
-    return text if text else "-"
-
-
-def _format_float(value: object, digits: int = 2) -> str:
-    try:
-        return f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
-    except (TypeError, ValueError):
-        return _format_value(value)
-
-
-def _to_float(value: object) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
 
 def _has_any(text: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in text for keyword in keywords if keyword)
@@ -119,18 +108,6 @@ def _report_title_and_type(request: DiagnosisRequest) -> tuple[str, str]:
     if request.fault_code_hint:
         return "DCMA 故障诊断报告", f"{request.fault_code_hint} 故障诊断"
     return "DCMA 故障诊断报告", "故障诊断"
-
-
-def _is_fault_code(code: str) -> bool:
-    return str(code or "").strip().upper().startswith("F")
-
-
-def _is_alarm_event_code(code: str) -> bool:
-    return str(code or "").strip().upper().startswith("A")
-
-
-def _effective_codes(fault_codes: list[str], alarm_codes: list[str]) -> list[str]:
-    return _dedupe_items([*fault_codes, *alarm_codes])
 
 
 def _code_severity(fault_codes: list[str], alarm_codes: list[str]) -> str:
@@ -251,24 +228,6 @@ def _parse_sql_rows(raw_output: str) -> list[dict[str, object]]:
     return parse_sql_rows(raw_output)
 
 
-def _unique_non_empty(rows: list[dict[str, object]], key: str) -> list[str]:
-    values: list[str] = []
-    for row in rows:
-        value = _format_value(row.get(key))
-        if value != "-" and value not in values:
-            values.append(value)
-    return values
-
-
-def _unique_codes(rows: list[dict[str, object]], key: str) -> list[str]:
-    values: list[str] = []
-    for row in rows:
-        code = _normalize_code(row.get(key))
-        if code and code not in values:
-            values.append(code)
-    return values
-
-
 def _count_rows(rows: list[dict[str, object]], key: str, *, normalize_code: bool = False) -> list[list[str]]:
     counts: dict[str, int] = {}
     for row in rows:
@@ -303,10 +262,6 @@ def _row_time(row: dict[str, object]) -> str:
     return _format_value(row.get("create_time") or row.get("timestamp"))
 
 
-def _is_abnormal_row(row: dict[str, object]) -> bool:
-    return bool(_normalize_code(row.get("fault_code")) or _normalize_code(row.get("alarm_code")))
-
-
 def _latest_abnormal_streak(rows: list[dict[str, object]]) -> int:
     streak = 0
     for row in rows:
@@ -314,29 +269,6 @@ def _latest_abnormal_streak(rows: list[dict[str, object]]) -> int:
             break
         streak += 1
     return streak
-
-
-def _metric_values(rows: list[dict[str, object]], key: str) -> list[float]:
-    chronological_rows = list(reversed(rows))
-    return [value for row in chronological_rows if (value := _to_float(row.get(key))) is not None]
-
-
-def _metric_max(rows: list[dict[str, object]], *keys: str) -> float | None:
-    values = [value for key in keys for value in _metric_values(rows, key)]
-    return max(values) if values else None
-
-
-def _speed_deviation(latest: dict[str, object]) -> float | None:
-    setpoint = _to_float(latest.get("speed_setpoint"))
-    actual = _to_float(latest.get("speed_actual"))
-    if setpoint is None or actual is None or abs(setpoint) < 1:
-        return None
-    return abs(actual - setpoint) / max(abs(setpoint), 1)
-
-
-def _speed_deviation_percent(latest: dict[str, object]) -> float | None:
-    deviation = _speed_deviation(latest)
-    return round(deviation * 100, 2) if deviation is not None else None
 
 
 def _status_level(rows: list[dict[str, object]], fault_codes: list[str], alarm_codes: list[str]) -> str:
@@ -469,18 +401,6 @@ def _build_status_summary(rows: list[dict[str, object]], data_quality: dict[str,
         "freshness_label": quality.get("freshness_label") or "未知",
         "currentness": quality.get("currentness") or "-",
     }
-
-
-def _latest_code_streak(rows: list[dict[str, object]], code: str) -> int:
-    target = code.strip()
-    streak = 0
-    for row in rows:
-        row_codes = {_normalize_code(row.get("fault_code")), _normalize_code(row.get("alarm_code"))}
-        if target in row_codes:
-            streak += 1
-        else:
-            break
-    return streak
 
 
 def _event_timeline_items(rows: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -804,8 +724,13 @@ def _knowledge_action_summaries(
     return summaries
 
 
-def _dedupe_items(items: list[str]) -> list[str]:
-    return list(dict.fromkeys(item.strip() for item in items if item.strip()))
+def build_knowledge_action_summaries(
+    knowledge_artifact: KnowledgeStepArtifact,
+    codes: list[str],
+    *,
+    per_code_limit: int = 4,
+) -> list[str]:
+    return _knowledge_action_summaries(knowledge_artifact, codes, per_code_limit=per_code_limit)
 
 
 def _build_probable_cause_items(
@@ -1049,6 +974,19 @@ def _build_sql_report_summary(
     )
 
 
+def build_sql_report_summary(
+    sql_artifact: SqlStepArtifact,
+    *,
+    report_time: str | None = None,
+    knowledge_artifact: KnowledgeStepArtifact | None = None,
+) -> SqlReportSummary:
+    return _build_sql_report_summary(
+        sql_artifact,
+        report_time=report_time,
+        knowledge_artifact=knowledge_artifact,
+    )
+
+
 def build_structured_analysis_artifact(
     *,
     request: DiagnosisRequest,
@@ -1143,7 +1081,7 @@ def build_workorder_suggestion(
 ) -> WorkOrderSuggestion:
     """Compatibility wrapper for the work-order suggestion module."""
 
-    from .workorder_suggestions import build_workorder_suggestion as _build_workorder_suggestion
+    from ..workorder_suggestions import build_workorder_suggestion as _build_workorder_suggestion
 
     return _build_workorder_suggestion(
         request=request,

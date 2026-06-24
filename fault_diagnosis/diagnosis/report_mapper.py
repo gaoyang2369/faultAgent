@@ -15,7 +15,7 @@ from .contracts import (
     SqlStepArtifact,
     WorkOrderSuggestion,
 )
-from ..single_agent.operation_report import build_operation_diagnosis_report
+from ..single_agent.reporting.operation import build_operation_diagnosis_report
 from ..single_agent.sql_result_parser import parse_sql_rows
 
 

@@ -7,13 +7,13 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..diagnosis.contracts import (
+from ...diagnosis.contracts import (
     AnalysisStepArtifact,
     DiagnosisRequest,
     KnowledgeStepArtifact,
     WorkOrderSuggestion,
 )
-from .reporting_defs import (
+from .defs import (
     DC_VOLTAGE_LOWER,
     DC_VOLTAGE_UPPER,
     INVERTER_TEMP_CRITICAL,
@@ -25,7 +25,19 @@ from .reporting_defs import (
     SPEED_ERROR_CRITICAL_PERCENT,
     SPEED_ERROR_WARNING_PERCENT,
 )
-from .sql_safety import REAL_DATA_LATEST_TABLE
+from .utils import (
+    format_float as _format_float,
+    format_value as _format_value,
+    latest_code_streak as _latest_code_streak,
+    metric_max as _metric_max,
+    metric_values as _metric_values,
+    normalize_code as _normalize_code,
+    speed_deviation_percent as _speed_deviation_percent,
+    to_float as _to_float,
+    unique_codes as _unique_codes,
+    unique_non_empty as _unique_non_empty,
+)
+from ..sql_safety import REAL_DATA_LATEST_TABLE
 
 
 class ReportSeverity(str, Enum):
@@ -161,59 +173,6 @@ _DATA_CURRENTNESS_LABELS = {
 _CRITICAL_WORDS = ("停机", "急停", "禁止运行", "禁止继续运行", "保护动作", "立即停机", "隔离")
 
 
-def _format_value(value: object) -> str:
-    if value is None:
-        return "-"
-    text = str(value).strip()
-    return text if text else "-"
-
-
-def _format_float(value: object, digits: int = 2) -> str:
-    try:
-        return f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
-    except (TypeError, ValueError):
-        return _format_value(value)
-
-
-def _to_float(value: object) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _normalize_code(value: object) -> str:
-    text = str(value or "").strip()
-    return "" if text.lower() in {"", "0", "0.0", "none", "null", "无", "正常", "nan"} else text
-
-
-def _unique_non_empty(rows: list[dict[str, object]], key: str) -> list[str]:
-    values: list[str] = []
-    for row in rows:
-        value = _format_value(row.get(key))
-        if value != "-" and value not in values:
-            values.append(value)
-    return values
-
-
-def _unique_codes(rows: list[dict[str, object]], key: str) -> list[str]:
-    values: list[str] = []
-    for row in rows:
-        code = _normalize_code(row.get(key))
-        if code and code not in values:
-            values.append(code)
-    return values
-
-
-def _metric_values(rows: list[dict[str, object]], key: str) -> list[float]:
-    return [value for row in reversed(rows) if (value := _to_float(row.get(key))) is not None]
-
-
-def _metric_max(rows: list[dict[str, object]], *keys: str) -> float | None:
-    values = [value for key in keys for value in _metric_values(rows, key)]
-    return max(values) if values else None
-
-
 def _speed_deviation_values(rows: list[dict[str, object]]) -> list[float]:
     values = []
     for row in reversed(rows):
@@ -221,14 +180,6 @@ def _speed_deviation_values(rows: list[dict[str, object]]) -> list[float]:
         if value is not None:
             values.append(value)
     return values
-
-
-def _speed_deviation_percent(row: dict[str, object]) -> float | None:
-    setpoint = _to_float(row.get("speed_setpoint"))
-    actual = _to_float(row.get("speed_actual"))
-    if setpoint is None or actual is None or abs(setpoint) < 1:
-        return None
-    return round(abs(actual - setpoint) / max(abs(setpoint), 1) * 100, 2)
 
 
 def _event_counts(rows: list[dict[str, object]]) -> dict[str, int]:
@@ -239,17 +190,6 @@ def _event_counts(rows: list[dict[str, object]]) -> dict[str, int]:
             if code:
                 counts[code] = counts.get(code, 0) + 1
     return counts
-
-
-def _latest_code_streak(rows: list[dict[str, object]], code: str) -> int:
-    streak = 0
-    for row in rows:
-        codes = {_normalize_code(row.get("fault_code")), _normalize_code(row.get("alarm_code"))}
-        if code in codes:
-            streak += 1
-        else:
-            break
-    return streak
 
 
 def _highest(*severities: ReportSeverity) -> ReportSeverity:
