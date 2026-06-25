@@ -114,18 +114,43 @@ assert.match(
 )
 assert.match(
   diagnosisCardSource,
-  /\['status_card', 'diagnosis_card'\]\.includes\(uiPayload\.value\?\.type\)/,
-  'diagnosis card should render only for explicit status/diagnosis ui payloads'
+  /\['status_card', 'diagnosis_card', 'report_status'\]\.includes\(uiPayload\.value\?\.type\)/,
+  'diagnosis card should render for explicit status, diagnosis, and successful report ui payloads'
+)
+assert.match(
+  diagnosisCardSource,
+  /uiPayload\.value\?\.type !== 'report_status' \|\| uiPayload\.value\?\.report_generated === true/,
+  'report status cards should require an explicitly generated report'
 )
 assert.match(
   source,
-  /\['status_card', 'diagnosis_card'\]\.includes\(messageUiPayload\.value\?\.type\)/,
+  /\['status_card', 'diagnosis_card', 'report_status'\]\.includes\(messageUiPayload\.value\?\.type\)/,
   'chat message should gate diagnosis card rendering by explicit ui payload type'
+)
+assert.match(
+  source,
+  /messageUiPayload\.value\?\.type !== 'report_status' \|\| messageUiPayload\.value\?\.report_generated === true/,
+  'chat message should not show report cards unless report generation succeeded'
+)
+assert.match(
+  source,
+  /const finalAnswerTitle = computed/,
+  'final answer block should expose task-specific titles'
 )
 assert.match(
   chatStreamSource,
   /patch\.uiPayload = completeData\.uiPayload \|\| completeData\.ui_payload \|\| null/,
   'ordinary chat complete events should preserve backend ui_payload'
+)
+assert.match(
+  styles,
+  /\.message \.content \.final-answer-section--knowledge_card/,
+  'knowledge answers should keep a structured visual treatment'
+)
+assert.match(
+  styles,
+  /\.message \.content \.final-answer-section--report_status/,
+  'report answers should keep a structured visual treatment'
 )
 assert.match(
   diagnosisCardSource,

@@ -1166,8 +1166,12 @@
         :message="props.message"
       />
 
-      <section v-if="!isUser && hasFinalAnswerSectionContent" class="final-answer-section">
-        <div class="final-answer-section__header">最终回答</div>
+      <section
+        v-if="!isUser && hasFinalAnswerSectionContent"
+        class="final-answer-section"
+        :class="finalAnswerSectionClass"
+      >
+        <div class="final-answer-section__header">{{ finalAnswerTitle }}</div>
         <div v-if="shouldShowFinalAnswerMarkdown" class="text-container final-answer-section__body">
           <div class="text markdown-content" ref="contentRef" v-html="processedContent"></div>
         </div>
@@ -3928,9 +3932,23 @@ const messageUiPayload = computed(() => {
     null;
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
 });
+const messageUiType = computed(() => String(messageUiPayload.value?.type || 'text_only'));
+const finalAnswerTitle = computed(() => {
+  const labels = {
+    report_status: '报告结果',
+    report_blocked: '权限提示',
+    knowledge_card: '知识库回答',
+    permission_scope: '权限范围',
+    access_denied: '权限提示',
+    text_only: '最终回答'
+  };
+  return labels[messageUiType.value] || '最终回答';
+});
+const finalAnswerSectionClass = computed(() => `final-answer-section--${messageUiType.value}`);
 const hasDiagnosisResultCard = computed(() => Boolean(
-  ['status_card', 'diagnosis_card'].includes(messageUiPayload.value?.type) &&
+  ['status_card', 'diagnosis_card', 'report_status'].includes(messageUiPayload.value?.type) &&
   diagnosisAnalysisArtifact.value &&
+  (messageUiPayload.value?.type !== 'report_status' || messageUiPayload.value?.report_generated === true) &&
   (
     diagnosisAnalysisArtifact.value.conclusion ||
     diagnosisAnalysisArtifact.value.basis?.length ||

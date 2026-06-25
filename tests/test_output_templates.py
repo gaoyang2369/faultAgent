@@ -132,8 +132,8 @@ def test_fault_diagnosis_template_contains_required_sections_and_evidence() -> N
 
     section_titles = [section.title for section in rendered.sections]
     assert section_titles == ["诊断结论", "当前状态", "关键证据", "可能原因", "处置建议", "工单建议", "证据不足说明"]
-    assert "诊断结论" in rendered.content
-    assert "证据不足说明" in rendered.content
+    assert "**诊断结论**" in rendered.content
+    assert "**证据边界**" in rendered.content
     assert rendered.used_evidence_ids
     assert all(section.evidence_ids for section in rendered.sections if section.key != "limitations")
 
@@ -189,11 +189,11 @@ def test_report_generation_template_returns_summary_and_link_only() -> None:
         ),
     )
 
-    assert "报告状态：报告已生成。" in rendered.content
-    assert "报告标题：J1号机运行诊断报告" in rendered.content
+    assert "**报告状态**：报告已生成。" in rendered.content
+    assert "**报告标题**：J1号机运行诊断报告" in rendered.content
     assert "报告摘要" in rendered.content
-    assert "报告链接：/reports/j1_report.html" in rendered.content
-    assert "证据不足提示" in rendered.content
+    assert "**报告链接**：/reports/j1_report.html" in rendered.content
+    assert "证据边界" in rendered.content
 
 
 def test_degraded_report_generation_does_not_claim_report_created() -> None:
@@ -213,8 +213,8 @@ def test_degraded_report_generation_does_not_claim_report_created() -> None:
         ),
     )
 
-    assert "报告状态：报告未生成：当前身份无报告生成权限" in rendered.content
-    assert "报告链接：报告未生成" in rendered.content
+    assert "**报告状态**：报告未生成：当前身份无报告生成权限" in rendered.content
+    assert "**报告链接**：报告未生成" in rendered.content
     assert "报告已生成" not in rendered.content
     assert "不形成故障诊断报告" in rendered.content
 
@@ -280,6 +280,28 @@ def test_empty_status_result_does_not_claim_normal() -> None:
     assert "不能判断设备正常或异常" in rendered.content
     assert "当前状态：正常" not in rendered.content
     assert build_ui_payload(decision=decision, sql_artifact=sql_artifact)["type"] == "text_only"
+
+
+def test_knowledge_qa_uses_knowledge_card_and_cleans_metadata() -> None:
+    decision = SingleAgentDecision(primary_task_type="knowledge_qa")
+    rendered = render_final_answer(
+        decision=decision,
+        evidence_bundle=None,
+        knowledge_artifact=KnowledgeStepArtifact(
+            success=True,
+            query="F01002",
+            snippets=[
+                "来源文件：S120_故障手册.pdf source_type: knowledge_base 文档片段：F01002 内部软件错误 说明：内部软件错误。立即原因：出现内部软件错误。处理：- 重新为所有组件上电。- 升级固件。- 联系技术支持。"
+            ],
+            raw_output="",
+        ),
+    )
+
+    assert build_ui_payload(decision=decision)["type"] == "knowledge_card"
+    assert "内部软件错误" in rendered.content
+    assert "重新为所有组件上电" in rendered.content
+    assert "source_type" not in rendered.content
+    assert "来源文件" not in rendered.content
 
 
 def test_report_html_uses_structured_report_chapters() -> None:

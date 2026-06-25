@@ -87,16 +87,18 @@ def authorize_workflow(auth: AuthContext, decision: Any) -> AuthorizationDecisio
                 "workorder_decision": "missing_workorder_permission",
             }
             return AuthorizationDecision(
-                allowed=True,
-                mode="degrade",
-                reason="当前身份仅可查看 real_data_01 最近一小时状态和公开处理意见。",
-                denied_reason_code="workflow_degraded_for_guest",
-                allowed_nodes={"sql": True, "knowledge": True, "analysis": True},
+                allowed=False,
+                mode="deny",
+                reason="当前身份无故障诊断、根因分析或健康评估权限。",
+                denied_reason_code="diagnosis_permission_denied",
                 denied_nodes=denied_nodes,
-                runtime_tools=["sql_db_query_checker", "sql_db_query", "query_knowledge_base"],
                 data_scope=data_scope,
                 kb_scope=kb_scope,
-                user_message="当前身份可查看最近一小时数据和公开处理意见，但不能进行故障诊断或生成诊断报告。",
+                user_message=(
+                    "当前身份无法进行故障诊断、根因分析或健康评估。"
+                    "游客仅可查看授权设备最近一小时运行状态，或查询公开故障码/处理意见；"
+                    "如需诊断结论，请使用具备设备诊断权限的工程师或管理员账号。"
+                ),
             )
         return AuthorizationDecision(
             allowed=False,

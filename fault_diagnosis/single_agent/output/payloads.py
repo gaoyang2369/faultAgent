@@ -230,6 +230,8 @@ def build_ui_payload(
         ui_type = "report_blocked"
     elif auth_mode in {"deny", "clarify"}:
         ui_type = "access_denied"
+    elif task_type == "knowledge_qa":
+        ui_type = "knowledge_card"
     elif task_type == "report_generation":
         ui_type = "report_status"
     elif data_state in {"out_of_scope", "blocked", "empty"} or auth_mode == "degrade":

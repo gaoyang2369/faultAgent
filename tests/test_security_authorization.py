@@ -66,7 +66,7 @@ def test_signed_user_cookie_is_session_bound_and_reloads_server_scope(tmp_path) 
     assert wrong_session.role == "guest"
 
 
-def test_guest_fault_diagnosis_is_degraded() -> None:
+def test_guest_fault_diagnosis_is_denied() -> None:
     decision = SingleAgentDecision(
         primary_task_type="fault_diagnosis",
         enabled_nodes={"sql": True, "knowledge": True, "analysis": True, "report": True},
@@ -75,11 +75,15 @@ def test_guest_fault_diagnosis_is_degraded() -> None:
 
     authorization = authorize_workflow(build_auth_context(role="guest"), decision)
 
-    assert authorization.allowed is True
-    assert authorization.mode == "degrade"
+    assert authorization.allowed is False
+    assert authorization.mode == "deny"
+    assert authorization.denied_reason_code == "diagnosis_permission_denied"
     assert authorization.data_scope["allowed_tables"] == ["real_data_01"]
     assert authorization.data_scope["max_lookback_hours"] == 1
+    assert authorization.denied_nodes["fault_diagnosis"] == "missing_workflow_permission"
     assert authorization.denied_nodes["report"] == "missing_report_permission"
+    assert authorization.runtime_tools == []
+    assert "无法进行故障诊断" in authorization.user_message
 
 
 def test_guest_report_generation_is_denied_without_degraded_tools() -> None:
@@ -126,7 +130,8 @@ def test_guest_sql_acl_forces_table_time_and_limit() -> None:
     assert result.allowed is True
     assert "device_name IN ('G120电机1')" in result.sql_query
     assert "create_time >= NOW() - INTERVAL 1 HOUR" in result.sql_query
-    assert "SELECT MAX(create_time) FROM real_data_01" in result.sql_query
+    assert "SELECT MAX(create_time) FROM real_data_01 WHERE" in result.sql_query
+    assert "device_name IN ('G120电机1')" in result.sql_query.split("SELECT MAX(create_time)", 1)[1]
     assert result.sql_query.endswith("LIMIT 50")
     assert apply_sql_acl(
         "SELECT * FROM device_alarm LIMIT 10",

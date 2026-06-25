@@ -341,7 +341,8 @@ const evidenceText = computed(() => [
 ].filter(Boolean).join(' '))
 
 const hasCard = computed(() => Boolean(
-  ['status_card', 'diagnosis_card'].includes(uiPayload.value?.type) &&
+  ['status_card', 'diagnosis_card', 'report_status'].includes(uiPayload.value?.type) &&
+  (uiPayload.value?.type !== 'report_status' || uiPayload.value?.report_generated === true) &&
   analysisArtifact.value &&
   (
     conclusion.value ||

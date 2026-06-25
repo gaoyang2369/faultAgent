@@ -300,7 +300,7 @@ def _custom_section(
     if key == "answer":
         evidence_ids = context.evidence_ids("knowledge", "kb")
         content = _first_text([
-            *(context.knowledge_artifact.snippets[:2] if context.knowledge_artifact else []),
+            _knowledge_answer_text(context),
             analysis.conclusion if analysis else "",
         ])
         return _truncate(content, 520), evidence_ids, context.missing_evidence()
@@ -371,14 +371,36 @@ def _join_sections(contract: OutputContract, sections: list[RenderedSection]) ->
         return "\n\n".join(
             item
             for item in [
-                f"报告状态：{status}",
-                f"报告标题：{title}",
-                f"报告链接：{link}",
-                f"报告摘要：\n{summary}",
-                f"证据不足提示：{missing}",
+                f"**报告状态**：{status}",
+                f"**报告标题**：{title}",
+                f"**报告链接**：{link}",
+                f"**报告摘要**\n{summary}",
+                f"**证据边界**：{missing}",
             ]
             if item
         )
+    if contract.task_type.value in {
+        "alarm_triage",
+        "fault_diagnosis",
+        "root_cause_analysis",
+        "health_assessment",
+    }:
+        title_overrides = {
+            "limitations": "证据边界",
+            "missing_evidence": "证据边界",
+            "prediction_boundary": "证据边界",
+            "risk_and_limitations": "证据边界",
+        }
+        chunks: list[str] = []
+        for section in sections:
+            if not section.content:
+                continue
+            title = title_overrides.get(section.key, section.title)
+            if section.key in {"diagnosis_conclusion", "event_summary", "health_score", "severity_assessment"}:
+                chunks.append(f"**{title}**：{section.content}")
+            else:
+                chunks.append(f"**{title}**\n{section.content}")
+        return "\n\n".join(chunks)
     if contract.task_type.value == "action_request":
         return "\n\n".join(section.content for section in sections if section.content)
     chunks = []
@@ -504,6 +526,34 @@ def _bullets(items: list[str], fallback: str) -> str:
 
 def _limited_items(items: list[str], *, limit: int) -> list[str]:
     return [_truncate(item, 150) for item in _dedupe(str(item).strip() for item in items if str(item).strip())[:limit]]
+
+
+def _knowledge_answer_text(context: _RenderContext) -> str:
+    snippets = list(context.knowledge_artifact.snippets if context.knowledge_artifact else [])
+    if not snippets:
+        return ""
+    text = _clean_knowledge_snippet(snippets[0])
+    if len(snippets) > 1:
+        second = _clean_knowledge_snippet(snippets[1])
+        if second and second not in text:
+            text = f"{text}\n\n补充依据：{second}"
+    return text
+
+
+def _clean_knowledge_snippet(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    for marker in ("文档片段：", "文档片段:", "内容：", "内容:"):
+        if marker in text:
+            text = text.split(marker, 1)[1].strip()
+            break
+    text = re.sub(r"\s*source_type:\s*\S+", "", text, flags=re.I)
+    text = re.sub(r"\s*来源(?:文件|页码|码)?[：:][^。；;]*(?:。|；|;)?", " ", text)
+    text = re.sub(r"\s*(说明|回答|立即原因|处理)\s*[：:]", r"\n\1：", text)
+    text = re.sub(r"\s*-\s+", "\n- ", text)
+    text = re.sub(r"\n\s*\n+", "\n", text).strip(" ，。；;\n")
+    return text
 
 
 def _dedupe(items: Any) -> list[str]:

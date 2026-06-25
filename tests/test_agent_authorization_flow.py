@@ -193,7 +193,9 @@ def test_guest_cannot_diagnose_generate_report_or_upload_pdf(auth_client: TestCl
         _decision("fault_diagnosis", device="J1号机", report=True),
     )
 
-    assert authorization.mode == "degrade"
+    assert authorization.allowed is False
+    assert authorization.mode == "deny"
+    assert authorization.denied_reason_code == "diagnosis_permission_denied"
     assert authorization.denied_nodes["fault_diagnosis"] == "missing_workflow_permission"
     assert authorization.denied_nodes["report"] == "missing_report_permission"
     assert "save_report" not in authorization.runtime_tools
@@ -205,6 +207,19 @@ def test_guest_cannot_diagnose_generate_report_or_upload_pdf(auth_client: TestCl
         files={"file": ("manual.pdf", b"%PDF-1.4 guest", "application/pdf")},
     )
     assert response.status_code == 403
+
+
+def test_guest_fault_diagnosis_is_denied_without_tool_calls() -> None:
+    guest_events = asyncio.run(_collect_dev_events("对J1号机进行故障诊断", "guest"))
+    guest_complete = next(event for event in guest_events if event.get("type") == "chat_complete")
+    guest_tools = [event.get("tool") for event in guest_events if event.get("type") == "tool_start"]
+
+    assert guest_complete["authorization"]["mode"] == "deny"
+    assert guest_complete["authorization"]["denied_reason_code"] == "diagnosis_permission_denied"
+    assert guest_complete["ui_payload"]["type"] == "access_denied"
+    assert guest_complete["report_url"] is None
+    assert guest_tools == []
+    assert "无法进行故障诊断" in guest_complete["final_content"]
 
 
 def test_engineer_can_diagnose_assigned_asset_but_not_other_assets() -> None:

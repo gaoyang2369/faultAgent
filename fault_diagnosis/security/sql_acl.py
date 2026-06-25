@@ -64,9 +64,10 @@ def _time_window_predicate(
     unit: str,
     *,
     scope_predicate: str = "",
+    force_latest_if_stale: bool = False,
 ) -> str:
     live_window = f"{column} >= NOW() - INTERVAL {amount} {unit}"
-    if config.SQL_TIME_ANCHOR_MODE != "latest_row_if_stale":
+    if not force_latest_if_stale and config.SQL_TIME_ANCHOR_MODE != "latest_row_if_stale":
         return live_window
     subquery_window = live_window
     max_time_source = f"(SELECT MAX({column}) FROM {table_name})"
@@ -194,7 +195,14 @@ def apply_sql_acl(
             return _deny("该数据表查询要求配置设备范围。", "missing_asset_scope")
 
     if auth.role == "guest":
-        time_predicate = _time_window_predicate(table_name, "create_time", 1, "HOUR")
+        time_predicate = _time_window_predicate(
+            table_name,
+            "create_time",
+            1,
+            "HOUR",
+            scope_predicate=asset_filter_predicate,
+            force_latest_if_stale=True,
+        )
         query = _insert_predicate(query, time_predicate)
         filters.append("guest_last_1_hour")
     else:

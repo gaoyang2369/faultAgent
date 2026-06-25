@@ -53,7 +53,8 @@ def test_plan_endpoint_uses_trusted_auth_not_user_identity(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["auth_context"]["role"] == "guest"
-    assert payload["authorization"]["mode"] == "degrade"
+    assert payload["authorization"]["mode"] == "deny"
+    assert payload["authorization"]["denied_reason_code"] == "diagnosis_permission_denied"
     assert "save_report" not in payload["planned_tools"]
 
 
