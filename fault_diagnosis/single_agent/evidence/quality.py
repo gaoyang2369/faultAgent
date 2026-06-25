@@ -132,7 +132,7 @@ def validate_artifact_invariants(
 
     warnings: list[str] = []
     workorder_reason = str(getattr(workorder_suggestion, "reason", "") or "")
-    if _sql_has_rows(sql_artifact) and "SQL 未返回可解析运行数据" in workorder_reason:
+    if _sql_has_rows(sql_artifact) and _claims_sql_returned_no_data(workorder_reason):
         warnings.append("sql_rows_contradict_workorder_no_data_reason")
     freshness = _referenced_freshness_text(referenced_artifact)
     stale = any(keyword in freshness for keyword in ("已滞后", "滞后", "stale", "非实时", "不代表实时"))
@@ -202,9 +202,25 @@ def _contains_workorder_completion(text: str) -> bool:
     return bool(re.search(r"已(?:创建|生成|派发|下发)(?:维修)?工单", text or ""))
 
 
+def _claims_sql_returned_no_data(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "")
+    return any(
+        phrase in compact
+        for phrase in (
+            "SQL未返回数据",
+            "SQL未返回可解析运行数据",
+            "SQL没有返回数据",
+            "SQL查询无数据",
+            "数据库未返回数据",
+        )
+    )
+
+
 def _sql_has_rows(sql_artifact: SqlStepArtifact | None) -> bool:
     if sql_artifact is None:
         return False
+    if getattr(sql_artifact, "row_count", None):
+        return int(sql_artifact.row_count or 0) > 0
     text = f"{sql_artifact.result_preview or ''} {sql_artifact.raw_output or ''}"
     return bool(re.search(r"[\[\(]\s*(?:\{|\'|\"|\d)", text) or re.search(r"\bdevice_name\b|\bcreate_time\b|A\d{3,5}", text))
 

@@ -1,0 +1,82 @@
+{
+  "workflow_type": "fault_diagnosis",
+  "thread_id": "placeholder",
+  "created_at": "2026-06-23T12:00:00",
+  "request_summary": "J1 A07089 故障诊断",
+  "final_answer": "J1 样本窗口内 A07089 持续出现，负载率偏高，建议生成待确认工单草稿。",
+  "report_filename": "j1-a07089-report.html",
+  "payload": {
+    "request": {
+      "equipment_hint": "J1",
+      "fault_code_hint": "A07089",
+      "analysis_goal": "J1 A07089 故障诊断"
+    },
+    "decision": {
+      "active_case_id": "eb_j1_a07089",
+      "objects": {
+        "device_ids": ["J1"],
+        "alarm_codes": ["A07089"]
+      },
+      "context_resolution": {
+        "active_asset": "J1",
+        "active_fault_codes": ["A07089"],
+        "last_evidence_bundle_id": "eb_j1_a07089",
+        "last_report_url": "j1-a07089-report.html"
+      },
+      "time_window": {
+        "default_strategy": "last_2h"
+      }
+    },
+    "sql_artifact": {
+      "success": true,
+      "summary": "SQL 返回 3 条 real_data_01 运行记录",
+      "raw_output": "[{'device_name': 'J1', 'fault_code': 'A07089', 'create_time': '2026-06-23 11:58:00'}]",
+      "row_count": 1,
+      "parse_status": "parsed",
+      "source_table": "real_data_01"
+    },
+    "knowledge_artifact": {
+      "success": true,
+      "query": "A07089 原因 处理",
+      "snippets": ["A07089 表示速度偏差或负载异常相关告警。"],
+      "raw_output": "故障码：A07089\n原因：速度偏差或负载异常。\n处理：检查负载和速度闭环。",
+      "hit_count": 1,
+      "fault_codes": ["A07089"]
+    },
+    "analysis_artifact": {
+      "success": true,
+      "conclusion": "J1 A07089 持续出现，需现场复核负载与速度闭环。",
+      "basis": ["A07089 持续出现", "负载率偏高"],
+      "recommendations": ["生成待确认工单草稿"],
+      "confidence": "medium"
+    },
+    "workorder_decision": {
+      "need_workorder": true,
+      "reason": "A07089 持续出现且有运行证据，建议生成待确认工单草稿。",
+      "workorder_type": "运行异常排查",
+      "fault_code": "A07089",
+      "equipment_object": "J1",
+      "key_evidence": ["A07089 持续出现", "负载率偏高"],
+      "processing_steps": ["刷新当前状态", "复核速度闭环"]
+    },
+    "report_artifact": {
+      "success": true,
+      "report_filename": "j1-a07089-report.html",
+      "report_url": "/reports/j1-a07089-report.html",
+      "save_result": "报告已保存至：/reports/j1-a07089-report.html"
+    },
+    "evidence_bundle": {
+      "bundle_id": "eb_j1_a07089"
+    },
+    "report_context": {
+      "current_event": "A07089",
+      "status_level": "warning",
+      "priority": "P2",
+      "freshness_label": "实时性良好",
+      "currentness": "可作为当前状态参考",
+      "latest_sample_time": "2026-06-23 11:58:00",
+      "evidence_summary": ["A07089 持续出现", "负载率偏高"],
+      "next_action": "生成待确认工单草稿"
+    }
+  }
+}

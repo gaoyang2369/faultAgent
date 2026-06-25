@@ -53,7 +53,8 @@ from .reporting import (
 )
 from .support.serialization import preview, stringify
 from .sql_safety import build_fallback_sql_query, build_sql_prompt, has_unknown_sql_table, is_readonly_sql
-from .sql_safety import build_fast_sql_plan
+from .sql_safety import REAL_DATA_LATEST_TABLE, build_fast_sql_plan
+from .sql_result_parser import parse_sql_rows
 from .support.tool_access import get_knowledge_tool, get_report_tool
 from .workorder_suggestions import build_workorder_suggestion, build_workorder_suggestion_from_artifact
 
@@ -156,6 +157,9 @@ class SingleAgentStagesMixin:
                 summary="SQL 查询被数据权限策略拦截",
                 error=acl_result.reason,
                 access_scope=dict(getattr(self._workflow_task_decision, "access_scope", {}) or {}),
+                row_count=0,
+                parse_status="blocked",
+                source_table=REAL_DATA_LATEST_TABLE,
             )
             self._record_artifact("sql", artifact, stage="sql")
             self._last_step_result = artifact
@@ -191,6 +195,9 @@ class SingleAgentStagesMixin:
                         summary="SQL checker 返回结果未通过数据权限复检",
                         error=checked_acl_result.reason,
                         access_scope=dict(getattr(self._workflow_task_decision, "access_scope", {}) or {}),
+                        row_count=0,
+                        parse_status="blocked",
+                        source_table=REAL_DATA_LATEST_TABLE,
                     )
                     self._record_artifact("sql", artifact, stage="sql")
                     self._last_step_result = artifact
@@ -207,6 +214,7 @@ class SingleAgentStagesMixin:
         ):
             yield chunk
         raw_output = self._last_step_result
+        parsed_rows = parse_sql_rows(stringify(raw_output))
         artifact = SqlStepArtifact(
             success=True,
             summary=summary,
@@ -215,6 +223,9 @@ class SingleAgentStagesMixin:
             raw_output=stringify(raw_output),
             access_scope=dict(getattr(self._workflow_task_decision, "access_scope", {}) or {}),
             filters_applied=filters_applied,
+            row_count=len(parsed_rows),
+            parse_status="parsed" if parsed_rows else "empty_or_unparsed",
+            source_table=REAL_DATA_LATEST_TABLE,
         )
         self._record_artifact("sql", artifact, stage="sql")
         self._last_step_result = artifact
@@ -267,6 +278,8 @@ class SingleAgentStagesMixin:
             raw_output,
             fallback_error_message="知识检索未命中",
         )
+        artifact.hit_count = len(artifact.snippets)
+        artifact.fault_codes = extract_fault_codes_from_text(raw_output)
         self._record_artifact("knowledge", artifact, stage="knowledge")
         self._last_step_result = artifact
 
@@ -509,6 +522,9 @@ class SingleAgentStagesMixin:
             confidence_details=confidence_details,
             confidence=confidence,
             error=None,
+            row_count=0,
+            parse_status="skipped",
+            source_table=REAL_DATA_LATEST_TABLE,
         )
 
     def _sanitize_analysis_recommendations(self, recommendations: list[str]) -> list[str]:
@@ -772,6 +788,8 @@ class SingleAgentStagesMixin:
             snippets=[],
             raw_output="",
             error=reason,
+            hit_count=0,
+            fault_codes=[],
         )
         self._record_artifact("knowledge", artifact, stage="knowledge")
         return artifact

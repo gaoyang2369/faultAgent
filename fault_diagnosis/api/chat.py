@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
+from .. import config
 from ..common.logger import get_logger
 from ..services.chat_service import (
     AgentChatPayload,
@@ -18,6 +19,24 @@ _log = get_logger("api.chat")
 
 def _chat_service() -> ChatService:
     return ChatService(stream_events=token_stream_events, logger=_log)
+
+
+@router.get("/chat/plan")
+async def plan_chat_get(
+    request: Request,
+    message: str,
+    thread_id: str | None = None,
+    user_identity: str = "游客",
+):
+    """Return a side-effect-free workflow plan for regression/debug usage."""
+    if not (config.ENABLE_PLAN_ENDPOINT or config.LOCAL_DEV_MODE):
+        raise HTTPException(status_code=404, detail="plan endpoint is disabled")
+    return await _chat_service().plan_chat(
+        request,
+        message=message,
+        thread_id=thread_id,
+        user_identity=user_identity,
+    )
 
 
 @router.get("/chat/stream")

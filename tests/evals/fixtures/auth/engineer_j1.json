@@ -1,0 +1,6 @@
+{
+  "role": "engineer",
+  "user_id": "eval_engineer_j1",
+  "asset_scope": ["J1"],
+  "allowed_tables": ["real_data_01", "device_alarm", "fault_records"]
+}

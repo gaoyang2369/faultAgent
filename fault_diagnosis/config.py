@@ -182,6 +182,7 @@ SESSION_COOKIE_PATH = os.getenv("SESSION_COOKIE_PATH", "/").strip() or "/"
 
 # === Local Development ===
 LOCAL_DEV_MODE = _env_bool("LOCAL_DEV_MODE", False)
+ENABLE_PLAN_ENDPOINT = _env_bool("ENABLE_PLAN_ENDPOINT", False)
 ENABLE_DEV_AUTH = _env_bool("ENABLE_DEV_AUTH", False)
 # The explicit opt-in must never turn the development identity endpoint on in production.
 DEV_AUTH_ENABLED = not IS_PRODUCTION and (LOCAL_DEV_MODE or ENABLE_DEV_AUTH)

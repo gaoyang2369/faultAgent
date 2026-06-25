@@ -146,6 +146,9 @@ class SqlStepArtifact(BaseModel):
     error: str | None = None
     access_scope: dict[str, Any] = Field(default_factory=dict)
     filters_applied: list[str] = Field(default_factory=list)
+    row_count: int | None = None
+    parse_status: str = ""
+    source_table: str = ""
 
 
 class KnowledgeStepArtifact(BaseModel):
@@ -156,6 +159,8 @@ class KnowledgeStepArtifact(BaseModel):
     snippets: list[str] = Field(default_factory=list)
     raw_output: str = ""
     error: str | None = None
+    hit_count: int | None = None
+    fault_codes: list[str] = Field(default_factory=list)
 
 
 class AnalysisStepArtifact(BaseModel):
