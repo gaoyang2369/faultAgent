@@ -26,10 +26,12 @@ from fault_diagnosis.auth.session_scope import SessionScopeManager
 from fault_diagnosis.diagnosis.artifact_store import clear_all_artifacts, save_thread_artifact
 from fault_diagnosis.diagnosis.contracts import DiagnosisArtifactEnvelope
 from fault_diagnosis.runtime.dev_mode import init_dev_state
-from evaluators import evaluate_plan_case, summarize_results
+from evaluators import case_assertion_strength_failures, evaluate_plan_case, hard_gate_failures, summarize_results
 
 CASE_FILE = ROOT / "tests" / "evals" / "agent_workflow_cases.yaml"
 FIXTURE_DIR = ROOT / "tests" / "evals" / "fixtures"
+RESULTS_DIR = ROOT / "tests" / "evals" / "results"
+PLAN_SUMMARY_FILE = RESULTS_DIR / "plan_eval_summary.json"
 
 
 def load_cases(path: Path) -> list[dict[str, Any]]:
@@ -139,6 +141,17 @@ def main() -> int:
     results = []
     for case in cases:
         try:
+            strength_failures = case_assertion_strength_failures(case)
+            if strength_failures:
+                result = evaluate_plan_case(case, {})
+                result.passed = False
+                result.failures.extend(strength_failures)
+                results.append(result)
+                status = "PASS" if result.passed else "FAIL"
+                print(f"{status} {result.case_id} {case.get('name', '')}")
+                for failure in result.failures:
+                    print(f"  - {failure}")
+                continue
             snapshot = run_remote_case(args.base_url, case) if args.base_url else run_local_case(client, case)  # type: ignore[arg-type]
             result = evaluate_plan_case(case, snapshot)
         except Exception as exc:  # noqa: BLE001
@@ -161,8 +174,14 @@ def main() -> int:
             "evidence_gap_accuracy",
         ],
     )
+    summary.setdefault("p95_latency_by_intent", {})
+    gate_failures = hard_gate_failures(summary, mode="plan")
+    if gate_failures:
+        summary["hard_gate_failures"] = gate_failures
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    PLAN_SUMMARY_FILE.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    return 0 if not summary["failed"] else 1
+    return 0 if not summary["failed"] and not gate_failures else 1
 
 
 if __name__ == "__main__":

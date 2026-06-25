@@ -1,0 +1,12 @@
+{
+  "total": 42,
+  "passed": 42,
+  "failed": 0,
+  "failed_cases": [],
+  "intent_accuracy": 1.0,
+  "context_binding_accuracy": 1.0,
+  "workflow_policy_accuracy": 1.0,
+  "tool_selection_precision": 1.0,
+  "evidence_gap_accuracy": 1.0,
+  "p95_latency_by_intent": {}
+}

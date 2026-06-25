@@ -1,0 +1,25 @@
+{
+  "total": 14,
+  "passed": 14,
+  "failed": 0,
+  "failed_cases": [],
+  "unnecessary_tool_call_rate": 0.2262,
+  "artifact_reuse_rate": 0.2857,
+  "trajectory_pass_rate": 1.0,
+  "answer_contract_pass_rate": 1.0,
+  "contradiction_rate": 0.0,
+  "dangerous_action_forbidden_phrase_count": 0.0,
+  "p95_latency_by_intent": {
+    "all": 1109.5
+  },
+  "artifact_reuse_unnecessary_tool_call_rate": 0.0,
+  "plan_stream_consistency": {
+    "total": 14,
+    "passed": 14,
+    "failed": 0,
+    "failed_cases": [],
+    "plan_vs_stream_mismatch_count": 0.0,
+    "p95_latency_by_intent": {}
+  },
+  "plan_vs_stream_mismatch_count": 0.0
+}
