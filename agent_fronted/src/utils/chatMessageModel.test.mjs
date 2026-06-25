@@ -131,12 +131,18 @@ const artifactOnlyMessage = normalizeChatMessage({
   },
   knowledge_artifact: {
     query: 'A07089'
+  },
+  ui_payload: {
+    type: 'diagnosis_card',
+    device_label: 'G120电机1'
   }
 })
 
 assert.equal(artifactOnlyMessage.analysisArtifact.conclusion, 'G120电机1存在故障码A07089')
 assert.equal(artifactOnlyMessage.sqlArtifact.summary, 'SQL 返回 50 条')
 assert.equal(artifactOnlyMessage.knowledgeArtifact.query, 'A07089')
+assert.equal(artifactOnlyMessage.uiPayload.type, 'diagnosis_card')
+assert.equal(artifactOnlyMessage.ui_payload.device_label, 'G120电机1')
 assert.equal(isRenderableChatMessage(artifactOnlyMessage), true)
 
 console.log('chatMessageModel checks passed')

@@ -53,6 +53,21 @@ _TRIAGE_KEYWORDS = ("现在", "当前", "是否故障", "还在", "严重", "怎
 _KNOWLEDGE_KEYWORDS = ("是什么意思", "含义", "定义", "手册", "sop", "SOP", "步骤", "怎么操作", "如何更换", "校准")
 _FAULT_DIAGNOSIS_KEYWORDS = ("为什么", "原因", "诊断", "异常", "故障", "停机", "高温", "过热", "过载")
 _STATUS_KEYWORDS = ("现在", "当前", "多少", "是否在线", "状态", "运行情况", "在线", "离线")
+_PERMISSION_SCOPE_KEYWORDS = (
+    "身份",
+    "权限",
+    "访问",
+    "可访问",
+    "能访问",
+    "能看",
+    "可以看",
+    "账号",
+    "角色",
+    "哪些设备",
+    "哪些数据",
+    "生成报告吗",
+    "能生成报告",
+)
 _RESOLUTION_KEYWORDS = ("怎么处理", "如何处理", "解决", "处置", "建议", "排查", "维修")
 _CURRENT_STATUS_KEYWORDS = ("现在", "当前", "还在", "是否", "状态", "在线", "active")
 _SEVERITY_KEYWORDS = ("严重", "严不严重", "风险", "影响", "危险", "要不要停机", "要不要派人")
@@ -115,6 +130,8 @@ def _classify_task(
     compact = text.replace(" ", "").lower()
     if report_from_previous_artifact:
         return TaskType.REPORT_GENERATION, 0.95
+    if _has_any(compact, _PERMISSION_SCOPE_KEYWORDS):
+        return TaskType.PERMISSION_SCOPE_QUERY, 0.9
     if _has_any(compact, _ACTION_KEYWORDS):
         return TaskType.ACTION_REQUEST, 0.92
     if _has_any(compact, _REPORT_KEYWORDS):
@@ -163,6 +180,8 @@ def _intent_stack(
         intents.append("workorder_decision")
     if requested_output == "report" or report_from_previous_artifact:
         intents.append("report_generation")
+    if task_type == TaskType.PERMISSION_SCOPE_QUERY:
+        intents.append("permission_scope_query")
     if has_alarm and (_has_any(compact, _KNOWLEDGE_KEYWORDS + _ALARM_KEYWORDS) or objects.alarm_codes):
         intents.append("explain_alarm_code")
     if _has_any(compact, _CURRENT_STATUS_KEYWORDS) or task_type == TaskType.STATUS_QUERY:
@@ -197,6 +216,7 @@ def _candidate_task_types(primary: TaskType, intent_stack: list[str]) -> list[Ta
         "create_workorder_draft": [TaskType.ACTION_REQUEST],
         "dispatch_workorder": [TaskType.ACTION_REQUEST],
         "fault_diagnosis": [TaskType.FAULT_DIAGNOSIS],
+        "permission_scope_query": [TaskType.PERMISSION_SCOPE_QUERY],
     }
     for intent in intent_stack:
         candidates.extend(intent_map.get(intent, []))
@@ -244,6 +264,15 @@ def _apply_intent_flags(flags: dict[str, bool], intent_stack: list[str], objects
             need_resolution=True,
             may_involve_write_action=True,
         )
+    if "permission_scope_query" in intents:
+        flags.update(
+            need_sql=False,
+            need_knowledge=False,
+            need_analysis=True,
+            need_resolution=False,
+            need_workorder_decision=False,
+            need_report=False,
+        )
     if len(intents) > 1:
         flags["safe_union_workflow"] = True
 
@@ -258,7 +287,11 @@ def _extract_objects(payload: dict[str, Any], text: str) -> WorkflowObjects:
     alarm_codes = _dedupe(
         [
             str(payload.get("fault_code_hint") or "").strip().upper(),
-            *[match.group(1).strip().upper() for match in _ALARM_CODE_RE.finditer(text or "")],
+            *[
+                match.group(1).strip().upper()
+                for match in _ALARM_CODE_RE.finditer(text or "")
+                if not _looks_like_model_code(match.group(1))
+            ],
         ]
     )
     metrics = [
@@ -299,6 +332,7 @@ def _time_window(task_type: TaskType, payload: dict[str, Any], text: str) -> Wor
         TaskType.KNOWLEDGE_QA: "static_reference",
         TaskType.REPORT_GENERATION: "existing_evidence_or_current",
         TaskType.ACTION_REQUEST: "current_status",
+        TaskType.PERMISSION_SCOPE_QUERY: "none",
     }
     return WorkflowTimeWindow(is_inferred=True, default_strategy=defaults[task_type])
 
@@ -361,6 +395,8 @@ def _flags_for_task(
             need_resolution=True,
             need_workorder_decision=asks_workorder,
         )
+    elif task_type == TaskType.PERMISSION_SCOPE_QUERY:
+        flags.update(need_sql=False, need_knowledge=False, need_analysis=True, need_workorder_decision=False, need_report=False)
     return flags
 
 
@@ -417,6 +453,9 @@ def _subgoals(
             ("risk_check", True, []),
             ("action_decision", True, ["human_confirmation"]),
         ],
+        TaskType.PERMISSION_SCOPE_QUERY: [
+            ("summarize_permission_scope", True, []),
+        ],
     }[task_type]
     return [
         WorkflowSubgoal(
@@ -455,6 +494,8 @@ def _requested_output(task_type: TaskType, text: str) -> str:
         return "report"
     if task_type == TaskType.ACTION_REQUEST:
         return "action_confirmation"
+    if task_type == TaskType.PERMISSION_SCOPE_QUERY:
+        return "permission_scope"
     return "answer"
 
 
@@ -497,3 +538,7 @@ def _has_any(text: str, keywords: tuple[str, ...]) -> bool:
 
 def _dedupe(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value for item in values if (value := str(item or "").strip())))
+
+
+def _looks_like_model_code(value: str) -> bool:
+    return str(value or "").strip().upper() in {"G120", "S120", "V20", "G130", "G150"}

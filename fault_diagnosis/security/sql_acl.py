@@ -172,23 +172,26 @@ def apply_sql_acl(
     filters: list[str] = []
     table_name = next(iter(tables))
     asset_filter_predicate = ""
-    if auth.role == "engineer":
-        requested = _requested_assets(request, decision)
-        denied_assets = [asset for asset in requested if not asset_is_in_scope(asset, auth.asset_scope)]
+    requested_assets = _requested_assets(request, decision)
+    scoped_assets = list(scope.asset_ids or auth.asset_scope)
+    if scoped_assets:
+        denied_assets = [asset for asset in requested_assets if not asset_is_in_scope(asset, scoped_assets)]
         if denied_assets:
             return _deny(
                 f"请求设备不在当前账号范围：{', '.join(denied_assets)}",
                 "asset_out_of_scope",
             )
-        predicate = _asset_predicate(table_name, auth.asset_scope)
+        predicate = _asset_predicate(table_name, scoped_assets)
         if predicate:
-            if not auth.asset_scope:
-                return _deny("该数据表查询要求配置设备范围。", "missing_asset_scope")
             asset_filter_predicate = predicate
             query = _insert_predicate(query, predicate)
-            filters.append("engineer_asset_scope")
-        elif table_name != "fault_records":
+            filters.append(f"{auth.role}_asset_scope")
+        elif requested_assets or auth.role in {"guest", "engineer"}:
             return _deny("当前账号负责设备没有匹配该数据表的数据源。", "asset_filter_not_supported")
+
+    if auth.role == "engineer":
+        if not auth.asset_scope:
+            return _deny("该数据表查询要求配置设备范围。", "missing_asset_scope")
 
     if auth.role == "guest":
         time_predicate = _time_window_predicate(table_name, "create_time", 1, "HOUR")

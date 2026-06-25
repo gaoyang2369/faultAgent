@@ -44,6 +44,7 @@ def build_direct_complete_payload(
         "report_url": None,
         "decision": decision.model_dump(),
         "authorization": decision.authorization,
+        "ui_payload": build_ui_payload(decision=decision),
         "trace": trace.model_dump(exclude_none=True),
         "todos": [],
         "event_count": event_count,
@@ -76,6 +77,7 @@ def build_report_handoff_complete_payload(
         "report_url": extract_report_url(report_artifact.save_result),
         "decision": decision.model_dump(),
         "authorization": decision.authorization,
+        "ui_payload": build_ui_payload(decision=decision, report_artifact=report_artifact),
         "todos": todos,
         "workflow_route": {
             "primary_task_type": decision.primary_task_type,
@@ -149,6 +151,12 @@ def build_diagnosis_complete_payload(
         "audit_log": audit_log_result,
         "workorder_decision": workorder_suggestion.model_dump(exclude_none=True),
         "report_artifact": report_artifact.model_dump(exclude_none=True),
+        "ui_payload": build_ui_payload(
+            decision=decision,
+            sql_artifact=sql_artifact,
+            analysis_artifact=analysis_artifact,
+            report_artifact=report_artifact,
+        ),
         "evidence_bundle": evidence_bundle.model_dump(exclude_none=True) if evidence_bundle else None,
         "output_guardrail": output_guardrail,
         "rendered_answer": (
@@ -192,6 +200,57 @@ def build_diagnosis_complete_payload(
         build_diagnosis_contract_payload(saved_envelope),
     )
     return complete_payload
+
+
+def build_ui_payload(
+    *,
+    decision: SingleAgentDecision,
+    sql_artifact: SqlStepArtifact | None = None,
+    analysis_artifact: AnalysisStepArtifact | None = None,
+    report_artifact: ReportStepArtifact | None = None,
+) -> dict[str, Any]:
+    """Return a small presentation hint that prevents the frontend from guessing."""
+
+    task_type = str(decision.primary_task_type or "")
+    authorization = decision.authorization or {}
+    auth_mode = str(authorization.get("mode") or "")
+    data_state = str(getattr(sql_artifact, "data_state", "") or "")
+    ui_type = "text_only"
+    denied_reason_code = str(authorization.get("denied_reason_code") or "")
+    if task_type == "permission_scope_query":
+        ui_type = "permission_scope"
+    elif task_type == "report_generation" and (
+        denied_reason_code == "report_permission_denied"
+        or (
+            auth_mode == "deny"
+            and isinstance(authorization.get("denied_nodes"), dict)
+            and authorization["denied_nodes"].get("report") == "missing_report_permission"
+        )
+    ):
+        ui_type = "report_blocked"
+    elif auth_mode in {"deny", "clarify"}:
+        ui_type = "access_denied"
+    elif task_type == "report_generation":
+        ui_type = "report_status"
+    elif data_state in {"out_of_scope", "blocked", "empty"} or auth_mode == "degrade":
+        ui_type = "text_only"
+    elif task_type == "status_query":
+        ui_type = "status_card"
+    elif task_type in {"alarm_triage", "fault_diagnosis", "root_cause_analysis", "health_assessment"}:
+        ui_type = "diagnosis_card"
+
+    objects = decision.objects or {}
+    devices = [str(item).strip() for item in objects.get("device_ids", []) if str(item).strip()]
+    alarm_codes = [str(item).strip() for item in objects.get("alarm_codes", []) if str(item).strip()]
+    return {
+        "type": ui_type,
+        "task_type": task_type,
+        "data_state": data_state or None,
+        "device_label": devices[0] if devices else None,
+        "fault_code": alarm_codes[0] if alarm_codes else None,
+        "confidence": getattr(analysis_artifact, "confidence", None),
+        "report_generated": bool(report_artifact and report_artifact.success),
+    }
 
 
 def _merge_missing_contract_fields(

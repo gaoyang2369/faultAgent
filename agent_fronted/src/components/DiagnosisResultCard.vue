@@ -268,6 +268,14 @@ const toList = (value) => {
 
 const cleanText = (value) => String(value || '').replace(/\s+/g, ' ').trim()
 
+const uiPayload = computed(() => pickObject(
+  props.message?.uiPayload,
+  props.message?.ui_payload,
+  props.message?.artifact?.payload?.ui_payload,
+  props.message?.workflowResult?.ui_payload,
+  props.message?.workflow_result?.ui_payload
+))
+
 const analysisArtifact = computed(() => pickObject(
   props.message?.analysisArtifact,
   props.message?.analysis_artifact,
@@ -308,7 +316,8 @@ const workOrderDecision = computed(() => pickObject(
   props.message?.scenario_result?.payload?.workorder_decision
 ))
 
-const basisItems = computed(() => toList(analysisArtifact.value?.basis))
+const isRawSqlTupleText = (value) => /^\(?\d+,\s*['"]?\d{4}-\d{2}-\d{2}/.test(cleanText(value)) || /\),\s*\(\d+,\s*['"]?\d{4}-\d{2}-\d{2}/.test(cleanText(value))
+const basisItems = computed(() => toList(analysisArtifact.value?.basis).filter((item) => !isRawSqlTupleText(item)))
 const causeItems = computed(() => toList(analysisArtifact.value?.probable_causes))
 const verificationItems = computed(() => toList([
   ...toList(analysisArtifact.value?.verification_items),
@@ -332,6 +341,7 @@ const evidenceText = computed(() => [
 ].filter(Boolean).join(' '))
 
 const hasCard = computed(() => Boolean(
+  ['status_card', 'diagnosis_card'].includes(uiPayload.value?.type) &&
   analysisArtifact.value &&
   (
     conclusion.value ||
@@ -351,6 +361,8 @@ const confidenceLabel = computed(() => {
   return value
 })
 const deviceLabel = computed(() => {
+  const explicit = cleanText(uiPayload.value?.device_label || uiPayload.value?.deviceLabel)
+  if (explicit) return explicit
   const matched = evidenceText.value.match(/[A-Za-z]*\d+电机\d+/)
   return matched?.[0] || 'DCMA 系统'
 })
@@ -359,6 +371,7 @@ const latestTimeLabel = computed(() => {
   return matched?.[0] || ''
 })
 const statusTone = computed(() => {
+  if (uiPayload.value?.type === 'status_card' && uiPayload.value?.data_state && uiPayload.value.data_state !== 'ok') return 'warning'
   if (faultCodes.value.length || /故障|异常|报警/.test(conclusion.value)) return 'danger'
   if (/关注|偏差|偏高|待验证/.test(conclusion.value)) return 'warning'
   return 'good'

@@ -29,6 +29,7 @@ def test_guest_has_fixed_server_side_scope() -> None:
     auth = build_auth_context(role="guest", table_scope=["device_alarm"], kb_scopes=["restricted"])
 
     assert auth.table_scope == ["real_data_01"]
+    assert auth.asset_scope == ["g120_motor_1"]
     assert auth.kb_scopes == []
     assert "workflow.fault_diagnosis" not in auth.permissions
     assert "tool.sql.read" in auth.permissions
@@ -81,6 +82,23 @@ def test_guest_fault_diagnosis_is_degraded() -> None:
     assert authorization.denied_nodes["report"] == "missing_report_permission"
 
 
+def test_guest_report_generation_is_denied_without_degraded_tools() -> None:
+    decision = SingleAgentDecision(
+        primary_task_type="report_generation",
+        enabled_nodes={"sql": True, "knowledge": True, "analysis": True, "report": True},
+        runtime_tools=["sql_db_query", "query_knowledge_base", "save_report"],
+    )
+
+    authorization = authorize_workflow(build_auth_context(role="guest"), decision)
+
+    assert authorization.allowed is False
+    assert authorization.mode == "deny"
+    assert authorization.denied_reason_code == "report_permission_denied"
+    assert authorization.denied_nodes["report"] == "missing_report_permission"
+    assert authorization.runtime_tools == []
+    assert "无法生成 DCMA 运行报告" in authorization.user_message
+
+
 def test_engineer_cannot_authorize_unassigned_asset() -> None:
     auth = build_auth_context(
         user_id="engineer_01",
@@ -106,6 +124,7 @@ def test_guest_sql_acl_forces_table_time_and_limit() -> None:
     )
 
     assert result.allowed is True
+    assert "device_name IN ('G120电机1')" in result.sql_query
     assert "create_time >= NOW() - INTERVAL 1 HOUR" in result.sql_query
     assert "SELECT MAX(create_time) FROM real_data_01" in result.sql_query
     assert result.sql_query.endswith("LIMIT 50")
@@ -117,6 +136,18 @@ def test_guest_sql_acl_forces_table_time_and_limit() -> None:
         "SELECT * FROM real_data_01 /* create_time >= NOW() - INTERVAL 1 HOUR */ LIMIT 10",
         auth=build_auth_context(role="guest"),
     ).blocked_reason_code == "unsupported_sql_shape"
+
+
+def test_guest_sql_acl_denies_unassigned_asset() -> None:
+    result = apply_sql_acl(
+        "SELECT * FROM real_data_01 WHERE device_name = 'G120电机2' ORDER BY create_time DESC LIMIT 10",
+        auth=build_auth_context(role="guest"),
+        request=SimpleNamespace(equipment_hint="G120电机2"),
+        decision=SingleAgentDecision(objects={"device_ids": ["G120电机2"]}),
+    )
+
+    assert result.allowed is False
+    assert result.blocked_reason_code == "asset_out_of_scope"
 
 
 def test_engineer_sql_acl_injects_asset_scope() -> None:

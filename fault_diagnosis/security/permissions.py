@@ -14,6 +14,7 @@ WORKFLOW_ROOT_CAUSE_ANALYSIS = "workflow.root_cause_analysis"
 WORKFLOW_HEALTH_ASSESSMENT = "workflow.health_assessment"
 WORKFLOW_REPORT_GENERATION = "workflow.report_generation"
 WORKFLOW_ACTION_REQUEST = "workflow.action_request"
+WORKFLOW_PERMISSION_SCOPE_QUERY = "workflow.permission_scope_query"
 
 TOOL_SQL_READ = "tool.sql.read"
 TOOL_KB_SEARCH = "tool.kb.search"
@@ -44,12 +45,15 @@ AUTHORIZED_BUSINESS_TABLES = [
     "fault_records",
 ]
 
+GUEST_DEFAULT_ASSETS = ["g120_motor_1"]
+
 ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
     "guest": frozenset(
         {
             WORKFLOW_KNOWLEDGE_QA,
             WORKFLOW_STATUS_QUERY,
             WORKFLOW_ALARM_TRIAGE,
+            WORKFLOW_PERMISSION_SCOPE_QUERY,
             TOOL_SQL_READ,
             TOOL_KB_SEARCH,
             OUTPUT_CHART_GENERATE,
@@ -67,6 +71,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
             WORKFLOW_HEALTH_ASSESSMENT,
             WORKFLOW_REPORT_GENERATION,
             WORKFLOW_ACTION_REQUEST,
+            WORKFLOW_PERMISSION_SCOPE_QUERY,
             TOOL_SQL_READ,
             TOOL_KB_SEARCH,
             TOOL_REPORT_WRITE_DRAFT,
@@ -89,6 +94,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
             WORKFLOW_HEALTH_ASSESSMENT,
             WORKFLOW_REPORT_GENERATION,
             WORKFLOW_ACTION_REQUEST,
+            WORKFLOW_PERMISSION_SCOPE_QUERY,
             TOOL_SQL_READ,
             TOOL_KB_SEARCH,
             TOOL_REPORT_WRITE_DRAFT,
@@ -156,7 +162,7 @@ def build_auth_context(
         display_name=(display_name or "").strip(),
         role=role,
         permissions=set(ROLE_PERMISSIONS[role]),
-        asset_scope=_clean_scope(asset_scope),
+        asset_scope=GUEST_DEFAULT_ASSETS if role == "guest" else _clean_scope(asset_scope),
         table_scope=effective_tables,
         system_scope=_clean_scope(system_scope),
         location_scope=_clean_scope(location_scope),
@@ -169,6 +175,7 @@ def build_auth_context(
 def effective_resource_scope(auth: AuthContext) -> ResourceScope:
     if auth.role == "guest":
         return ResourceScope(
+            asset_ids=list(auth.asset_scope or GUEST_DEFAULT_ASSETS),
             allowed_tables=["real_data_01"],
             max_rows=50,
             max_time_window_days=1,

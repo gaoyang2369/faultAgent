@@ -222,6 +222,7 @@ def apply_context_resolution(
     current_assets = _dedupe([current_asset])
     current_fault_codes = _dedupe([current_fault_code])
     referenced = _has_context_reference(message)
+    suppress_reuse = _is_permission_scope_question(message)
 
     used_active_asset = False
     used_active_fault_codes = False
@@ -236,7 +237,7 @@ def apply_context_resolution(
         ]
     )
 
-    if active_case is not None:
+    if active_case is not None and not suppress_reuse:
         can_reuse_asset = len(state_assets) <= 1 or not referenced
         can_reuse_fault_code = len(state_fault_codes) <= 1 or not referenced
         if (
@@ -269,13 +270,13 @@ def apply_context_resolution(
     candidate_assets = _dedupe(
         [
             *current_assets,
-            *state_assets,
+            *([] if suppress_reuse else state_assets),
         ]
     )
     candidate_fault_codes = _dedupe(
         [
             *current_fault_codes,
-            *state_fault_codes,
+            *([] if suppress_reuse else state_fault_codes),
         ]
     )
     if referenced and not current_asset and len(candidate_assets) > 1:
@@ -291,15 +292,15 @@ def apply_context_resolution(
         "references": _context_reference_labels(message),
         "used_active_asset": used_active_asset,
         "used_active_fault_codes": used_active_fault_codes,
-        "active_asset": current_asset or (active_case.active_asset if active_case else None),
-        "active_fault_codes": current_fault_codes or (active_case.active_fault_codes if active_case else []),
+        "active_asset": current_asset or (None if suppress_reuse else (active_case.active_asset if active_case else None)),
+        "active_fault_codes": current_fault_codes or ([] if suppress_reuse else (active_case.active_fault_codes if active_case else [])),
         "active_time_window": payload.get("time_range_hint")
-        or (active_case.active_time_window if active_case else {}),
-        "last_evidence_bundle_id": active_case.last_evidence_bundle_id if active_case else None,
-        "last_report_url": active_case.last_report_url if active_case else None,
+        or ({} if suppress_reuse else (active_case.active_time_window if active_case else {})),
+        "last_evidence_bundle_id": None if suppress_reuse else (active_case.last_evidence_bundle_id if active_case else None),
+        "last_report_url": None if suppress_reuse else (active_case.last_report_url if active_case else None),
         "unresolved_questions": _dedupe([
             *unresolved_questions,
-            *(active_case.unresolved_questions if active_case else []),
+            *([] if suppress_reuse else (active_case.unresolved_questions if active_case else [])),
         ]),
         "candidates": {
             "assets": candidate_assets,
@@ -308,6 +309,26 @@ def apply_context_resolution(
     }
     payload["context_resolution"] = resolution
     return resolution
+
+
+def _is_permission_scope_question(message: str) -> bool:
+    compact = str(message or "").replace(" ", "").lower()
+    keywords = (
+        "身份",
+        "权限",
+        "访问",
+        "可访问",
+        "能访问",
+        "能看",
+        "可以看",
+        "账号",
+        "角色",
+        "哪些设备",
+        "哪些数据",
+        "生成报告吗",
+        "能生成报告",
+    )
+    return any(keyword in compact for keyword in keywords)
 
 
 def _has_context_reference(message: str) -> bool:

@@ -3919,7 +3919,17 @@ const diagnosisAnalysisArtifact = computed(() => {
     null;
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
 });
+const messageUiPayload = computed(() => {
+  const raw = props.message?.uiPayload ||
+    props.message?.ui_payload ||
+    props.message?.artifact?.payload?.ui_payload ||
+    props.message?.workflowResult?.ui_payload ||
+    props.message?.workflow_result?.ui_payload ||
+    null;
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+});
 const hasDiagnosisResultCard = computed(() => Boolean(
+  ['status_card', 'diagnosis_card'].includes(messageUiPayload.value?.type) &&
   diagnosisAnalysisArtifact.value &&
   (
     diagnosisAnalysisArtifact.value.conclusion ||

@@ -281,6 +281,30 @@ POLICIES: dict[TaskType, WorkflowPolicy] = {
             "audit_write_intent",
         ],
     ),
+    TaskType.PERMISSION_SCOPE_QUERY: _policy(
+        policy_id="permission_scope_query_v1",
+        task_type=TaskType.PERMISSION_SCOPE_QUERY,
+        workflow_id="wf_permission_scope_query_v1",
+        required_slots=[],
+        conditional_required_slots={},
+        enabled_nodes={
+            "sql": False,
+            "knowledge": False,
+            "analysis": True,
+            "resolution_recommendation": False,
+            "workorder_decision": False,
+            "report": False,
+        },
+        evidence_requirements={
+            "need_auth_context": True,
+        },
+        output_schema="permission_scope_answer_v1",
+        on_missing_evidence="answer_from_authorization_context",
+        guardrails=[
+            "answer_permissions_from_server_auth_context",
+            "do_not_reuse_device_context_for_identity_question",
+        ],
+    ),
 }
 
 

@@ -225,6 +225,25 @@ ACTION_REQUEST_CONTRACT = OutputContract(
     ],
 )
 
+PERMISSION_SCOPE_QUERY_CONTRACT = OutputContract(
+    task_type=TaskType.PERMISSION_SCOPE_QUERY,
+    template_id="permission_scope_query_v1",
+    description="用于说明当前身份可访问的设备、数据窗口和不可用能力。",
+    tone="brief",
+    require_evidence_ids=False,
+    allow_workorder_suggestion=False,
+    allow_report_link=False,
+    missing_evidence_policy="answer_with_known_limits",
+    max_bullets_per_section=5,
+    max_chars=1200,
+    sections=[
+        OutputSectionContract(key="identity_scope", title="当前身份", require_evidence=False),
+        OutputSectionContract(key="accessible_assets", title="可访问设备", require_evidence=False),
+        OutputSectionContract(key="available_capabilities", title="可用能力", require_evidence=False),
+        OutputSectionContract(key="unavailable_capabilities", title="不可用能力", require_evidence=False),
+    ],
+)
+
 OUTPUT_CONTRACTS: dict[TaskType, OutputContract] = {
     TaskType.STATUS_QUERY: STATUS_QUERY_CONTRACT,
     TaskType.ALARM_TRIAGE: ALARM_TRIAGE_CONTRACT,
@@ -234,6 +253,7 @@ OUTPUT_CONTRACTS: dict[TaskType, OutputContract] = {
     TaskType.KNOWLEDGE_QA: KNOWLEDGE_QA_CONTRACT,
     TaskType.REPORT_GENERATION: REPORT_GENERATION_CONTRACT,
     TaskType.ACTION_REQUEST: ACTION_REQUEST_CONTRACT,
+    TaskType.PERMISSION_SCOPE_QUERY: PERMISSION_SCOPE_QUERY_CONTRACT,
 }
 
 

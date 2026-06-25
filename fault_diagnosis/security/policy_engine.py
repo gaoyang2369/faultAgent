@@ -17,13 +17,13 @@ WORKFLOW_PERMISSION_BY_TASK = {
     "health_assessment": "workflow.health_assessment",
     "report_generation": "workflow.report_generation",
     "action_request": "workflow.action_request",
+    "permission_scope_query": "workflow.permission_scope_query",
 }
 
 _GUEST_DEGRADABLE_TASKS = {
     "fault_diagnosis",
     "root_cause_analysis",
     "health_assessment",
-    "report_generation",
 }
 
 
@@ -37,9 +37,47 @@ def authorize_workflow(auth: AuthContext, decision: Any) -> AuthorizationDecisio
     permission = WORKFLOW_PERMISSION_BY_TASK.get(task_type)
     resource_scope = effective_resource_scope(auth)
     data_scope = resource_scope.model_dump()
+    data_scope["role"] = auth.role
     kb_scope = {"allowed_visibility": list(resource_scope.allowed_kb_visibility)}
+    requested_assets = _requested_assets(decision)
+    if auth.role in {"guest", "engineer"}:
+        if not auth.asset_scope and not auth.system_scope:
+            return AuthorizationDecision(
+                allowed=False,
+                mode="clarify",
+                reason="当前账号未配置设备或系统范围。",
+                denied_reason_code="missing_resource_scope",
+                data_scope=data_scope,
+                kb_scope=kb_scope,
+                user_message="当前账号尚未配置可访问设备或系统范围，请联系管理员。",
+            )
+        denied_assets = [asset for asset in requested_assets if not asset_is_in_scope(asset, auth.asset_scope)]
+        if denied_assets:
+            return AuthorizationDecision(
+                allowed=False,
+                mode="deny",
+                reason=f"请求设备不在授权范围：{', '.join(denied_assets)}",
+                denied_reason_code="asset_out_of_scope",
+                data_scope=data_scope,
+                kb_scope=kb_scope,
+                user_message="请求中的设备不在当前账号负责范围内。",
+            )
 
     if permission and not auth.has_permission(permission):
+        if auth.role == "guest" and task_type == "report_generation":
+            return AuthorizationDecision(
+                allowed=False,
+                mode="deny",
+                reason="当前身份无报告生成权限。",
+                denied_reason_code="report_permission_denied",
+                denied_nodes={"report": "missing_report_permission"},
+                data_scope=data_scope,
+                kb_scope=kb_scope,
+                user_message=(
+                    "当前身份无法生成 DCMA 运行报告。"
+                    "游客仅可查看授权设备最近一小时运行状态，不能生成诊断报告、运行报告或根因结论。"
+                ),
+            )
         if auth.role == "guest" and task_type in _GUEST_DEGRADABLE_TASKS:
             denied_nodes = {
                 "fault_diagnosis": "missing_workflow_permission",
@@ -70,30 +108,6 @@ def authorize_workflow(auth: AuthContext, decision: Any) -> AuthorizationDecisio
             kb_scope=kb_scope,
             user_message="当前身份无权执行该任务，请登录具备相应权限的账号。",
         )
-
-    requested_assets = _requested_assets(decision)
-    if auth.role == "engineer":
-        if not auth.asset_scope and not auth.system_scope:
-            return AuthorizationDecision(
-                allowed=False,
-                mode="clarify",
-                reason="工程师账号未配置设备或系统范围。",
-                denied_reason_code="missing_resource_scope",
-                data_scope=data_scope,
-                kb_scope=kb_scope,
-                user_message="当前工程师账号尚未配置负责设备或系统范围，请联系管理员。",
-            )
-        denied_assets = [asset for asset in requested_assets if not asset_is_in_scope(asset, auth.asset_scope)]
-        if denied_assets:
-            return AuthorizationDecision(
-                allowed=False,
-                mode="deny",
-                reason=f"请求设备不在授权范围：{', '.join(denied_assets)}",
-                denied_reason_code="asset_out_of_scope",
-                data_scope=data_scope,
-                kb_scope=kb_scope,
-                user_message="请求中的设备不在当前账号负责范围内。",
-            )
 
     allowed_nodes = dict(getattr(decision, "enabled_nodes", {}) or {})
     runtime_tools = list(getattr(decision, "runtime_tools", []) or [])
@@ -151,4 +165,7 @@ def apply_authorization_to_decision(decision: Any, authorization: AuthorizationD
     elif authorization.allowed:
         decision.enabled_nodes = dict(authorization.allowed_nodes)
         decision.runtime_tools = list(authorization.runtime_tools)
+    else:
+        decision.enabled_nodes = {}
+        decision.runtime_tools = []
     return decision

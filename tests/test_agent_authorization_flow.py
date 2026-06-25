@@ -105,6 +105,7 @@ def test_dev_login_identity_is_signed_and_frontend_identity_cannot_escalate(auth
     assert login_identity["role"] == "guest"
     assert login_identity["auth_method"] == "dev-login"
     assert login_identity["allowed_tables"] == ["real_data_01"]
+    assert login_identity["asset_scope"] == ["g120_motor_1"]
     assert DEV_AUTH_COOKIE_NAME in auth_client.cookies
 
     identity = auth_client.get("/auth/identity", params={"user_identity": "管理员"}).json()
@@ -178,6 +179,7 @@ def test_guest_can_only_query_real_data_01_for_the_last_hour() -> None:
     denied = apply_sql_acl("SELECT * FROM device_alarm LIMIT 10", auth=guest)
 
     assert allowed.allowed is True
+    assert "device_name IN ('G120电机1')" in allowed.sql_query
     assert "create_time >= NOW() - INTERVAL 1 HOUR" in allowed.sql_query
     assert allowed.sql_query.endswith("LIMIT 50")
     assert denied.allowed is False
@@ -248,9 +250,11 @@ def test_local_sse_authorization_tool_and_report_contract() -> None:
     guest_events = asyncio.run(_collect_dev_events("诊断 J1号机异常并生成报告", "guest"))
     guest_complete = next(event for event in guest_events if event.get("type") == "chat_complete")
     guest_tools = [event.get("tool") for event in guest_events if event.get("type") == "tool_start"]
-    assert guest_complete["authorization"]["mode"] == "degrade"
+    assert guest_complete["authorization"]["mode"] == "deny"
+    assert guest_complete["authorization"]["denied_reason_code"] == "report_permission_denied"
+    assert guest_complete["ui_payload"]["type"] == "report_blocked"
     assert guest_complete["report_url"] is None
-    assert "save_report" not in guest_tools
+    assert guest_tools == []
 
     admin_events = asyncio.run(_collect_dev_events("生成 J99号机诊断报告", "admin"))
     admin_complete = next(event for event in admin_events if event.get("type") == "chat_complete")

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const source = readFileSync(new URL('./ChatMessage.vue', import.meta.url), 'utf8')
+const diagnosisCardSource = readFileSync(new URL('./DiagnosisResultCard.vue', import.meta.url), 'utf8')
+const chatStreamSource = readFileSync(new URL('../composables/useChatStream.ts', import.meta.url), 'utf8')
 const styles = readFileSync(new URL('../assets/ChatMessage.css', import.meta.url), 'utf8')
 
 const taskPanelIndex = source.indexOf('<TaskPanel')
@@ -109,6 +111,26 @@ assert.match(
   source,
   /const shouldShowToolDetails = computed\(\(\) => \(\s*false\s*\)\);/,
   'tool execution details should stay hidden in assistant messages'
+)
+assert.match(
+  diagnosisCardSource,
+  /\['status_card', 'diagnosis_card'\]\.includes\(uiPayload\.value\?\.type\)/,
+  'diagnosis card should render only for explicit status/diagnosis ui payloads'
+)
+assert.match(
+  source,
+  /\['status_card', 'diagnosis_card'\]\.includes\(messageUiPayload\.value\?\.type\)/,
+  'chat message should gate diagnosis card rendering by explicit ui payload type'
+)
+assert.match(
+  chatStreamSource,
+  /patch\.uiPayload = completeData\.uiPayload \|\| completeData\.ui_payload \|\| null/,
+  'ordinary chat complete events should preserve backend ui_payload'
+)
+assert.match(
+  diagnosisCardSource,
+  /const basisItems = computed\(\(\) => toList\(analysisArtifact\.value\?\.basis\)\.filter/,
+  'diagnosis card should filter raw SQL tuple-like basis text'
 )
 assert.match(
   styles,

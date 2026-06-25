@@ -106,6 +106,39 @@ def test_device_running_report_collects_fresh_sql_evidence() -> None:
     assert "sql_db_query" in decision.runtime_tools
 
 
+def test_permission_scope_question_routes_without_runtime_tools() -> None:
+    message = "我这个身份可以访问到哪些设备呀？"
+    payload = fallback_understanding_payload(message, "游客")
+    decision = decide_capabilities(
+        payload=payload,
+        request=_request(message, payload),
+        message=message,
+        report_from_previous_artifact=False,
+    )
+
+    assert decision.primary_task_type == "permission_scope_query"
+    assert decision.needs_sql is False
+    assert decision.needs_knowledge is False
+    assert decision.enabled_nodes["sql"] is False
+    assert decision.enabled_nodes["knowledge"] is False
+    assert decision.runtime_tools == []
+
+
+def test_g120_model_text_is_not_fault_code() -> None:
+    message = "G120电机2最新数据情况如何？"
+    payload = fallback_understanding_payload(message, "游客")
+    decision = decide_capabilities(
+        payload=payload,
+        request=_request(message, payload),
+        message=message,
+        report_from_previous_artifact=False,
+    )
+
+    assert payload["fault_code_hint"] is None
+    assert decision.objects["alarm_codes"] == []
+    assert "explain_alarm_code" not in decision.intent_stack
+
+
 def _state(
     *,
     asset: str | None = None,
@@ -203,6 +236,17 @@ def test_switch_to_j2_overrides_previous_active_asset() -> None:
     assert decision.context_resolution["used_active_asset"] is False
     assert "check_current_status" in decision.intent_stack
     assert decision.needs_sql is True
+
+
+def test_permission_question_does_not_reuse_previous_active_asset() -> None:
+    state = _state(asset="G120电机2", fault_codes=["A07089"])
+    payload = fallback_understanding_payload("我这个身份可以访问到哪些设备呀？", "游客")
+    resolution = apply_context_resolution(payload=payload, message="我这个身份可以访问到哪些设备呀？", state=state)
+
+    assert payload["equipment_hint"] is None
+    assert payload["fault_code_hint"] is None
+    assert resolution["used_active_asset"] is False
+    assert resolution["active_asset"] is None
 
 
 def test_pronoun_with_multiple_candidate_assets_requests_clarification() -> None:

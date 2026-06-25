@@ -16,6 +16,7 @@ from fault_diagnosis.diagnosis.contracts import (
 )
 from fault_diagnosis.single_agent.contracts import SingleAgentDecision
 from fault_diagnosis.single_agent.evidence.quality import build_output_guardrail_result
+from fault_diagnosis.single_agent.output.payloads import build_ui_payload
 from fault_diagnosis.single_agent.output.renderers import render_final_answer
 from fault_diagnosis.tools.report_tools import _build_report_html
 
@@ -216,6 +217,69 @@ def test_degraded_report_generation_does_not_claim_report_created() -> None:
     assert "报告链接：报告未生成" in rendered.content
     assert "报告已生成" not in rendered.content
     assert "不形成故障诊断报告" in rendered.content
+
+
+def test_permission_scope_template_lists_guest_asset_and_no_card_ui() -> None:
+    decision = SingleAgentDecision(
+        primary_task_type="permission_scope_query",
+        authorization={
+            "mode": "allow",
+            "data_scope": {
+                "asset_ids": ["g120_motor_1"],
+                "allowed_tables": ["real_data_01"],
+                "max_lookback_hours": 1,
+                "authorized_purpose": "status_or_visualization_only",
+            },
+        },
+        access_scope={
+            "asset_ids": ["g120_motor_1"],
+            "allowed_tables": ["real_data_01"],
+            "max_lookback_hours": 1,
+            "authorized_purpose": "status_or_visualization_only",
+        },
+    )
+    rendered = render_final_answer(
+        decision=decision,
+        evidence_bundle=None,
+        analysis_artifact=AnalysisStepArtifact(
+            success=True,
+            conclusion="已整理权限范围。",
+            basis=[],
+            confidence="high",
+        ),
+    )
+
+    assert rendered.task_type.value == "permission_scope_query"
+    assert "G120电机1" in rendered.content
+    assert "real_data_01" in rendered.content
+    assert "不能生成诊断报告" in rendered.content
+    assert build_ui_payload(decision=decision)["type"] == "permission_scope"
+
+
+def test_empty_status_result_does_not_claim_normal() -> None:
+    decision = SingleAgentDecision(primary_task_type="status_query")
+    sql_artifact = SqlStepArtifact(
+        success=True,
+        summary="查询设备最新状态",
+        row_count=0,
+        data_state="empty",
+    )
+    rendered = render_final_answer(
+        decision=decision,
+        evidence_bundle=None,
+        analysis_artifact=AnalysisStepArtifact(
+            success=True,
+            conclusion="已按当前身份范围整理最近一小时运行状态；该结果仅表示数据现状。",
+            basis=[],
+            confidence="low",
+        ),
+        sql_artifact=sql_artifact,
+    )
+
+    assert "无法判断当前状态" in rendered.content
+    assert "不能判断设备正常或异常" in rendered.content
+    assert "当前状态：正常" not in rendered.content
+    assert build_ui_payload(decision=decision, sql_artifact=sql_artifact)["type"] == "text_only"
 
 
 def test_report_html_uses_structured_report_chapters() -> None:

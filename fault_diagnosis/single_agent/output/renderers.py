@@ -15,6 +15,7 @@ from ...diagnosis.contracts import (
     SqlStepArtifact,
     WorkOrderSuggestion,
 )
+from ...security.assets import resolve_asset
 from ..contracts import SingleAgentDecision
 from ..reporting import extract_report_url
 from .contracts import OutputContract, OutputSectionContract, RenderedAnswer, RenderedSection
@@ -222,7 +223,20 @@ def _custom_section(
         if key == "missing_evidence_notice":
             return _limitations_text(context), [], context.missing_evidence()
 
+    if contract.task_type.value == "permission_scope_query":
+        if key == "identity_scope":
+            return _identity_scope_text(context), [], []
+        if key == "accessible_assets":
+            return _accessible_assets_text(context), [], []
+        if key == "available_capabilities":
+            return _available_capabilities_text(context), [], []
+        if key == "unavailable_capabilities":
+            return _unavailable_capabilities_text(context), [], []
+
     if key in {"diagnosis_conclusion", "brief_judgement", "event_summary", "health_score"}:
+        data_state = _sql_data_state(context)
+        if key == "brief_judgement" and data_state in {"out_of_scope", "blocked", "empty"}:
+            return "当前没有可用的授权运行数据，不能判断设备正常或异常。", [], context.missing_evidence()
         claim = context.claim("diagnosis_summary")
         content = _first_text([claim.statement if claim else "", analysis.conclusion if analysis else ""])
         if context.missing_evidence() and content and "不能" not in content:
@@ -230,6 +244,11 @@ def _custom_section(
         return content, _claim_or_all_evidence_ids(claim, context), context.missing_evidence()
 
     if key in {"current_status", "current_alarm_status", "trend_analysis"}:
+        data_state = _sql_data_state(context)
+        if data_state in {"out_of_scope", "blocked"}:
+            return _sql_boundary_text(context), [], context.missing_evidence()
+        if data_state == "empty":
+            return "授权范围内未查询到该设备的运行数据，无法判断当前状态。", [], context.missing_evidence()
         evidence_ids = context.evidence_ids("sql", "device_status", "metric", "alarm_event", "timeseries")
         items = _evidence_summaries(context, evidence_ids, limit=contract.max_bullets_per_section)
         if key == "current_alarm_status" and not context.evidence_ids("alarm_event"):
@@ -396,6 +415,11 @@ def _evidence_summaries(context: _RenderContext, evidence_ids: list[str], *, lim
 
 
 def _limitations_text(context: _RenderContext) -> str:
+    data_state = _sql_data_state(context)
+    if data_state in {"out_of_scope", "blocked"}:
+        return _sql_boundary_text(context)
+    if data_state == "empty":
+        return "授权范围内没有返回可用运行数据，本次不能判断设备正常、异常或根因。"
     if context.decision.primary_task_type == "report_generation" and _report_blocked_by_authorization(context):
         return "当前身份缺少报告生成权限，本次不形成故障诊断报告、根因结论或健康评估。"
     missing = context.missing_evidence()
@@ -515,3 +539,64 @@ def _contains_dangerous_completion(text: str) -> bool:
 def _strip_unsafe_action_text(text: str) -> str:
     text = re.sub(r"^(?:已|已经|我已经|请|帮我|直接)", "", str(text or "")).strip(" ：:，,。")
     return text or "该动作"
+
+
+def _sql_data_state(context: _RenderContext) -> str:
+    return str(getattr(context.sql_artifact, "data_state", "") or "").strip()
+
+
+def _sql_boundary_text(context: _RenderContext) -> str:
+    error = str(getattr(context.sql_artifact, "error", "") or "").strip()
+    return error or "请求设备不在当前账号授权范围内，未执行运行数据查询。"
+
+
+def _role_label(role: str) -> str:
+    return {"guest": "游客", "engineer": "维修工程师", "admin": "管理员"}.get(role, role or "未知")
+
+
+def _data_scope(context: _RenderContext) -> dict[str, Any]:
+    authorization = context.decision.authorization or {}
+    if isinstance(authorization, dict) and isinstance(authorization.get("data_scope"), dict):
+        return dict(authorization["data_scope"])
+    return dict(context.decision.access_scope or {})
+
+
+def _authorized_asset_labels(context: _RenderContext) -> list[str]:
+    labels: list[str] = []
+    for asset_id in _data_scope(context).get("asset_ids") or []:
+        record = resolve_asset(str(asset_id))
+        labels.append(record.display_name if record is not None else str(asset_id))
+    return _dedupe(labels)
+
+
+def _identity_scope_text(context: _RenderContext) -> str:
+    scope = _data_scope(context)
+    purpose = str(scope.get("authorized_purpose") or "")
+    role = str(scope.get("role") or "")
+    if not role:
+        role = "guest" if purpose == "status_or_visualization_only" else "engineer/admin"
+    return f"{_role_label(role)}；权限边界来自服务端会话，不使用前端传入身份。"
+
+
+def _accessible_assets_text(context: _RenderContext) -> str:
+    scope = _data_scope(context)
+    labels = _authorized_asset_labels(context)
+    asset_text = "、".join(labels) if labels else "当前账号未配置具体设备范围"
+    table_text = "、".join(str(item) for item in (scope.get("allowed_tables") or [])) or "未配置数据表"
+    max_hours = scope.get("max_lookback_hours")
+    window = f"最近 {max_hours} 小时" if max_hours else "授权时间窗口"
+    return f"{asset_text}；可查询数据表：{table_text}；数据窗口：{window}。"
+
+
+def _available_capabilities_text(context: _RenderContext) -> str:
+    purpose = str(_data_scope(context).get("authorized_purpose") or "")
+    if purpose == "status_or_visualization_only":
+        return "查看授权设备最近一小时运行状态；查询公开知识库处理意见。"
+    return "查看授权设备运行数据；进行授权范围内的诊断、健康评估和报告草稿生成。"
+
+
+def _unavailable_capabilities_text(context: _RenderContext) -> str:
+    purpose = str(_data_scope(context).get("authorized_purpose") or "")
+    if purpose == "status_or_visualization_only":
+        return "不能访问未授权设备；不能生成诊断报告；不能形成故障诊断、根因结论、健康评估或工单派发。"
+    return "不能直接执行设备控制、参数修改、告警关闭或工单派发；这些动作仍需人工确认。"

@@ -67,6 +67,21 @@ KNOWLEDGE_KEYWORDS = (
     "报警码",
     "告警码",
 )
+PERMISSION_SCOPE_KEYWORDS = (
+    "身份",
+    "权限",
+    "访问",
+    "可访问",
+    "能访问",
+    "能看",
+    "可以看",
+    "账号",
+    "角色",
+    "哪些设备",
+    "哪些数据",
+    "生成报告吗",
+    "能生成报告",
+)
 
 _LIGHTWEIGHT_TEXT_RE = re.compile(r"[\s,，.。!！?？;；:：、~～…·'\"“”‘’()（）\[\]【】{}<>《》-]+")
 
@@ -141,7 +156,7 @@ def should_use_rule_based_understanding(message: str) -> bool:
     normalized = (message or "").strip()
     if not normalized:
         return False
-    return has_any(normalized, SQL_KEYWORDS + KNOWLEDGE_KEYWORDS + REPORT_KEYWORDS)
+    return has_any(normalized, SQL_KEYWORDS + KNOWLEDGE_KEYWORDS + REPORT_KEYWORDS + PERMISSION_SCOPE_KEYWORDS)
 
 
 def normalize_lightweight_message(message: str) -> str:
@@ -176,7 +191,14 @@ def looks_like_report_handoff(message: str) -> bool:
 
 
 def fallback_understanding_payload(message: str, user_identity: str) -> dict[str, Any]:
-    fault_code_match = _FAULT_CODE_RE.search(message or "")
+    fault_code_match = next(
+        (
+            match
+            for match in _FAULT_CODE_RE.finditer(message or "")
+            if not _looks_like_model_code(match.group(1))
+        ),
+        None,
+    )
     device_match = _DEVICE_RE.search(message or "")
     normalized = (message or "").strip()
     equipment_hint = normalize_equipment_hint(device_match.group(1) if device_match else None)
@@ -192,7 +214,11 @@ def fallback_understanding_payload(message: str, user_identity: str) -> dict[str
         "needs_knowledge": bool(fault_code_match) or has_any(normalized, KNOWLEDGE_KEYWORDS),
         "needs_report": has_any(normalized, REPORT_KEYWORDS),
         "report_format": "markdown",
-    }
+}
+
+
+def _looks_like_model_code(value: str) -> bool:
+    return str(value or "").strip().upper() in {"G120", "S120", "V20", "G130", "G150"}
 
 
 def decide_capabilities(

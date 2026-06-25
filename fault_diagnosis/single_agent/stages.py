@@ -61,6 +61,19 @@ from .workorder_suggestions import build_workorder_suggestion, build_workorder_s
 _log = get_logger("single_agent.stages")
 
 
+def _sql_scope_summary(sql_artifact: SqlStepArtifact) -> str:
+    data_state = str(getattr(sql_artifact, "data_state", "") or "")
+    if data_state == "empty":
+        return "授权范围内未返回可解析运行记录。"
+    if data_state == "out_of_scope":
+        return sql_artifact.error or "请求设备不在当前账号授权范围。"
+    if data_state == "blocked":
+        return sql_artifact.error or "SQL 查询被权限策略拦截。"
+    if sql_artifact.row_count is not None:
+        return f"授权范围内返回 {sql_artifact.row_count} 条运行记录。"
+    return ""
+
+
 class SingleAgentStagesMixin:
     """Stage-level behavior split out from the public runner facade."""
 
@@ -160,6 +173,7 @@ class SingleAgentStagesMixin:
                 row_count=0,
                 parse_status="blocked",
                 source_table=REAL_DATA_LATEST_TABLE,
+                data_state="out_of_scope" if acl_result.blocked_reason_code == "asset_out_of_scope" else "blocked",
             )
             self._record_artifact("sql", artifact, stage="sql")
             self._last_step_result = artifact
@@ -198,6 +212,11 @@ class SingleAgentStagesMixin:
                         row_count=0,
                         parse_status="blocked",
                         source_table=REAL_DATA_LATEST_TABLE,
+                        data_state=(
+                            "out_of_scope"
+                            if checked_acl_result.blocked_reason_code == "asset_out_of_scope"
+                            else "blocked"
+                        ),
                     )
                     self._record_artifact("sql", artifact, stage="sql")
                     self._last_step_result = artifact
@@ -226,6 +245,7 @@ class SingleAgentStagesMixin:
             row_count=len(parsed_rows),
             parse_status="parsed" if parsed_rows else "empty_or_unparsed",
             source_table=REAL_DATA_LATEST_TABLE,
+            data_state="ok" if parsed_rows else "empty",
         )
         self._record_artifact("sql", artifact, stage="sql")
         self._last_step_result = artifact
@@ -293,6 +313,19 @@ class SingleAgentStagesMixin:
         decision = self._workflow_task_decision
         authorization = dict(getattr(decision, "authorization", {}) or {})
         task_type = str(getattr(decision, "primary_task_type", "") or "")
+        if task_type == "permission_scope_query":
+            artifact = AnalysisStepArtifact(
+                success=True,
+                conclusion="已根据当前服务端身份整理可访问设备、数据窗口和能力边界。",
+                basis=["权限范围来自服务端 AuthContext 与 workflow 授权结果。"],
+                probable_causes=[],
+                verification_items=[],
+                recommendations=[],
+                missing_information=[],
+                confidence="high",
+            )
+            self._record_artifact("analysis", artifact, stage="analysis")
+            return artifact
         if self.auth_context.role == "guest" and task_type != "knowledge_qa":
             is_degraded = authorization.get("mode") == "degrade"
             recommendations = list(knowledge_artifact.snippets[:2]) if task_type == "alarm_triage" else []
@@ -307,7 +340,11 @@ class SingleAgentStagesMixin:
                 ),
                 basis=[
                     item
-                    for item in [sql_artifact.summary, sql_artifact.result_preview, knowledge_artifact.error]
+                    for item in [
+                        sql_artifact.summary,
+                        _sql_scope_summary(sql_artifact),
+                        knowledge_artifact.error,
+                    ]
                     if item
                 ][:3],
                 probable_causes=[],
@@ -777,6 +814,7 @@ class SingleAgentStagesMixin:
             result_preview="",
             raw_output="",
             error=None,
+            data_state="skipped",
         )
         self._record_artifact("sql", artifact, stage="sql")
         return artifact

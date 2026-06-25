@@ -500,6 +500,8 @@ export const chatAPI = {
           analysisArtifact: data.analysis_artifact || null,
           workorder_decision: data.workorder_decision || null,
           workorderDecision: data.workorder_decision || null,
+          ui_payload: data.ui_payload || null,
+          uiPayload: data.ui_payload || null,
           artifact: data.artifact || null,
           quality_gate_notice: data.quality_gate_notice || null,
           qualityGateNotice: data.quality_gate_notice || null,

@@ -863,6 +863,8 @@ const handleVoiceGatewayEvent = async (event: VoiceGatewayEvent) => {
           sql_artifact: payload.sql_artifact,
           knowledge_artifact: payload.knowledge_artifact,
           analysis_artifact: payload.analysis_artifact,
+          ui_payload: payload.ui_payload,
+          uiPayload: payload.ui_payload,
           artifact: payload.artifact,
           quality_gate_notice: payload.quality_gate_notice,
           release_ready: payload.release_ready,

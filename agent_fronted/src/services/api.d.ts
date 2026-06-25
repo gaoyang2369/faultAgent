@@ -95,6 +95,8 @@ export interface StreamCallbacks {
     reportArtifact?: any
     workorder_decision?: any
     workorderDecision?: any
+    ui_payload?: any
+    uiPayload?: any
     quality_gate_notice?: string | null
     qualityGateNotice?: string | null
     release_ready?: boolean | null

@@ -375,6 +375,7 @@ export const normalizeChatMessage = (message = {}) => {
   const analysisArtifact = message.analysisArtifact || message.analysis_artifact || null
   const reportArtifact = message.reportArtifact || message.report_artifact || null
   const workorderDecision = message.workorderDecision || message.workorder_decision || null
+  const uiPayload = message.uiPayload || message.ui_payload || null
   const traceId = message.traceId || message.trace_id || message.trace?.trace_id || null
   const requestId = message.requestId || message.request_id || message.trace?.request_id || null
 
@@ -394,6 +395,8 @@ export const normalizeChatMessage = (message = {}) => {
     reportArtifact,
     workorderDecision,
     workorder_decision: workorderDecision,
+    uiPayload,
+    ui_payload: uiPayload,
     traceId,
     trace_id: traceId,
     requestId,

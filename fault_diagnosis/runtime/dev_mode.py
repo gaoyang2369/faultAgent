@@ -21,6 +21,7 @@ from ..common.paths import REPORTS_DIR
 from ..security.contracts import AuthContext
 from ..security.permissions import build_auth_context
 from ..security.policy_engine import authorize_workflow
+from ..single_agent.output.payloads import build_ui_payload
 from ..single_agent.workflow.policies import build_workflow_plan
 from ..single_agent.workflow.router import route_task
 
@@ -158,6 +159,7 @@ def build_dev_authorization(
         runtime_tools=plan.runtime_tools,
     )
     authorization = authorize_workflow(auth_context, decision).model_dump()
+    decision.authorization = authorization
     decision_payload = {
         "primary_task_type": route.primary_task_type.value,
         "objects": route.objects.model_dump(exclude_none=True),
@@ -166,6 +168,7 @@ def build_dev_authorization(
         "enabled_nodes": authorization.get("allowed_nodes", {}),
         "runtime_tools": authorization.get("runtime_tools", []),
         "authorization": authorization,
+        "ui_payload": build_ui_payload(decision=decision),
     }
     return decision_payload, authorization
 
@@ -343,6 +346,7 @@ async def stream_dev_chat_events(
         "final_content": final_content,
         "decision": decision,
         "authorization": authorization,
+        "ui_payload": decision.get("ui_payload"),
         "report_filename": report_filename,
         "report_url": f"/reports/{report_filename}" if report_filename else None,
         "permission_check": {

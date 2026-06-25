@@ -7,6 +7,7 @@ const backendProxyTarget = process.env.VITE_BACKEND_PROXY_TARGET || 'http://loca
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [vue()],
+  publicDir: false,
   server: {
     port: 9005,
     hmr: true,

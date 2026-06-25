@@ -25,6 +25,7 @@ class DiagnosisArtifactType(str, Enum):
     MANUAL_QA = "manual_qa"
     REPORT_GENERATION = "report_generation"
     CLARIFICATION = "clarification"
+    PERMISSION_SCOPE_QUERY = "permission_scope_query"
 
 
 class DiagnosisRequest(BaseModel):
@@ -149,6 +150,7 @@ class SqlStepArtifact(BaseModel):
     row_count: int | None = None
     parse_status: str = ""
     source_table: str = ""
+    data_state: str = "ok"
 
 
 class KnowledgeStepArtifact(BaseModel):

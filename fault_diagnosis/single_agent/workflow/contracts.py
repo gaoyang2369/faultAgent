@@ -19,6 +19,7 @@ class TaskType(str, Enum):
     KNOWLEDGE_QA = "knowledge_qa"
     REPORT_GENERATION = "report_generation"
     ACTION_REQUEST = "action_request"
+    PERMISSION_SCOPE_QUERY = "permission_scope_query"
 
 
 SubgoalStatus = Literal["ready", "blocked", "skipped"]
