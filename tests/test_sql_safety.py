@@ -103,6 +103,23 @@ def test_fast_sql_plan_handles_status_report_requests() -> None:
     assert f"{REAL_DATA_LATEST_TABLE} 最近 50 条" in summary
 
 
+def test_fast_sql_plan_handles_device_fault_diagnosis_requests() -> None:
+    plan = build_fast_sql_plan(
+        _request(
+            user_message="对G120电机1进行故障诊断",
+            equipment_hint="G120电机1",
+            analysis_goal="对G120电机1进行故障诊断",
+        )
+    )
+
+    assert plan is not None
+    sql, summary = plan
+    assert f"FROM {REAL_DATA_LATEST_TABLE}" in sql
+    assert "device_name IN ('G120电机1')" in sql
+    assert f"ORDER BY {REAL_DATA_LATEST_TABLE}.create_time DESC, id DESC LIMIT 50" in sql
+    assert f"{REAL_DATA_LATEST_TABLE} 最近 50 条" in summary
+
+
 def test_fast_sql_plan_inherits_asset_filters_for_single_device_report() -> None:
     plan = build_fast_sql_plan(
         _request(user_message="生成运行报告"),

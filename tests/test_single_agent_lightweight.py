@@ -25,6 +25,48 @@ class _ExplodingModel:
         raise AssertionError(f"model should not be called for lightweight replies: {prompt}")
 
 
+class _FakeSqlQueryTool:
+    name = "sql_db_query"
+
+    def invoke(self, payload):
+        assert "G120电机1" in payload["query"]
+        return [
+            (
+                1,
+                "2026-06-10 12:12:59",
+                "G120电机1",
+                "G120电机1",
+                "2026-06-10",
+                "12:12:59",
+                "42",
+                "A07089",
+                "0",
+                "5246",
+                "10679",
+                555.228,
+                823.412,
+                442.209,
+                0.775,
+                0.215,
+                0.028,
+                -199.85,
+                46.811,
+                31.123,
+                0.018,
+                1.295,
+                0.137,
+                "0000:39:25",
+                37.008,
+                43.732,
+                59.429,
+                3.548,
+                0.434,
+                -0.009,
+                "2026-06-10 12:12:59",
+            )
+        ]
+
+
 def test_lightweight_greeting_gets_standard_reply() -> None:
     reply = build_lightweight_conversation_reply("你好！")
 
@@ -61,6 +103,10 @@ def test_rule_based_understanding_handles_dcma_status_report_fast_path() -> None
 
 def test_stream_events_short_circuits_greeting_without_model(monkeypatch) -> None:
     asyncio.run(_assert_stream_events_short_circuits_greeting_without_model(monkeypatch))
+
+
+def test_fault_diagnosis_sql_step_uses_fast_plan_without_model(monkeypatch) -> None:
+    asyncio.run(_assert_fault_diagnosis_sql_step_uses_fast_plan_without_model(monkeypatch))
 
 
 def test_analysis_payload_sanitizes_unsupported_load_thresholds(monkeypatch) -> None:
@@ -155,6 +201,44 @@ async def _assert_stream_events_short_circuits_greeting_without_model(monkeypatc
     assert complete_payload["final_content"] == token_payload["content"]
     assert complete_payload["decision"]["reason"] == "轻量问候直接回答"
     assert runner._tool_call_count == 0
+
+
+async def _assert_fault_diagnosis_sql_step_uses_fast_plan_without_model(monkeypatch) -> None:
+    from fault_diagnosis.single_agent import runner as runner_module
+    from fault_diagnosis.single_agent import stages as stages_module
+
+    monkeypatch.setattr(runner_module, "get_trace_exporter", lambda: _NoopTraceExporter())
+    monkeypatch.setattr(stages_module, "build_sql_tools_map", lambda: {"sql_db_query": _FakeSqlQueryTool()})
+    runner = runner_module.RestrictedSingleAgentRunner(
+        message="对G120电机1进行故障诊断",
+        thread_id="thread.test",
+        user_identity="管理员",
+        request_id="request.test",
+        stream_id="stream.test",
+        trace_id="trace.test",
+        model=_ExplodingModel(),
+    )
+    request = DiagnosisRequest(
+        user_message="对G120电机1进行故障诊断",
+        user_identity="管理员",
+        equipment_hint="G120电机1",
+        metric_hint=None,
+        fault_code_hint=None,
+        time_range_hint=None,
+        needs_report=False,
+        report_format="markdown",
+        analysis_goal="对G120电机1进行故障诊断",
+    )
+
+    chunks = [chunk async for chunk in runner.stream_sql_step(request)]
+
+    assert len(chunks) == 2
+    artifact = runner._last_step_result
+    assert artifact.success is True
+    assert artifact.row_count == 1
+    assert "G120电机1" in artifact.sql_used[0]
+    assert "最近 50 条运行状态" in artifact.summary
+    assert runner._tool_call_count == 1
 
 
 async def _assert_structured_analysis_uses_rule_artifact_without_model(monkeypatch) -> None:

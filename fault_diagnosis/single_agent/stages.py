@@ -149,11 +149,21 @@ class SingleAgentStagesMixin:
             sql_query, summary = fast_plan
         else:
             prompt = build_sql_prompt(request)
-            sql_query, summary = await build_sql_plan(
-                prompt,
-                self._invoke_json_model,
-                default_summary="已生成 SQL 查询",
-            )
+            try:
+                sql_query, summary = await build_sql_plan(
+                    prompt,
+                    self._invoke_json_model,
+                    default_summary="已生成 SQL 查询",
+                )
+            except Exception as exc:  # noqa: BLE001 - SQL planning must degrade to deterministic safe query.
+                _log.warning(
+                    "SQL 规划模型失败，使用受限 fallback 查询",
+                    thread_id=self.thread_id,
+                    trace_id=self.trace_id,
+                    error=str(exc) or exc.__class__.__name__,
+                )
+                sql_query = build_fallback_sql_query(request, asset_filters=asset_filters)
+                summary = "SQL 规划模型未及时返回，已使用受限 fallback 查询最近设备故障与关键指标数据"
             if not sql_query or not is_readonly_sql(sql_query) or has_unknown_sql_table(sql_query):
                 sql_query = build_fallback_sql_query(request, asset_filters=asset_filters)
                 summary = "已使用受限 fallback 查询最近设备故障与关键指标数据"
