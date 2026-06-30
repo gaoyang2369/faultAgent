@@ -12,7 +12,16 @@ from ..security.contracts import AuthContext
 from ..security.policy_engine import apply_authorization_to_decision, authorize_workflow
 from .context import ContextManager
 from .intent import fallback_understanding_payload, decide_capabilities
-from .planning import attach_shadow_plan_summary, build_shadow_plan_for_decision, summarize_shadow_plan
+from .planning import (
+    attach_shadow_plan_summary,
+    apply_planner_gate_to_decision,
+    build_planning_diff,
+    build_planner_gate,
+    build_shadow_plan_for_decision,
+    summarize_planning_diff,
+    summarize_planner_gate,
+    summarize_shadow_plan,
+)
 from .workflow import summarize_goal_set
 
 
@@ -29,6 +38,8 @@ class PlanSnapshot(BaseModel):
     task_family_reason: str = ""
     task_family_source: str = "task_type_mapping"
     shadow_plan: dict[str, Any] = Field(default_factory=dict)
+    planning_diff: dict[str, Any] = Field(default_factory=dict)
+    planner_gate: dict[str, Any] = Field(default_factory=dict)
     goals: list[dict[str, Any]] = Field(default_factory=list)
     intent_stack_projection: list[str] = Field(default_factory=list)
     intent_axes: dict[str, Any] = Field(default_factory=dict)
@@ -92,8 +103,6 @@ def build_plan_snapshot(
     authorization = authorize_workflow(auth_context, decision)
     decision = apply_authorization_to_decision(decision, authorization)
 
-    enabled_nodes = {key: bool(value) for key, value in (decision.enabled_nodes or {}).items() if value}
-    skipped_nodes = {key: False for key, value in (decision.enabled_nodes or {}).items() if not value}
     skip_reasons = _skip_reasons(decision, authorization.model_dump())
     node_reasons = _node_reasons(decision, skip_reasons)
     referenced_artifact = _referenced_artifact_payload(decision)
@@ -110,6 +119,18 @@ def build_plan_snapshot(
     )
     attach_shadow_plan_summary(decision, shadow_plan)
     shadow_plan_summary = summarize_shadow_plan(shadow_plan)
+    planning_diff = build_planning_diff({}, shadow_plan, decision=decision)
+    planning_diff_summary = summarize_planning_diff(planning_diff)
+    decision.planning_diff_summary = planning_diff_summary
+    planner_gate = build_planner_gate(decision=decision, shadow_plan=shadow_plan, planning_diff=planning_diff)
+    planner_gate_summary = summarize_planner_gate(planner_gate)
+    decision.planner_gate_summary = planner_gate_summary
+    decision = apply_planner_gate_to_decision(decision, planner_gate)
+
+    enabled_nodes = {key: bool(value) for key, value in (decision.enabled_nodes or {}).items() if value}
+    skipped_nodes = {key: False for key, value in (decision.enabled_nodes or {}).items() if not value}
+    skip_reasons = _skip_reasons(decision, authorization.model_dump())
+    node_reasons = _node_reasons(decision, skip_reasons)
 
     return PlanSnapshot(
         resolved_context=resolved_context_summary,
@@ -118,6 +139,8 @@ def build_plan_snapshot(
         task_family_reason=decision.task_family_reason,
         task_family_source=decision.task_family_source,
         shadow_plan=shadow_plan_summary,
+        planning_diff=planning_diff_summary,
+        planner_gate=planner_gate_summary,
         goals=_compact_goals(decision.goals),
         intent_stack_projection=list(goal_set_summary.get("intent_stack_projection") or []),
         intent_axes={
@@ -133,6 +156,8 @@ def build_plan_snapshot(
             "requested_output": decision.requested_output,
             "action_type": decision.action_type,
             "shadow_plan": shadow_plan_summary,
+            "planning_diff": planning_diff_summary,
+            "planner_gate": planner_gate_summary,
         },
         workflow_route={
             "primary_task_type": decision.primary_task_type,
@@ -151,6 +176,8 @@ def build_plan_snapshot(
             "subgoals": decision.subgoals,
             "flags": decision.flags,
             "shadow_plan": shadow_plan_summary,
+            "planning_diff": planning_diff_summary,
+            "planner_gate": planner_gate_summary,
         },
         workflow_policy=dict(decision.workflow_policy or {}),
         enabled_nodes=enabled_nodes,

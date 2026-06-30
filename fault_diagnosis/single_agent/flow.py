@@ -19,7 +19,15 @@ from .output.payloads import (
     build_direct_complete_payload,
     build_report_handoff_complete_payload,
 )
-from .planning import attach_shadow_plan_summary, build_shadow_plan_for_decision
+from .planning import (
+    attach_shadow_plan_summary,
+    apply_planner_gate_to_decision,
+    build_planning_diff,
+    build_planner_gate,
+    build_shadow_plan_for_decision,
+    summarize_planning_diff,
+    summarize_planner_gate,
+)
 from .workflow.nodes import (
     build_audit_log_result,
     build_permission_check_result,
@@ -98,6 +106,14 @@ class SingleAgentFlowMixin:
                     decision=decision,
                 )
                 attach_shadow_plan_summary(decision, direct_shadow_plan)
+                direct_planning_diff = build_planning_diff({}, direct_shadow_plan, decision=decision)
+                decision.planning_diff_summary = summarize_planning_diff(direct_planning_diff)
+                direct_planner_gate = build_planner_gate(
+                    decision=decision,
+                    shadow_plan=direct_shadow_plan,
+                    planning_diff=direct_planning_diff,
+                )
+                decision.planner_gate_summary = summarize_planner_gate(direct_planner_gate)
                 self.trace.add_event(
                     "decision",
                     stage="final_answer",
@@ -123,6 +139,8 @@ class SingleAgentFlowMixin:
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
                         "shadow_plan": decision.shadow_plan_summary,
+                        "planning_diff": decision.planning_diff_summary,
+                        "planner_gate": decision.planner_gate_summary,
                         "direct_answer": True,
                     },
                 )
@@ -170,6 +188,13 @@ class SingleAgentFlowMixin:
                 decision=decision,
             )
             attach_shadow_plan_summary(decision, shadow_plan)
+            planning_diff = build_planning_diff({}, shadow_plan, decision=decision)
+            planning_diff_summary = summarize_planning_diff(planning_diff)
+            decision.planning_diff_summary = planning_diff_summary
+            planner_gate = build_planner_gate(decision=decision, shadow_plan=shadow_plan, planning_diff=planning_diff)
+            planner_gate_summary = summarize_planner_gate(planner_gate)
+            decision.planner_gate_summary = planner_gate_summary
+            decision = apply_planner_gate_to_decision(decision, planner_gate)
             get_security_audit_logger().record(
                 event_type="workflow_authorization",
                 auth=self.auth_context,
@@ -209,6 +234,8 @@ class SingleAgentFlowMixin:
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
                         "shadow_plan": decision.shadow_plan_summary,
+                        "planning_diff": decision.planning_diff_summary,
+                        "planner_gate": decision.planner_gate_summary,
                     },
                 )
                 yield encode_sse_event(
@@ -242,6 +269,8 @@ class SingleAgentFlowMixin:
                     "goal_set": decision.goal_set,
                     "goal_summary": (decision.goal_set or {}).get("goal_summary", ""),
                     "shadow_plan": shadow_plan.model_dump(exclude_none=True),
+                    "planning_diff": planning_diff_summary,
+                    "planner_gate": planner_gate.model_dump(exclude_none=True),
                     "resolved_context": decision.resolved_context,
                     "context_resolution": decision.context_resolution,
                     "active_case_id": decision.active_case_id,
@@ -472,6 +501,8 @@ class SingleAgentFlowMixin:
                         "resolution_recommendation": {},
                         "audit_log": audit_log_result,
                         "referenced_artifact": referenced_envelope.model_dump(exclude_none=True),
+                        "planning_diff": decision.planning_diff_summary,
+                        "planner_gate": decision.planner_gate_summary,
                     },
                 )
                 self._finish_stage("save_artifact", stage_started, message="工单续问产物与证据链已保存")
@@ -496,6 +527,8 @@ class SingleAgentFlowMixin:
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
                         "shadow_plan": decision.shadow_plan_summary,
+                        "planning_diff": decision.planning_diff_summary,
+                        "planner_gate": decision.planner_gate_summary,
                         "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
                         "workflow_policy_id": decision.workflow_policy.get("policy_id"),
                         "primary_task_type": decision.primary_task_type,
@@ -568,6 +601,8 @@ class SingleAgentFlowMixin:
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
                         "shadow_plan": decision.shadow_plan_summary,
+                        "planning_diff": decision.planning_diff_summary,
+                        "planner_gate": decision.planner_gate_summary,
                         "report_filename": report_artifact.report_filename,
                     },
                 )
@@ -899,6 +934,8 @@ class SingleAgentFlowMixin:
                     "risk_check": risk_check_result,
                     "resolution_recommendation": resolution_recommendation,
                     "audit_log": audit_log_result,
+                    "planning_diff": decision.planning_diff_summary,
+                    "planner_gate": decision.planner_gate_summary,
                 },
             )
             self._finish_stage("save_artifact", stage_started, message="诊断产物与证据链已保存")
@@ -926,6 +963,8 @@ class SingleAgentFlowMixin:
                     "decision": decision.model_dump(),
                     "task_family": decision.task_family,
                     "shadow_plan": decision.shadow_plan_summary,
+                    "planning_diff": decision.planning_diff_summary,
+                    "planner_gate": decision.planner_gate_summary,
                     "report_filename": report_artifact.report_filename,
                     "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
                     "workflow_policy_id": decision.workflow_policy.get("policy_id"),

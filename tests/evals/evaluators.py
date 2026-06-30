@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from statistics import quantiles
 from typing import Any
 
+SEVERITY_RANK = {"none": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
+
 
 @dataclass
 class EvalResult:
@@ -61,6 +63,8 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
     expected = case.get("expected") or {}
     route = expected.get("route") or {}
     shadow_plan = expected.get("shadow_plan") or {}
+    planning_diff = expected.get("planning_diff") or {}
+    planner_gate = expected.get("planner_gate") or {}
     context = expected.get("context") or {}
     intent = expected.get("intent") or {}
     workflow = expected.get("workflow") or {}
@@ -73,6 +77,10 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
         or route.get("task_family")
         or shadow_plan.get("expected_output")
         or shadow_plan.get("enabled_nodes")
+        or planning_diff.get("overall_status_in")
+        or planning_diff.get("max_severity")
+        or planner_gate.get("selected_execution_source")
+        or planner_gate.get("mode_in")
         or intent.get("intent_stack_contains")
         or intent.get("intent_stack_projection_contains")
         or intent.get("goal_types_contains")
@@ -113,6 +121,8 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
     expected = case.get("expected") or {}
     route = expected.get("route") or {}
     shadow_plan = expected.get("shadow_plan") or {}
+    planning_diff = expected.get("planning_diff") or {}
+    planner_gate = expected.get("planner_gate") or {}
     intent = expected.get("intent") or {}
     context = expected.get("context") or {}
     workflow = expected.get("workflow") or {}
@@ -126,6 +136,8 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
     expect_equal(failures, snapshot, "shadow_plan.refresh_required", shadow_plan.get("refresh_required"))
     expect_contains_all(failures, snapshot, "shadow_plan.enabled_node_names", shadow_plan.get("enabled_nodes"))
     expect_contains_all(failures, snapshot, "shadow_plan.authorized_runtime_tools", shadow_plan.get("authorized_runtime_tools"))
+    evaluate_planning_diff_expectations(failures, snapshot, planning_diff)
+    evaluate_planner_gate_expectations(failures, snapshot, planner_gate)
     expect_equal(failures, snapshot, "intent_axes.continuation_type", intent.get("continuation_type"))
     expect_contains_all(failures, snapshot, "intent_axes.intent_stack", intent.get("intent_stack_contains"))
     expect_contains_all(failures, snapshot, "intent_stack_projection", intent.get("intent_stack_projection_contains"))
@@ -174,6 +186,75 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
             "evidence_gap_accuracy": 0.0 if any("evidence_gaps" in item for item in failures) else 1.0,
         },
     )
+
+
+def evaluate_planning_diff_expectations(
+    failures: list[str],
+    snapshot: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    if not expected:
+        return
+    diff = snapshot.get("planning_diff") or {}
+    if not isinstance(diff, dict) or not diff:
+        failures.append("planning_diff: missing")
+        return
+    allowed_status = expected.get("overall_status_in") or []
+    if allowed_status and diff.get("overall_status") not in allowed_status:
+        failures.append(f"planning_diff.overall_status: expected one of {allowed_status!r}, got {diff.get('overall_status')!r}")
+    max_severity = expected.get("max_severity")
+    if max_severity:
+        actual_rank = SEVERITY_RANK.get(str(diff.get("severity")), 99)
+        max_rank = SEVERITY_RANK.get(str(max_severity), 99)
+        if actual_rank > max_rank:
+            failures.append(f"planning_diff.severity: expected <= {max_severity!r}, got {diff.get('severity')!r}")
+    if expected.get("no_critical") is True and int(diff.get("critical_count") or 0) > 0:
+        failures.append(f"planning_diff.critical_count: expected 0, got {diff.get('critical_count')!r}")
+    migration_ready = expected.get("migration_ready")
+    if migration_ready is not None:
+        actual = bool(((diff.get("migration_readiness") or {}).get("safe_to_migrate")))
+        if actual is not bool(migration_ready):
+            failures.append(f"planning_diff.migration_readiness.safe_to_migrate: expected {migration_ready!r}, got {actual!r}")
+    absent = expected.get("required_diff_types_absent") or []
+    if absent:
+        compact_types = set(diff.get("diff_types") or (diff.get("counters") or {}).get("diff_types", []) or [])
+        present = sorted(item for item in absent if item in compact_types)
+        if present:
+            failures.append(f"planning_diff.diff_types: forbidden diff types present {present!r}")
+
+
+def evaluate_planner_gate_expectations(
+    failures: list[str],
+    snapshot: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    gate = snapshot.get("planner_gate") or {}
+    if not isinstance(gate, dict) or not gate:
+        failures.append("planner_gate: missing")
+        return
+    if not expected:
+        expected = {"selected_execution_source": "legacy_policy"}
+    modes = expected.get("mode_in") or []
+    if modes and gate.get("mode") not in modes:
+        failures.append(f"planner_gate.mode: expected one of {modes!r}, got {gate.get('mode')!r}")
+    if "eligible" in expected and bool(gate.get("eligible")) is not bool(expected.get("eligible")):
+        failures.append(f"planner_gate.eligible: expected {expected.get('eligible')!r}, got {gate.get('eligible')!r}")
+    expect_equal(failures, snapshot, "planner_gate.selected_execution_source", expected.get("selected_execution_source"))
+    absent = expected.get("required_blockers_absent") or []
+    blockers = set(gate.get("blockers") or [])
+    present = sorted(item for item in absent if item in blockers)
+    if present:
+        failures.append(f"planner_gate.blockers: forbidden blockers present {present!r}")
+    contains = expected.get("required_blockers_contains") or []
+    missing = sorted(item for item in contains if item not in blockers)
+    if missing:
+        failures.append(f"planner_gate.blockers: missing blockers {missing!r}")
+    max_severity = expected.get("max_diff_severity")
+    if max_severity:
+        actual_rank = SEVERITY_RANK.get(str((snapshot.get("planning_diff") or {}).get("severity")), 99)
+        max_rank = SEVERITY_RANK.get(str(max_severity), 99)
+        if actual_rank > max_rank:
+            failures.append(f"planner_gate.max_diff_severity: expected <= {max_severity!r}, got {(snapshot.get('planning_diff') or {}).get('severity')!r}")
 
 
 def evaluate_trace_case(case: dict[str, Any], events: list[dict[str, Any]], complete: dict[str, Any]) -> EvalResult:

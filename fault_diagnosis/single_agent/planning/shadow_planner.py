@@ -221,6 +221,9 @@ def _apply_goal_rules(
         elif goal_type == "decide_workorder":
             _enable(nodes, "permission_check", goal_id, "workorder decision guard", blocked=blocked, guardrails=["permission_required"])
             _enable(nodes, "risk_check", goal_id, "workorder decision guard", blocked=blocked, guardrails=["risk_check_required"])
+            _enable(nodes, "audit_log", goal_id, "workorder decision audit guard", blocked=blocked, guardrails=["audit_required"])
+            _enable(nodes, "evidence_validation", goal_id, "workorder decision evidence guard", blocked=blocked, guardrails=["evidence_validation_required"])
+            _enable(nodes, "output_guardrail", goal_id, "workorder decision output guard", blocked=blocked, guardrails=["output_guardrail_required"])
             _enable(nodes, "workorder_decision", goal_id, "decide workorder draft", blocked=blocked, required_evidence=["workorder_basis"], guardrails=["only_draft_or_confirmation"])
             output.expected_output = "workorder_decision"
             output.workorder_boundary = "only_draft_or_confirmation"
@@ -279,7 +282,7 @@ def _apply_task_family_rules(task_family: str, nodes: dict[str, dict[str, Any]],
         _enable(nodes, "report", "task_family", "task family suggests report")
         output.expected_output = "report"
     elif task_family == "action_or_workorder":
-        for node in ("permission_check", "risk_check", "workorder_decision"):
+        for node in ("permission_check", "risk_check", "audit_log", "evidence_validation", "output_guardrail", "workorder_decision"):
             _enable(nodes, node, "task_family", "task family suggests guarded action/workorder", guardrails=["human_confirmation"])
         output.expected_output = "workorder_decision"
         output.workorder_boundary = "only_draft_or_confirmation"

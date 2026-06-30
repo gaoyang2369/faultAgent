@@ -131,3 +131,31 @@ def test_execution_policy_runner_and_tools_do_not_reference_shadow_plan() -> Non
     runner_text = (ROOT / "fault_diagnosis/single_agent/runner.py").read_text(encoding="utf-8")
     tool_call_section = runner_text[runner_text.index("    def _start_tool_call"):]
     assert "shadow_plan" not in tool_call_section
+
+
+def test_execution_policy_runner_and_tools_do_not_reference_planning_diff() -> None:
+    paths = [
+        ROOT / "fault_diagnosis/single_agent/workflow/policies.py",
+        ROOT / "fault_diagnosis/single_agent/workflow/evidence_gap.py",
+        ROOT / "fault_diagnosis/single_agent/stages.py",
+    ]
+    tool_paths = sorted((ROOT / "fault_diagnosis/tools").glob("**/*.py"))
+    for path in [*paths, *tool_paths]:
+        assert "planning_diff" not in path.read_text(encoding="utf-8"), str(path)
+    runner_text = (ROOT / "fault_diagnosis/single_agent/runner.py").read_text(encoding="utf-8")
+    tool_call_section = runner_text[runner_text.index("    def _start_tool_call"):]
+    assert "planning_diff" not in tool_call_section
+
+
+def test_execution_policy_stages_and_tools_do_not_reference_planner_gate() -> None:
+    paths = [
+        ROOT / "fault_diagnosis/single_agent/workflow/policies.py",
+        ROOT / "fault_diagnosis/single_agent/workflow/evidence_gap.py",
+        ROOT / "fault_diagnosis/single_agent/stages.py",
+    ]
+    tool_paths = sorted((ROOT / "fault_diagnosis/tools").glob("**/*.py"))
+    for path in [*paths, *tool_paths]:
+        assert "planner_gate" not in path.read_text(encoding="utf-8"), str(path)
+    runner_text = (ROOT / "fault_diagnosis/single_agent/runner.py").read_text(encoding="utf-8")
+    tool_call_section = runner_text[runner_text.index("    def _start_tool_call"):]
+    assert "planner_gate" not in tool_call_section

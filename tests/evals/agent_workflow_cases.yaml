@@ -21,6 +21,14 @@ cases:
       expected_output: answer
       enabled_nodes:
       - sql
+    planning_diff:
+      overall_status_in:
+      - aligned
+      - acceptable_diff
+      - needs_review
+      max_severity: warning
+      no_critical: true
+      migration_ready: false
     context:
       source: current_message
     intent:
@@ -67,6 +75,14 @@ cases:
       expected_output: answer
       enabled_nodes:
       - knowledge
+    planning_diff:
+      overall_status_in:
+      - aligned
+      - acceptable_diff
+      - needs_review
+      max_severity: warning
+      no_critical: true
+      migration_ready: false
     context:
       source: current_message
     intent:
@@ -173,6 +189,14 @@ cases:
       - sql
       - knowledge
       - analysis
+    planning_diff:
+      overall_status_in:
+      - aligned
+      - acceptable_diff
+      - needs_review
+      max_severity: error
+      no_critical: true
+      migration_ready: false
     context:
       source: current_message
     intent:
@@ -984,6 +1008,14 @@ cases:
   turns:
   - 要不要派单
   expected:
+    planning_diff:
+      overall_status_in:
+      - aligned
+      - acceptable_diff
+      - needs_review
+      max_severity: warning
+      no_critical: true
+      migration_ready: false
     context:
       used_active_asset: true
     intent:

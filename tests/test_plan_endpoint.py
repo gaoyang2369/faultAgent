@@ -65,6 +65,11 @@ def test_plan_endpoint_uses_trusted_auth_not_user_identity(monkeypatch) -> None:
     assert payload["workflow_route"]["task_family"] == "diagnosis"
     assert payload["shadow_plan"]["planner_mode"] == "shadow"
     assert "authorized_runtime_tools" in payload["shadow_plan"]
+    assert payload["planning_diff"]["migration_readiness"]["safe_to_migrate"] is False
+    assert "node_diffs" not in payload["planning_diff"]
+    assert payload["workflow_route"]["planning_diff"]["overall_status"] == payload["planning_diff"]["overall_status"]
+    assert payload["planner_gate"]["selected_execution_source"] == "legacy_policy"
+    assert payload["workflow_route"]["planner_gate"]["mode"] == payload["planner_gate"]["mode"]
 
 
 def test_plan_endpoint_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> None:
@@ -143,5 +148,8 @@ def test_planner_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> None:
     assert snapshot.workflow_route["task_family"] == "runtime_status"
     assert snapshot.shadow_plan["planner_mode"] == "shadow"
     assert "sql" in snapshot.shadow_plan["enabled_node_names"]
+    assert snapshot.planning_diff["migration_readiness"]["safe_to_migrate"] is False
+    assert "node_diffs" not in snapshot.planning_diff
+    assert snapshot.planner_gate["selected_execution_source"] == "legacy_policy"
     assert calls == []
     assert list_thread_artifacts(thread_id) == []

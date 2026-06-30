@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fault_diagnosis.single_agent.planning import build_planning_input, build_shadow_plan
+from fault_diagnosis.single_agent.planning import build_planning_diff, build_planning_input, build_shadow_plan, summarize_planning_diff
 
 
 def _goal(goal_type: str, *, status: str = "ready", goal_id: str | None = None) -> dict:
@@ -154,3 +154,16 @@ def test_candidate_tools_can_exceed_authorized_but_never_legacy_runtime_tools() 
     assert set(plan.tool_plan.candidate_tools).issuperset({"sql_db_query", "query_knowledge_base", "save_report"})
     assert plan.tool_plan.authorized_runtime_tools == ["query_knowledge_base"]
     assert all(tool in {"query_knowledge_base"} for tool in plan.tool_plan.authorized_runtime_tools)
+    diff = build_planning_diff(
+        {
+            "enabled_nodes": {"knowledge": True},
+            "runtime_tools": ["query_knowledge_base"],
+            "evidence_mode": "collect_new",
+            "should_refresh_runtime_data": False,
+            "requested_output": "answer",
+        },
+        plan,
+    )
+    summary = summarize_planning_diff(diff)
+    assert summary["critical_count"] == 0
+    assert "node_diffs" not in summary
