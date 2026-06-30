@@ -17,6 +17,7 @@ from ..diagnosis.contracts import (
     SqlStepArtifact,
     WorkOrderSuggestion,
 )
+from ..context import build_case_state_snapshot
 from .contracts import AgentTrace, SingleAgentDecision
 
 
@@ -85,7 +86,7 @@ def build_diagnosis_artifact_envelope(
     }
     if evidence_bundle is not None:
         payload["evidence_bundle"] = evidence_bundle.model_dump(exclude_none=True)
-    return DiagnosisArtifactEnvelope(
+    envelope = DiagnosisArtifactEnvelope(
         workflow_type=_artifact_type_from_decision(decision),
         thread_id=thread_id,
         created_at=datetime.now().isoformat(),
@@ -95,6 +96,8 @@ def build_diagnosis_artifact_envelope(
         payload=payload,
         evidence=evidence,
     )
+    envelope.payload["case_state_snapshot"] = build_case_state_snapshot(envelope)
+    return envelope
 
 
 def _artifact_type_from_decision(decision: SingleAgentDecision) -> DiagnosisArtifactType:

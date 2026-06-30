@@ -21,6 +21,7 @@ from ..config import (
     SINGLE_AGENT_MODEL_TIMEOUT_SECONDS,
 )
 from ..observability import NoopTraceRun, TraceRunContext, get_trace_exporter, write_local_trace
+from ..context import summarize_resolved_context
 from ..diagnosis.adapters import invoke_tool
 from ..security.audit import get_security_audit_logger
 from ..security.contracts import AuthContext
@@ -213,6 +214,10 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         }
         if metadata:
             trace_metadata.update(metadata)
+        if self._workflow_task_decision is not None:
+            resolved_context = getattr(self._workflow_task_decision, "resolved_context", {}) or {}
+            if resolved_context:
+                trace_metadata.setdefault("resolved_context", summarize_resolved_context(resolved_context))
         if self.evidence_bundle is not None:
             trace_metadata.setdefault("evidence_bundle_id", getattr(self.evidence_bundle, "bundle_id", None))
             trace_metadata.setdefault("evidence_count", len(getattr(self.evidence_bundle, "evidence_items", []) or []))

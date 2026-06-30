@@ -31,7 +31,7 @@ from ..diagnosis.steps import (
 from ..diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from ..security.sql_acl import apply_sql_acl
 from .artifacts import build_diagnosis_artifact_envelope
-from .context import apply_context_resolution, load_conversation_diagnosis_state
+from .context import ContextManager, load_conversation_diagnosis_state
 from .contracts import SingleAgentDecision
 from .errors import SingleAgentExecutionError
 from .intent import (
@@ -78,18 +78,9 @@ class SingleAgentStagesMixin:
     """Stage-level behavior split out from the public runner facade."""
 
     async def understand_request(self) -> tuple[DiagnosisRequest, SingleAgentDecision]:
-        conversation_state = load_conversation_diagnosis_state(self.thread_id)
-        report_from_previous_artifact = (
-            looks_like_report_handoff(self.message)
-            and (
-                get_thread_artifact(self.thread_id) is not None
-                or bool(conversation_state.active_case and conversation_state.active_case.last_evidence_bundle_id)
-            )
-        )
-        if report_from_previous_artifact:
-            payload = fallback_understanding_payload(self.message, self.user_identity)
-            payload["needs_report"] = True
-        elif should_use_rule_based_understanding(self.message):
+        context_manager = ContextManager()
+        conversation_state = context_manager.load_state(self.thread_id)
+        if should_use_rule_based_understanding(self.message):
             payload = fallback_understanding_payload(self.message, self.user_identity)
         else:
             try:
@@ -104,11 +95,16 @@ class SingleAgentStagesMixin:
                 )
                 payload = fallback_understanding_payload(self.message, self.user_identity)
         payload["equipment_hint"] = normalize_equipment_hint(payload.get("equipment_hint"))
-        apply_context_resolution(
-            payload=payload,
+        resolved_context = context_manager.resolve(
+            thread_id=self.thread_id,
             message=self.message,
+            auth_context=self.auth_context,
+            current_payload=payload,
             state=conversation_state,
         )
+        report_from_previous_artifact = resolved_context.relation_to_previous == "report_handoff"
+        if report_from_previous_artifact:
+            payload["needs_report"] = True
 
         request = build_request_from_payload(
             self.message,
@@ -123,6 +119,7 @@ class SingleAgentStagesMixin:
             message=self.message,
             report_from_previous_artifact=report_from_previous_artifact,
             conversation_state=conversation_state,
+            resolved_context=resolved_context,
         )
         self.trace.add_event(
             "decision",

@@ -6,12 +6,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..diagnosis.artifact_store import get_thread_artifact
 from ..diagnosis.steps import build_request_from_payload
+from ..context import summarize_resolved_context
 from ..security.contracts import AuthContext
 from ..security.policy_engine import apply_authorization_to_decision, authorize_workflow
-from .context import apply_context_resolution, load_conversation_diagnosis_state
-from .intent import fallback_understanding_payload, looks_like_report_handoff, decide_capabilities
+from .context import ContextManager
+from .intent import fallback_understanding_payload, decide_capabilities
 
 
 PLAN_SNAPSHOT_SCHEMA_VERSION = "agent_plan_snapshot.v1"
@@ -52,22 +52,19 @@ def build_plan_snapshot(
     """Build a deterministic plan snapshot without tool calls or artifact writes."""
 
     normalized_message = (message or "").strip()
-    conversation_state = load_conversation_diagnosis_state(thread_id)
-    report_from_previous_artifact = (
-        looks_like_report_handoff(normalized_message)
-        and (
-            get_thread_artifact(thread_id) is not None
-            or bool(conversation_state.active_case and conversation_state.active_case.last_evidence_bundle_id)
-        )
-    )
+    context_manager = ContextManager()
+    conversation_state = context_manager.load_state(thread_id)
     payload = fallback_understanding_payload(normalized_message, user_identity)
-    if report_from_previous_artifact:
-        payload["needs_report"] = True
-    context_resolution = apply_context_resolution(
-        payload=payload,
+    resolved_context = context_manager.resolve(
+        thread_id=thread_id,
         message=normalized_message,
+        auth_context=auth_context,
+        current_payload=payload,
         state=conversation_state,
     )
+    report_from_previous_artifact = resolved_context.relation_to_previous == "report_handoff"
+    if report_from_previous_artifact:
+        payload["needs_report"] = True
     request = build_request_from_payload(
         normalized_message,
         user_identity,
@@ -81,6 +78,7 @@ def build_plan_snapshot(
         message=normalized_message,
         report_from_previous_artifact=report_from_previous_artifact,
         conversation_state=conversation_state,
+        resolved_context=resolved_context,
     )
     authorization = authorize_workflow(auth_context, decision)
     decision = apply_authorization_to_decision(decision, authorization)
@@ -92,12 +90,11 @@ def build_plan_snapshot(
     referenced_artifact = _referenced_artifact_payload(decision)
     blocked_reason = _blocked_reason(decision, authorization.model_dump())
 
+    resolved_context_summary = summarize_resolved_context(decision.resolved_context)
+    resolved_context_summary["thread_id"] = thread_id
+
     return PlanSnapshot(
-        resolved_context={
-            **dict(context_resolution or {}),
-            "thread_id": thread_id,
-            "active_case_id": decision.active_case_id,
-        },
+        resolved_context=resolved_context_summary,
         intent_axes={
             "domain_task": decision.primary_task_type,
             "candidate_task_types": decision.candidate_task_types,

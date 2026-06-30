@@ -140,8 +140,10 @@ def test_context_binder_result_reference() -> None:
     decision = _decision("从结果来看貌似有故障呀？是不是要生成工单？")
 
     assert decision.context_resolution["resolved"] is True
+    assert decision.resolved_context["relation_to_previous"] == "action_followup"
     assert decision.relation_to_previous == "actionize_previous_result"
     assert decision.referenced_artifact_id
+    assert decision.resolved_context["referenced_artifact_id"]
     assert decision.context_resolution["active_asset"] == "G120电机1"
     assert "A07089" in decision.context_resolution["active_fault_codes"]
 
@@ -190,11 +192,16 @@ def test_flow_workorder_from_artifact_no_sql(monkeypatch) -> None:
     assert "sql_db_query" not in tools
     assert "query_knowledge_base" not in tools
     assert complete["decision"]["plan_mode"] == "workorder_decision_from_artifact"
+    assert complete["resolved_context"]["relation_to_previous"] == "action_followup"
     assert complete["workorder_decision"]["status"] == "待确认"
+    assert complete["resolved_context"]["stale_evidence"] is True
+    assert complete["workflow_route"]["should_refresh_runtime_data"] is True
     assert any(
         event.get("stage") == "workorder_decision"
         for event in complete["trace"]["events"]
     )
+    assert "数据已滞后" in complete["final_content"] or "采样窗口" in complete["final_content"]
+    assert "刷新当前状态" in complete["final_content"]
     assert "已创建" not in complete["final_content"]
     assert "已派发" not in complete["final_content"]
     assert "complete" in events
@@ -228,6 +235,17 @@ def test_guardrail_sql_workorder_contradiction() -> None:
     )
 
     assert "sql_rows_contradict_workorder_no_data_reason" in result["warnings"]
+
+
+def test_guardrail_blocks_reset_completion_claim() -> None:
+    result = build_output_guardrail_result(
+        "已复位设备并完成处理。",
+        None,
+        SingleAgentDecision(primary_task_type="action_request"),
+    )
+
+    assert "unsafe_action_execution_claim" in result["warnings"]
+    assert result["passed"] is False
 
 
 def test_new_diagnosis_then_workorder_without_artifact() -> None:

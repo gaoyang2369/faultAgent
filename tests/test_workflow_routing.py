@@ -223,6 +223,7 @@ def test_report_handoff_uses_previous_evidence_bundle_context() -> None:
 
     assert decision.primary_task_type == "report_generation"
     assert decision.report_from_previous_artifact is True
+    assert decision.resolved_context.get("relation_to_previous") in {None, "report_handoff"}
     assert decision.context_resolution["last_evidence_bundle_id"] == "eb_trace"
     assert decision.active_case_id == "eb_trace"
     assert "report_generation" in decision.intent_stack

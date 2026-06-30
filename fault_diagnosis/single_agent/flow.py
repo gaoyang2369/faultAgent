@@ -205,6 +205,7 @@ class SingleAgentFlowMixin:
                     "primary_task_type": decision.primary_task_type,
                     "candidate_task_types": decision.candidate_task_types,
                     "intent_stack": decision.intent_stack,
+                    "resolved_context": decision.resolved_context,
                     "context_resolution": decision.context_resolution,
                     "active_case_id": decision.active_case_id,
                     "relation_to_previous": decision.relation_to_previous,

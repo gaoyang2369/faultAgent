@@ -56,6 +56,8 @@ def test_plan_endpoint_uses_trusted_auth_not_user_identity(monkeypatch) -> None:
     assert payload["authorization"]["mode"] == "deny"
     assert payload["authorization"]["denied_reason_code"] == "diagnosis_permission_denied"
     assert "save_report" not in payload["planned_tools"]
+    assert "relation_to_previous" in payload["resolved_context"]
+    assert "inherited_slots" in payload["resolved_context"]
 
 
 def test_plan_endpoint_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> None:
@@ -126,5 +128,7 @@ def test_planner_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> None:
     )
 
     assert snapshot.schema_version == "agent_plan_snapshot.v1"
+    assert snapshot.resolved_context["relation_to_previous"] == "new_case"
+    assert "missing_context" in snapshot.resolved_context
     assert calls == []
     assert list_thread_artifacts(thread_id) == []

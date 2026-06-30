@@ -195,7 +195,7 @@ def _discloses_missing_evidence(text: str) -> bool:
 def _contains_dangerous_action_completion(text: str) -> bool:
     if any(pattern in text for pattern in DANGEROUS_ACTION_COMPLETION_PATTERNS):
         return True
-    return bool(re.search(r"已(?:重启|停机|关闭告警|屏蔽告警|修改|改成|派发|下发|执行)", text))
+    return bool(re.search(r"已(?:重启|停机|关闭告警|屏蔽告警|修改|改成|派发|下发|执行|复位)", text))
 
 
 def _contains_workorder_completion(text: str) -> bool:

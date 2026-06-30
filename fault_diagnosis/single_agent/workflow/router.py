@@ -87,17 +87,22 @@ def route_task(
     payload: dict[str, Any],
     message: str,
     report_from_previous_artifact: bool = False,
+    resolved_context: Any | None = None,
 ) -> TaskRoute:
     """Build a structured route from rule-based and model understanding payloads."""
 
     normalized = (message or payload.get("user_message") or "").strip()
+    resolved_context_payload = _resolved_context_payload(resolved_context)
+    effective_report_from_previous_artifact = report_from_previous_artifact or (
+        resolved_context_payload.get("relation_to_previous") == "report_handoff"
+    )
     objects = _extract_objects(payload, normalized)
-    task_type, confidence = _classify_task(normalized, objects, report_from_previous_artifact)
+    task_type, confidence = _classify_task(normalized, objects, effective_report_from_previous_artifact)
     requested_output = _requested_output(task_type, normalized)
-    intent_stack = _intent_stack(task_type, normalized, objects, requested_output, report_from_previous_artifact)
+    intent_stack = _intent_stack(task_type, normalized, objects, requested_output, effective_report_from_previous_artifact)
     candidate_task_types = _candidate_task_types(task_type, intent_stack)
     time_window = _time_window(task_type, payload, normalized)
-    flags = _flags_for_task(task_type, normalized, objects, requested_output, report_from_previous_artifact)
+    flags = _flags_for_task(task_type, normalized, objects, requested_output, effective_report_from_previous_artifact)
     _apply_intent_flags(flags, intent_stack, objects)
     missing_slots = _missing_slots(task_type, objects, time_window, normalized)
     subgoals = _subgoals(task_type, objects, flags, missing_slots)
@@ -107,7 +112,14 @@ def route_task(
         primary_task_type=task_type,
         candidate_task_types=candidate_task_types,
         intent_stack=intent_stack,
+        resolved_context=resolved_context_payload,
         context_resolution=dict(payload.get("context_resolution") or {}),
+        relation_to_previous=str(resolved_context_payload.get("relation_to_previous") or "new_task"),
+        evidence_mode=str(resolved_context_payload.get("evidence_mode") or "collect_new"),
+        referenced_artifact_id=resolved_context_payload.get("referenced_artifact_id"),
+        referenced_case_id=resolved_context_payload.get("referenced_case_id")
+        or resolved_context_payload.get("active_case_id"),
+        should_refresh_runtime_data=bool(resolved_context_payload.get("should_refresh_runtime_data")),
         action_target=_action_target(intent_stack),
         route_confidence=confidence,
         user_goal=str(payload.get("analysis_goal") or normalized or task_type.value),
@@ -120,6 +132,14 @@ def route_task(
         flags=flags,
         action_type=action_type,
     )
+
+
+def _resolved_context_payload(resolved_context: Any | None) -> dict[str, Any]:
+    if resolved_context is None:
+        return {}
+    if hasattr(resolved_context, "model_dump"):
+        return resolved_context.model_dump(exclude_none=True)
+    return dict(resolved_context or {}) if isinstance(resolved_context, dict) else {}
 
 
 def _classify_task(

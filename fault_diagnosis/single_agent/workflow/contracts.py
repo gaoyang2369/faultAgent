@@ -63,6 +63,7 @@ class TaskRoute(BaseModel):
     primary_task_type: TaskType = TaskType.FAULT_DIAGNOSIS
     candidate_task_types: list[TaskType] = Field(default_factory=list)
     intent_stack: list[str] = Field(default_factory=list)
+    resolved_context: dict[str, Any] = Field(default_factory=dict)
     context_resolution: dict[str, Any] = Field(default_factory=dict)
     relation_to_previous: str = "new_task"
     plan_mode: str = "normal"

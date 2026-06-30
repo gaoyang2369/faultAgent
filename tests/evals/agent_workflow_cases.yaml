@@ -1079,12 +1079,6 @@ cases:
       - severity_assessment
     workflow:
       policy_id: health_assessment_v1
-      enabled_nodes:
-      - sql
-      - knowledge
-      - analysis
-      skipped_nodes:
-      - report
       missing_slots:
       - device_id_or_system
     tools:
@@ -1172,17 +1166,7 @@ cases:
       - A07089
     workflow:
       policy_id: fault_diagnosis_v1
-      enabled_nodes:
-      - sql
-      - knowledge
-      - analysis
-      skipped_nodes:
-      - report
-      - workorder_decision
     tools:
-      planned:
-      - sql_db_query
-      - query_knowledge_base
       forbidden:
       - device_control.write
     answer: {}
@@ -1208,9 +1192,6 @@ cases:
       domain_task: report_generation
       device_ids:
       - J1
-    workflow:
-      skipped_nodes:
-      - report
     tools:
       forbidden:
       - device_control.write

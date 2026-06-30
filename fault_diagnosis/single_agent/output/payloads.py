@@ -14,6 +14,7 @@ from ...diagnosis.contracts import (
     SqlStepArtifact,
     WorkOrderSuggestion,
 )
+from ...context import summarize_resolved_context
 from ...runtime.diagnosis_contract_adapter import build_diagnosis_contract_payload
 from ..contracts import AgentTrace, SingleAgentDecision
 from ..reporting import extract_report_url
@@ -33,6 +34,7 @@ def build_direct_complete_payload(
 ) -> dict[str, Any]:
     """Build the complete payload for lightweight direct replies."""
 
+    resolved_context = summarize_resolved_context(decision.resolved_context)
     return {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -43,6 +45,7 @@ def build_direct_complete_payload(
         "report_filename": None,
         "report_url": None,
         "decision": decision.model_dump(),
+        "resolved_context": resolved_context,
         "authorization": decision.authorization,
         "ui_payload": build_ui_payload(decision=decision),
         "trace": trace.model_dump(exclude_none=True),
@@ -66,6 +69,7 @@ def build_report_handoff_complete_payload(
 ) -> dict[str, Any]:
     """Build the complete payload for report generation from an existing artifact."""
 
+    resolved_context = summarize_resolved_context(decision.resolved_context)
     return {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -76,6 +80,7 @@ def build_report_handoff_complete_payload(
         "report_filename": report_artifact.report_filename,
         "report_url": extract_report_url(report_artifact.save_result),
         "decision": decision.model_dump(),
+        "resolved_context": resolved_context,
         "authorization": decision.authorization,
         "ui_payload": build_ui_payload(decision=decision, report_artifact=report_artifact),
         "todos": todos,
@@ -83,6 +88,7 @@ def build_report_handoff_complete_payload(
             "primary_task_type": decision.primary_task_type,
             "candidate_task_types": decision.candidate_task_types,
             "intent_stack": decision.intent_stack,
+            "resolved_context": resolved_context,
             "context_resolution": decision.context_resolution,
             "active_case_id": decision.active_case_id,
             "relation_to_previous": decision.relation_to_previous,
@@ -131,6 +137,7 @@ def build_diagnosis_complete_payload(
 ) -> dict[str, Any]:
     """Build the full complete payload for diagnosis workflows."""
 
+    resolved_context = summarize_resolved_context(decision.resolved_context)
     complete_payload = {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -141,6 +148,7 @@ def build_diagnosis_complete_payload(
         "report_filename": report_artifact.report_filename,
         "report_url": extract_report_url(report_artifact.save_result),
         "decision": decision.model_dump(),
+        "resolved_context": resolved_context,
         "authorization": decision.authorization,
         "sql_artifact": sql_artifact.model_dump(exclude_none=True),
         "knowledge_artifact": knowledge_artifact.model_dump(exclude_none=True),
@@ -168,6 +176,7 @@ def build_diagnosis_complete_payload(
             "primary_task_type": decision.primary_task_type,
             "candidate_task_types": decision.candidate_task_types,
             "intent_stack": decision.intent_stack,
+            "resolved_context": resolved_context,
             "context_resolution": decision.context_resolution,
             "active_case_id": decision.active_case_id,
             "relation_to_previous": decision.relation_to_previous,

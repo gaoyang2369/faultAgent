@@ -38,6 +38,8 @@ DANGEROUS_ACTION_COMPLETION_PATTERNS = (
     "操作已完成",
     "已执行",
     "已经执行",
+    "已复位",
+    "已经复位",
 )
 
 

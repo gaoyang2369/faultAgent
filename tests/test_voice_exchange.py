@@ -14,6 +14,7 @@ from fault_diagnosis.api.auth import router as auth_router
 from fault_diagnosis.api.chat import router as chat_router
 from fault_diagnosis.auth.admin_auth import USER_AUTH_COOKIE_NAME
 from fault_diagnosis.auth.session_scope import SessionScopeManager
+from fault_diagnosis.security.permissions import AUTHORIZED_BUSINESS_TABLES
 from fault_diagnosis.security.voice_auth import sign_voice_identity
 
 
@@ -88,7 +89,7 @@ def test_voice_exchange_then_identity_returns_admin(monkeypatch, tmp_path) -> No
     assert USER_AUTH_COOKIE_NAME in client.cookies
     assert identity["role"] == "admin"
     assert identity["auth_method"] == "voice_exchange"
-    assert identity["allowed_tables"] == []
+    assert identity["allowed_tables"] == AUTHORIZED_BUSINESS_TABLES
     assert "legacy.value.is.not.trusted" not in identity["permissions"]
 
 

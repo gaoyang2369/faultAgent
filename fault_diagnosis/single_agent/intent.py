@@ -228,6 +228,7 @@ def decide_capabilities(
     message: str,
     report_from_previous_artifact: bool,
     conversation_state: ConversationDiagnosisState | None = None,
+    resolved_context: Any | None = None,
 ) -> SingleAgentDecision:
     normalized = (request.user_message or message or "").strip()
     payload_sql = payload.get("needs_sql")
@@ -238,9 +239,14 @@ def decide_capabilities(
         payload=payload,
         message=normalized,
         report_from_previous_artifact=report_from_previous_artifact,
+        resolved_context=resolved_context,
     )
-    gap_plan = analyze_evidence_gap(route, conversation_state)
-    _apply_evidence_gap_to_route(route, gap_plan)
+    if resolved_context is None:
+        gap_plan = analyze_evidence_gap(route, conversation_state)
+        _apply_evidence_gap_to_route(route, gap_plan)
+        _backfill_resolved_context_from_legacy(route)
+    else:
+        _apply_resolved_context_to_route(route, resolved_context)
     if isinstance(payload_sql, bool) and payload_sql:
         route.flags["need_sql"] = True
     if isinstance(payload_knowledge, bool) and payload_knowledge:
@@ -263,8 +269,10 @@ def decide_capabilities(
             primary_task_type=route.primary_task_type.value,
             candidate_task_types=[item.value for item in route.candidate_task_types],
             intent_stack=route.intent_stack,
+            resolved_context=route.resolved_context,
             context_resolution=route.context_resolution,
-            active_case_id=conversation_state.active_case_id if conversation_state else None,
+            active_case_id=route.resolved_context.get("active_case_id")
+            or (conversation_state.active_case_id if conversation_state else None),
             relation_to_previous=route.relation_to_previous,
             plan_mode=route.plan_mode,
             evidence_mode=route.evidence_mode,
@@ -311,8 +319,10 @@ def decide_capabilities(
         primary_task_type=route.primary_task_type.value,
         candidate_task_types=[item.value for item in route.candidate_task_types],
         intent_stack=route.intent_stack,
+        resolved_context=route.resolved_context,
         context_resolution=route.context_resolution,
-        active_case_id=conversation_state.active_case_id if conversation_state else None,
+        active_case_id=route.resolved_context.get("active_case_id")
+        or (conversation_state.active_case_id if conversation_state else None),
         relation_to_previous=route.relation_to_previous,
         plan_mode=route.plan_mode,
         evidence_mode=route.evidence_mode,
@@ -386,3 +396,111 @@ def _apply_plan_mode_flags(route: Any) -> None:
         )
     elif route.plan_mode == "new_diagnosis_then_workorder":
         route.flags["need_workorder_decision"] = True
+
+
+def _backfill_resolved_context_from_legacy(route: Any) -> None:
+    if route.resolved_context:
+        return
+    context = dict(route.context_resolution or {})
+    if not context:
+        return
+    relation = route.relation_to_previous
+    if route.primary_task_type.value == "report_generation" and (
+        context.get("last_evidence_bundle_id") or context.get("last_report_url")
+    ):
+        relation = "report_handoff"
+    elif route.relation_to_previous == "actionize_previous_result":
+        relation = "action_followup"
+    route.resolved_context = {
+        "relation_to_previous": relation,
+        "active_case_id": route.referenced_case_id,
+        "referenced_artifact_id": route.referenced_artifact_id,
+        "referenced_report_id": context.get("last_report_url"),
+        "inherited_slots": {
+            key: value
+            for key, value in {
+                "device": context.get("active_asset") if context.get("used_active_asset") else None,
+                "fault_codes": context.get("active_fault_codes") if context.get("used_active_fault_codes") else None,
+                "evidence_bundle": context.get("last_evidence_bundle_id"),
+                "report": context.get("last_report_url"),
+            }.items()
+            if value
+        },
+        "pending_actions": [],
+        "stale_evidence": "latest_realtime_status" in route.missing_or_stale_evidence,
+        "missing_context": list(context.get("missing_context") or context.get("unresolved_questions") or []),
+        "context_resolution_reason": context.get("context_resolution_reason") or "",
+        "references": list(context.get("references") or []),
+        "candidates": dict(context.get("candidates") or {}),
+        "evidence_mode": route.evidence_mode,
+        "should_refresh_runtime_data": route.should_refresh_runtime_data,
+    }
+
+
+def _apply_resolved_context_to_route(route: Any, resolved_context: Any) -> None:
+    context = (
+        resolved_context.model_dump(exclude_none=True)
+        if hasattr(resolved_context, "model_dump")
+        else dict(resolved_context or {})
+    )
+    relation = str(context.get("relation_to_previous") or route.relation_to_previous or "new_case")
+    route.resolved_context = context
+    route.relation_to_previous = _legacy_relation_to_previous(relation)
+    route.referenced_case_id = context.get("referenced_case_id") or context.get("active_case_id")
+    route.referenced_artifact_id = context.get("referenced_artifact_id")
+    route.evidence_mode = str(context.get("evidence_mode") or route.evidence_mode or "collect_new")
+    route.should_refresh_runtime_data = bool(context.get("should_refresh_runtime_data"))
+    missing_context = [str(item) for item in context.get("missing_context") or [] if str(item)]
+    if missing_context:
+        route.missing_or_stale_evidence = list(dict.fromkeys([*route.missing_or_stale_evidence, *missing_context]))
+    if context.get("stale_evidence"):
+        route.missing_or_stale_evidence = list(
+            dict.fromkeys([*route.missing_or_stale_evidence, "latest_realtime_status"])
+        )
+        route.should_refresh_runtime_data = True
+    if relation == "action_followup":
+        route.plan_mode = "workorder_decision_from_artifact" if route.referenced_artifact_id else "new_diagnosis_then_workorder"
+        route.evidence_mode = (
+            "reuse_and_refresh_status"
+            if context.get("stale_evidence")
+            else "reuse_previous_artifact"
+            if route.referenced_artifact_id
+            else "collect_new"
+        )
+        route.required_evidence = [
+            "diagnosis_summary",
+            "severity_or_status_level",
+            "key_evidence",
+            "freshness",
+            "recommended_action_policy",
+        ]
+        if "workorder_decision" not in route.intent_stack:
+            route.intent_stack.append("workorder_decision")
+        route.action_target = "workorder"
+    elif relation == "refresh_current_status":
+        route.plan_mode = "status_refresh_then_workorder" if "workorder_decision" in route.intent_stack else "refresh_current_status"
+        route.evidence_mode = "reuse_and_refresh_status"
+        route.missing_or_stale_evidence = list(
+            dict.fromkeys([*route.missing_or_stale_evidence, "latest_realtime_status"])
+        )
+        route.should_refresh_runtime_data = True
+    elif relation == "report_handoff":
+        route.plan_mode = "report_from_artifact"
+        route.evidence_mode = "reuse_previous_artifact"
+        if "report_generation" not in route.intent_stack:
+            route.intent_stack.append("report_generation")
+    elif relation == "continuation":
+        route.plan_mode = "explain_from_artifact" if route.referenced_artifact_id else "normal"
+    elif relation == "ambiguous":
+        route.plan_mode = "clarify_context"
+    route.context_resolution = dict(context.get("context_resolution") or route.context_resolution or {})
+
+
+def _legacy_relation_to_previous(relation: str) -> str:
+    if relation == "action_followup":
+        return "actionize_previous_result"
+    if relation == "report_handoff":
+        return "continue_current_frame"
+    if relation == "continuation":
+        return "continue_current_frame"
+    return relation

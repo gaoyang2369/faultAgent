@@ -33,6 +33,7 @@ class SingleAgentDecision(BaseModel):
     primary_task_type: str = "fault_diagnosis"
     candidate_task_types: list[str] = Field(default_factory=list)
     intent_stack: list[str] = Field(default_factory=list)
+    resolved_context: dict[str, Any] = Field(default_factory=dict)
     context_resolution: dict[str, Any] = Field(default_factory=dict)
     active_case_id: str | None = None
     relation_to_previous: str = "new_task"
