@@ -60,6 +60,7 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
     failures: list[str] = []
     expected = case.get("expected") or {}
     route = expected.get("route") or {}
+    shadow_plan = expected.get("shadow_plan") or {}
     context = expected.get("context") or {}
     intent = expected.get("intent") or {}
     workflow = expected.get("workflow") or {}
@@ -70,6 +71,8 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
         or intent.get("domain_task")
         or expected.get("task_family")
         or route.get("task_family")
+        or shadow_plan.get("expected_output")
+        or shadow_plan.get("enabled_nodes")
         or intent.get("intent_stack_contains")
         or intent.get("intent_stack_projection_contains")
         or intent.get("goal_types_contains")
@@ -109,6 +112,7 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
     failures: list[str] = []
     expected = case.get("expected") or {}
     route = expected.get("route") or {}
+    shadow_plan = expected.get("shadow_plan") or {}
     intent = expected.get("intent") or {}
     context = expected.get("context") or {}
     workflow = expected.get("workflow") or {}
@@ -117,6 +121,11 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
     expect_equal(failures, snapshot, "intent_axes.domain_task", intent.get("domain_task"))
     expect_equal(failures, snapshot, "task_family", expected.get("task_family"))
     expect_equal(failures, snapshot, "workflow_route.task_family", route.get("task_family"))
+    expect_equal(failures, snapshot, "shadow_plan.planner_mode", shadow_plan.get("planner_mode"))
+    expect_equal(failures, snapshot, "shadow_plan.expected_output", shadow_plan.get("expected_output"))
+    expect_equal(failures, snapshot, "shadow_plan.refresh_required", shadow_plan.get("refresh_required"))
+    expect_contains_all(failures, snapshot, "shadow_plan.enabled_node_names", shadow_plan.get("enabled_nodes"))
+    expect_contains_all(failures, snapshot, "shadow_plan.authorized_runtime_tools", shadow_plan.get("authorized_runtime_tools"))
     expect_equal(failures, snapshot, "intent_axes.continuation_type", intent.get("continuation_type"))
     expect_contains_all(failures, snapshot, "intent_axes.intent_stack", intent.get("intent_stack_contains"))
     expect_contains_all(failures, snapshot, "intent_stack_projection", intent.get("intent_stack_projection_contains"))

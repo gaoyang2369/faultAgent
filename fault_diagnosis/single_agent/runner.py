@@ -231,6 +231,9 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             goal_set = getattr(self._workflow_task_decision, "goal_set", {}) or {}
             if goal_set:
                 trace_metadata.setdefault("goal_set", summarize_goal_set(goal_set))
+            shadow_plan = getattr(self._workflow_task_decision, "shadow_plan_summary", {}) or {}
+            if shadow_plan:
+                trace_metadata.setdefault("shadow_plan", shadow_plan)
         if self.evidence_bundle is not None:
             trace_metadata.setdefault("evidence_bundle_id", getattr(self.evidence_bundle, "bundle_id", None))
             trace_metadata.setdefault("evidence_count", len(getattr(self.evidence_bundle, "evidence_items", []) or []))

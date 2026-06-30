@@ -12,6 +12,7 @@ from ..security.contracts import AuthContext
 from ..security.policy_engine import apply_authorization_to_decision, authorize_workflow
 from .context import ContextManager
 from .intent import fallback_understanding_payload, decide_capabilities
+from .planning import attach_shadow_plan_summary, build_shadow_plan_for_decision, summarize_shadow_plan
 from .workflow import summarize_goal_set
 
 
@@ -27,6 +28,7 @@ class PlanSnapshot(BaseModel):
     task_family: str = "diagnosis"
     task_family_reason: str = ""
     task_family_source: str = "task_type_mapping"
+    shadow_plan: dict[str, Any] = Field(default_factory=dict)
     goals: list[dict[str, Any]] = Field(default_factory=list)
     intent_stack_projection: list[str] = Field(default_factory=list)
     intent_axes: dict[str, Any] = Field(default_factory=dict)
@@ -100,6 +102,14 @@ def build_plan_snapshot(
     resolved_context_summary = summarize_resolved_context(decision.resolved_context)
     resolved_context_summary["thread_id"] = thread_id
     goal_set_summary = summarize_goal_set(decision.goal_set)
+    shadow_plan = build_shadow_plan_for_decision(
+        message=normalized_message,
+        payload=payload,
+        auth_summary=auth_context.audit_summary(),
+        decision=decision,
+    )
+    attach_shadow_plan_summary(decision, shadow_plan)
+    shadow_plan_summary = summarize_shadow_plan(shadow_plan)
 
     return PlanSnapshot(
         resolved_context=resolved_context_summary,
@@ -107,6 +117,7 @@ def build_plan_snapshot(
         task_family=decision.task_family,
         task_family_reason=decision.task_family_reason,
         task_family_source=decision.task_family_source,
+        shadow_plan=shadow_plan_summary,
         goals=_compact_goals(decision.goals),
         intent_stack_projection=list(goal_set_summary.get("intent_stack_projection") or []),
         intent_axes={
@@ -121,6 +132,7 @@ def build_plan_snapshot(
             "risk_level": decision.risk_level,
             "requested_output": decision.requested_output,
             "action_type": decision.action_type,
+            "shadow_plan": shadow_plan_summary,
         },
         workflow_route={
             "primary_task_type": decision.primary_task_type,
@@ -138,6 +150,7 @@ def build_plan_snapshot(
             "time_window": decision.time_window,
             "subgoals": decision.subgoals,
             "flags": decision.flags,
+            "shadow_plan": shadow_plan_summary,
         },
         workflow_policy=dict(decision.workflow_policy or {}),
         enabled_nodes=enabled_nodes,

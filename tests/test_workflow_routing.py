@@ -7,6 +7,7 @@ from fault_diagnosis.single_agent.context import (
     apply_context_resolution,
 )
 from fault_diagnosis.single_agent.intent import decide_capabilities, fallback_understanding_payload
+from fault_diagnosis.single_agent.planning import build_shadow_plan_for_decision
 from fault_diagnosis.single_agent.workflow import TaskType, route_task
 
 
@@ -215,6 +216,32 @@ def test_composite_alarm_question_builds_intent_stack_and_safe_union() -> None:
     assert "explain_alarm_code" in decision.goal_set["intent_stack_projection"]
     assert decision.flags["safe_union_workflow"] is True
     assert decision.needs_knowledge is True
+
+
+def test_shadow_plan_does_not_mutate_route_policy_fields() -> None:
+    message = "A07089 是什么，现在设备有故障吗，怎么解决"
+    payload = fallback_understanding_payload(message, "维修员")
+    decision = decide_capabilities(
+        payload=payload,
+        request=_request(message, payload),
+        message=message,
+        report_from_previous_artifact=False,
+    )
+    intent_stack = list(decision.intent_stack)
+    enabled_nodes = dict(decision.enabled_nodes)
+    runtime_tools = list(decision.runtime_tools)
+
+    shadow_plan = build_shadow_plan_for_decision(
+        message=message,
+        payload=payload,
+        auth_summary={"role": "engineer"},
+        decision=decision,
+    )
+
+    assert shadow_plan.planner_mode == "shadow"
+    assert decision.intent_stack == intent_stack
+    assert decision.enabled_nodes == enabled_nodes
+    assert decision.runtime_tools == runtime_tools
 
 
 def test_report_handoff_uses_previous_evidence_bundle_context() -> None:

@@ -44,6 +44,7 @@ def scenario_composite_question(client: TestClient) -> None:
     )
     expected = {"explain_fault_code", "check_runtime_status", "diagnose_fault", "recommend_resolution"}
     assert_true(snapshot["task_family"] == "diagnosis", "A must expose diagnosis task_family")
+    assert_true(snapshot["shadow_plan"]["planner_mode"] == "shadow", "A must expose shadow planner")
     assert_true(expected.issubset(set(goal_types(snapshot))), f"A missing goals: {expected - set(goal_types(snapshot))}")
 
 
@@ -56,6 +57,7 @@ def scenario_report_then_workorder(client: TestClient) -> None:
     workorder = goal(snapshot, "decide_workorder")
     assert_true(context["relation_to_previous"] == "action_followup", "B relation must be action_followup")
     assert_true(snapshot["task_family"] in {"diagnosis", "action_or_workorder"}, "B must expose stable task_family")
+    assert_true(snapshot["shadow_plan"]["expected_output"] == "workorder_decision", "B shadow plan must expect workorder decision")
     assert_true("decide_workorder" in goal_types(snapshot), "B must include decide_workorder")
     assert_true(context["referenced_artifact_id"] in workorder.get("context_refs", []), "B workorder goal must reference previous artifact")
 
@@ -91,6 +93,7 @@ def scenario_explicit_device_switch(client: TestClient) -> None:
     snapshot = plan(client, thread_id=thread_id, message="J2 当前状态怎么样")
     refs = [ref for item in goals(snapshot) for ref in item.get("context_refs", [])]
     assert_true(snapshot["task_family"] == "runtime_status", "E must expose runtime_status task_family")
+    assert_true("sql" in snapshot["shadow_plan"]["enabled_node_names"], "E shadow plan must include SQL")
     assert_true("eb_J1_A07089" not in refs, f"E must not reference J1 artifact: {refs}")
 
 

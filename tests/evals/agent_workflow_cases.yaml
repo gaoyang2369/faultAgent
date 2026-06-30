@@ -16,6 +16,11 @@ cases:
   - J1 当前运行状态怎么样
   expected:
     task_family: runtime_status
+    shadow_plan:
+      planner_mode: shadow
+      expected_output: answer
+      enabled_nodes:
+      - sql
     context:
       source: current_message
     intent:
@@ -57,6 +62,11 @@ cases:
   - A07089 是什么意思
   expected:
     task_family: knowledge_lookup
+    shadow_plan:
+      planner_mode: shadow
+      expected_output: answer
+      enabled_nodes:
+      - knowledge
     context:
       source: current_message
     intent:
@@ -97,6 +107,12 @@ cases:
   - J1 的 A07089 现在还在报警吗，怎么处理
   expected:
     task_family: diagnosis
+    shadow_plan:
+      planner_mode: shadow
+      expected_output: answer
+      enabled_nodes:
+      - sql
+      - knowledge
     context:
       source: current_message
     intent:
@@ -150,6 +166,13 @@ cases:
   - 诊断 J1 A07089 的原因
   expected:
     task_family: diagnosis
+    shadow_plan:
+      planner_mode: shadow
+      expected_output: answer
+      enabled_nodes:
+      - sql
+      - knowledge
+      - analysis
     context:
       source: current_message
     intent:
@@ -194,6 +217,12 @@ cases:
   - 评估 J1 最近健康风险
   expected:
     task_family: diagnosis
+    shadow_plan:
+      planner_mode: shadow
+      expected_output: answer
+      enabled_nodes:
+      - sql
+      - analysis
     context:
       source: current_message
     intent:
@@ -230,6 +259,11 @@ cases:
   - 生成 J1 的运行报告
   expected:
     task_family: reporting
+    shadow_plan:
+      planner_mode: shadow
+      expected_output: report
+      enabled_nodes:
+      - report
     context:
       source: current_message
     intent:
@@ -270,6 +304,12 @@ cases:
   - 帮我重启 J1
   expected:
     task_family: action_or_workorder
+    shadow_plan:
+      planner_mode: shadow
+      expected_output: workorder_decision
+      enabled_nodes:
+      - permission_check
+      - risk_check
     context:
       source: current_message
     intent:
@@ -323,6 +363,13 @@ cases:
   - 对 J1 的异常做根因分析
   expected:
     task_family: diagnosis
+    shadow_plan:
+      planner_mode: shadow
+      expected_output: answer
+      enabled_nodes:
+      - sql
+      - knowledge
+      - analysis
     context:
       source: current_message
     intent:

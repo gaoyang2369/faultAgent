@@ -19,6 +19,7 @@ from .output.payloads import (
     build_direct_complete_payload,
     build_report_handoff_complete_payload,
 )
+from .planning import attach_shadow_plan_summary, build_shadow_plan_for_decision
 from .workflow.nodes import (
     build_audit_log_result,
     build_permission_check_result,
@@ -90,6 +91,13 @@ class SingleAgentFlowMixin:
                     task_family_source="direct_response",
                     reason="轻量问候直接回答",
                 )
+                direct_shadow_plan = build_shadow_plan_for_decision(
+                    message=self.message,
+                    payload={},
+                    auth_summary=self.auth_context.audit_summary(),
+                    decision=decision,
+                )
+                attach_shadow_plan_summary(decision, direct_shadow_plan)
                 self.trace.add_event(
                     "decision",
                     stage="final_answer",
@@ -114,6 +122,7 @@ class SingleAgentFlowMixin:
                         "token_count": token_count,
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
+                        "shadow_plan": decision.shadow_plan_summary,
                         "direct_answer": True,
                     },
                 )
@@ -153,6 +162,14 @@ class SingleAgentFlowMixin:
             stage_started = self._start_stage("access_authorization", "校验身份、任务权限和资源范围")
             self.authorization_decision = authorize_workflow(self.auth_context, decision)
             decision = apply_authorization_to_decision(decision, self.authorization_decision)
+            request_payload = getattr(request, "model_dump", lambda **_: {})()
+            shadow_plan = build_shadow_plan_for_decision(
+                message=self.message,
+                payload=request_payload,
+                auth_summary=self.auth_context.audit_summary(),
+                decision=decision,
+            )
+            attach_shadow_plan_summary(decision, shadow_plan)
             get_security_audit_logger().record(
                 event_type="workflow_authorization",
                 auth=self.auth_context,
@@ -191,6 +208,7 @@ class SingleAgentFlowMixin:
                         "token_count": token_count,
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
+                        "shadow_plan": decision.shadow_plan_summary,
                     },
                 )
                 yield encode_sse_event(
@@ -223,6 +241,7 @@ class SingleAgentFlowMixin:
                     "goals": decision.goals,
                     "goal_set": decision.goal_set,
                     "goal_summary": (decision.goal_set or {}).get("goal_summary", ""),
+                    "shadow_plan": shadow_plan.model_dump(exclude_none=True),
                     "resolved_context": decision.resolved_context,
                     "context_resolution": decision.context_resolution,
                     "active_case_id": decision.active_case_id,
@@ -476,6 +495,7 @@ class SingleAgentFlowMixin:
                         "token_count": token_count,
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
+                        "shadow_plan": decision.shadow_plan_summary,
                         "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
                         "workflow_policy_id": decision.workflow_policy.get("policy_id"),
                         "primary_task_type": decision.primary_task_type,
@@ -547,6 +567,7 @@ class SingleAgentFlowMixin:
                         "token_count": token_count + 1,
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
+                        "shadow_plan": decision.shadow_plan_summary,
                         "report_filename": report_artifact.report_filename,
                     },
                 )
@@ -904,6 +925,7 @@ class SingleAgentFlowMixin:
                     "token_count": token_count,
                     "decision": decision.model_dump(),
                     "task_family": decision.task_family,
+                    "shadow_plan": decision.shadow_plan_summary,
                     "report_filename": report_artifact.report_filename,
                     "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
                     "workflow_policy_id": decision.workflow_policy.get("policy_id"),
