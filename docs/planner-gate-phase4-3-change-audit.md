@@ -17,6 +17,8 @@ Phase 4.3 adds read-only planner-gated execution preview. Default behavior stays
 | `tests/test_planner_gate.py` | Adds gate unit coverage. |
 | `scripts/planner_gate_acceptance_test.py` | Adds Phase 4.3 acceptance scenarios. |
 | `tests/evals/evaluators.py` | Adds `expected.planner_gate` assertions and default legacy-source assertion. |
+| `scripts/planner_gate_observation_report.py` | Adds disabled/dry-run/active observation statistics. |
+| `docs/planner-gate-phase4-3-acceptance.md` | Adds Phase 4.3.5 acceptance summary. |
 
 ## Default Behavior
 
@@ -63,8 +65,39 @@ Planner gate falls back to legacy for:
 - missing or denied auth context
 - explicit device switch that still references an old artifact
 
+## Phase 4.3.5 Verification
+
+Active mode validation covers:
+
+- knowledge lookup active projection
+- runtime status active projection
+- report handoff active projection
+- diagnosis fallback
+- action/workorder fallback
+- ambiguous context fallback
+- stale workorder fallback
+- needs-review fallback
+- critical-diff fallback
+
+Observation reports are written to:
+
+- `trash/run/planner_gate_observation_report.json`
+- `trash/run/planner_gate_observation_report.md`
+
+Latest observation summary:
+
+- total mode-case observations: `126`
+- active planner-gated selections: `13`
+- legacy-policy selections: `113`
+- active enabled-node changes: `13`
+- active runtime-tool changes: `4`
+- active runtime-tool expansions: `0`
+- critical planning diffs: `0`
+
 ## Safety Boundary
 
 The gate does not let the planner call tools or choose arbitrary tools. It only applies a narrow projection after policy, authorization, shadow planning, and planning diff evaluation.
 
 Stages and tool invocation code do not read `planner_gate`.
+
+Current recommendation: do not enter Phase 4.4 implementation yet. Use Phase 4.4 only as a design review until diagnosis/action/workorder gates are proven separately.

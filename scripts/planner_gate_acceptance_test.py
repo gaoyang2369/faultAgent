@@ -119,6 +119,29 @@ def scenario_needs_review_blocked(client: TestClient) -> None:
     assert_true(summary["blockers"], "H must expose blockers")
 
 
+def scenario_ambiguous_context_blocked(client: TestClient) -> None:
+    set_gate(enabled=True, dry_run=False)
+    thread_id = "planner-gate.I"
+    save_thread_artifact(artifact(thread_id=thread_id, asset="J1"))
+    save_thread_artifact(artifact(thread_id=thread_id, asset="J2"))
+    login(client, role="engineer", asset_scope=["J1", "J2"])
+    snapshot = plan(client, thread_id=thread_id, message="它严重吗？")
+    summary = gate(snapshot)
+    assert_true(summary["selected_execution_source"] == "legacy_policy", "I ambiguous context must stay legacy")
+    assert_true("blocked_context_relation:ambiguous" in summary["blockers"], "I must block ambiguous context")
+
+
+def scenario_stale_workorder_blocked(client: TestClient) -> None:
+    set_gate(enabled=True, dry_run=False)
+    thread_id = "planner-gate.J"
+    save_thread_artifact(artifact(thread_id=thread_id, asset="J1", stale=True))
+    login(client, role="engineer", asset_scope=["J1"])
+    snapshot = plan(client, thread_id=thread_id, message="它要不要派单？")
+    summary = gate(snapshot)
+    assert_true(summary["selected_execution_source"] == "legacy_policy", "J stale workorder must stay legacy")
+    assert_true(summary["blockers"], "J must expose stale/action blockers")
+
+
 def scenario_critical_blocked(_: TestClient) -> None:
     set_gate(enabled=True, dry_run=False)
     decision = SingleAgentDecision(
@@ -153,7 +176,9 @@ SCENARIOS: list[tuple[str, Callable[[TestClient], None]]] = [
     ("F diagnosis_blocked", scenario_diagnosis_blocked),
     ("G action_blocked", scenario_action_blocked),
     ("H needs_review_blocked", scenario_needs_review_blocked),
-    ("I critical_blocked", scenario_critical_blocked),
+    ("I ambiguous_context_blocked", scenario_ambiguous_context_blocked),
+    ("J stale_workorder_blocked", scenario_stale_workorder_blocked),
+    ("K critical_blocked", scenario_critical_blocked),
 ]
 
 

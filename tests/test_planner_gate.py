@@ -94,6 +94,34 @@ def test_active_eligible_knowledge_uses_intersection_only() -> None:
     assert decision.enabled_nodes == {"knowledge": True}
 
 
+def test_active_projection_preserves_shared_safety_nodes() -> None:
+    decision = _decision()
+    decision.enabled_nodes = {"knowledge": True, "output_guardrail": True, "evidence_validation": True}
+    shadow = {
+        "nodes": [
+            {"node": "knowledge", "desired_state": "enabled"},
+            {"node": "output_guardrail", "desired_state": "enabled"},
+            {"node": "evidence_validation", "desired_state": "enabled"},
+        ],
+        "tool_plan": {"candidate_tools": ["query_knowledge_base"], "authorized_runtime_tools": ["query_knowledge_base"]},
+        "evidence_plan": {"refresh_required": False, "disclosure_required": []},
+        "output_plan": {"expected_output": "answer", "required_disclosures": []},
+    }
+
+    gate = build_planner_gate(
+        decision=decision,
+        shadow_plan=shadow,
+        planning_diff={"overall_status": "aligned", "severity": "none", "counters": {}},
+        config_overrides={"enabled": True, "dry_run": False},
+    )
+    apply_planner_gate_to_decision(decision, gate)
+
+    assert gate.selected_execution_source == "planner_gated"
+    assert set(gate.final_enabled_nodes) == {"knowledge", "output_guardrail", "evidence_validation"}
+    assert decision.enabled_nodes["output_guardrail"] is True
+    assert decision.enabled_nodes["evidence_validation"] is True
+
+
 def test_active_eligible_runtime_status_only_allows_sql() -> None:
     decision = _decision(task_family="runtime_status", primary_task_type="status_query", node="sql", tool="sql_db_query")
     shadow = _shadow(node="sql", tool="sql_db_query")
@@ -168,6 +196,60 @@ def test_ambiguous_context_is_blocked() -> None:
     assert "blocked_context_relation:ambiguous" in gate.blockers
 
 
+def test_action_followup_context_is_blocked() -> None:
+    decision = _decision(task_family="runtime_status", primary_task_type="status_query", node="sql", tool="sql_db_query", relation="action_followup")
+    shadow = _shadow(node="sql", tool="sql_db_query")
+
+    gate = build_planner_gate(
+        decision=decision,
+        shadow_plan=shadow,
+        planning_diff={"overall_status": "aligned", "severity": "none", "counters": {}},
+        config_overrides={"enabled": True, "dry_run": False},
+    )
+
+    assert gate.selected_execution_source == "legacy_policy"
+    assert "blocked_context_relation:action_followup" in gate.blockers
+
+
+def test_stale_workorder_context_is_blocked() -> None:
+    decision = _decision(
+        task_family="action_or_workorder",
+        primary_task_type="action_request",
+        node="workorder_decision",
+        tool="save_report",
+        goals=[{"goal_type": "decide_workorder", "risk_level": "requires_confirmation"}],
+    )
+    decision.resolved_context = {"relation_to_previous": "action_followup", "stale_evidence": True}
+    shadow = _shadow(node="workorder_decision", tool="save_report", output="workorder_decision")
+
+    gate = build_planner_gate(
+        decision=decision,
+        shadow_plan=shadow,
+        planning_diff={"overall_status": "aligned", "severity": "none", "counters": {}},
+        config_overrides={"enabled": True, "dry_run": False},
+    )
+
+    assert gate.selected_execution_source == "legacy_policy"
+    assert "stale_workorder_not_migrated" in gate.blockers
+    assert "action_or_workorder_not_migrated" in gate.blockers
+
+
+def test_explicit_device_switch_reusing_old_artifact_is_blocked() -> None:
+    decision = _decision(task_family="runtime_status", primary_task_type="status_query", node="sql", tool="sql_db_query", relation="correction")
+    decision.resolved_context = {"relation_to_previous": "correction", "referenced_artifact_id": "artifact.old"}
+    shadow = _shadow(node="sql", tool="sql_db_query")
+
+    gate = build_planner_gate(
+        decision=decision,
+        shadow_plan=shadow,
+        planning_diff={"overall_status": "aligned", "severity": "none", "counters": {}},
+        config_overrides={"enabled": True, "dry_run": False},
+    )
+
+    assert gate.selected_execution_source == "legacy_policy"
+    assert "explicit_device_switch_reuses_artifact" in gate.blockers
+
+
 def test_needs_review_or_critical_diff_is_blocked() -> None:
     decision = _decision()
     shadow = _shadow()
@@ -207,6 +289,15 @@ def test_shadow_authorized_extra_tool_is_blocked() -> None:
 
 
 def test_no_auth_or_unauthorized_inheritance_is_blocked() -> None:
+    missing = _decision()
+    missing.authorization = {}
+    missing_gate = build_planner_gate(
+        decision=missing,
+        shadow_plan=_shadow(),
+        planning_diff={"overall_status": "aligned", "severity": "none", "counters": {}},
+        config_overrides={"enabled": True, "dry_run": False},
+    )
+
     decision = _decision()
     decision.authorization = {"mode": "deny", "denied_reason_code": "asset_out_of_scope"}
 
@@ -217,5 +308,7 @@ def test_no_auth_or_unauthorized_inheritance_is_blocked() -> None:
         config_overrides={"enabled": True, "dry_run": False},
     )
 
+    assert missing_gate.selected_execution_source == "legacy_policy"
+    assert "unauthorized_or_missing_auth_context" in missing_gate.blockers
     assert gate.selected_execution_source == "legacy_policy"
     assert "unauthorized_or_missing_auth_context" in gate.blockers

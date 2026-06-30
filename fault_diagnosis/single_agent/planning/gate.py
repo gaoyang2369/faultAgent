@@ -188,7 +188,7 @@ def _goal_blockers(goal_set: dict[str, Any], goals_value: Any) -> list[str]:
 
 
 def _final_enabled_nodes(task_family: str, legacy_nodes: dict[str, bool], shadow_nodes: set[str]) -> set[str]:
-    allowed_nodes = _READ_ONLY_NODE_BY_FAMILY.get(task_family, set())
+    allowed_nodes = _READ_ONLY_NODE_BY_FAMILY.get(task_family, set()) | _SAFETY_NODES
     return {node for node in shadow_nodes if node in allowed_nodes and legacy_nodes.get(node)}
 
 
@@ -229,7 +229,9 @@ def _unauthorized_or_missing_auth(decision: Any) -> bool:
     context = getattr(decision, "resolved_context", {}) or {}
     reason = str(context.get("context_resolution_reason") or "")
     return bool(
-        auth.get("mode") in {"deny", "clarify", "degrade"}
+        not auth
+        or not auth.get("mode")
+        or auth.get("mode") in {"deny", "clarify", "degrade"}
         or auth.get("denied_reason_code")
         or "授权范围" in reason
         or "authorization" in reason.lower()
