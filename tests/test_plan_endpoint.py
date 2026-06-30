@@ -58,6 +58,11 @@ def test_plan_endpoint_uses_trusted_auth_not_user_identity(monkeypatch) -> None:
     assert "save_report" not in payload["planned_tools"]
     assert "relation_to_previous" in payload["resolved_context"]
     assert "inherited_slots" in payload["resolved_context"]
+    assert "primary_goal_id" in payload["goal_set"]
+    assert isinstance(payload["goals"], list)
+    assert isinstance(payload["intent_stack_projection"], list)
+    assert payload["task_family"] == "diagnosis"
+    assert payload["workflow_route"]["task_family"] == "diagnosis"
 
 
 def test_plan_endpoint_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> None:
@@ -130,5 +135,9 @@ def test_planner_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> None:
     assert snapshot.schema_version == "agent_plan_snapshot.v1"
     assert snapshot.resolved_context["relation_to_previous"] == "new_case"
     assert "missing_context" in snapshot.resolved_context
+    assert snapshot.goal_set["primary_goal_id"]
+    assert snapshot.intent_stack_projection
+    assert snapshot.task_family == "runtime_status"
+    assert snapshot.workflow_route["task_family"] == "runtime_status"
     assert calls == []
     assert list_thread_artifacts(thread_id) == []

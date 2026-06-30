@@ -84,7 +84,12 @@ class SingleAgentFlowMixin:
             event_count += 1
 
             if direct_answer:
-                decision = SingleAgentDecision(reason="轻量问候直接回答")
+                decision = SingleAgentDecision(
+                    task_family="meta",
+                    task_family_reason="direct_response fast path",
+                    task_family_source="direct_response",
+                    reason="轻量问候直接回答",
+                )
                 self.trace.add_event(
                     "decision",
                     stage="final_answer",
@@ -108,6 +113,7 @@ class SingleAgentFlowMixin:
                         "event_count": event_count,
                         "token_count": token_count,
                         "decision": decision.model_dump(),
+                        "task_family": decision.task_family,
                         "direct_answer": True,
                     },
                 )
@@ -180,7 +186,12 @@ class SingleAgentFlowMixin:
                 self._finalize_trace_run(
                     status="denied",
                     final_answer=final_answer,
-                    metadata={"event_count": event_count, "token_count": token_count, "decision": decision.model_dump()},
+                    metadata={
+                        "event_count": event_count,
+                        "token_count": token_count,
+                        "decision": decision.model_dump(),
+                        "task_family": decision.task_family,
+                    },
                 )
                 yield encode_sse_event(
                     "complete",
@@ -203,8 +214,15 @@ class SingleAgentFlowMixin:
                 "workflow_route",
                 {
                     "primary_task_type": decision.primary_task_type,
+                    "task_family": decision.task_family,
+                    "task_family_reason": decision.task_family_reason,
+                    "task_family_source": decision.task_family_source,
+                    "task_family_warnings": decision.task_family_warnings,
                     "candidate_task_types": decision.candidate_task_types,
                     "intent_stack": decision.intent_stack,
+                    "goals": decision.goals,
+                    "goal_set": decision.goal_set,
+                    "goal_summary": (decision.goal_set or {}).get("goal_summary", ""),
                     "resolved_context": decision.resolved_context,
                     "context_resolution": decision.context_resolution,
                     "active_case_id": decision.active_case_id,
@@ -457,6 +475,7 @@ class SingleAgentFlowMixin:
                         "event_count": event_count,
                         "token_count": token_count,
                         "decision": decision.model_dump(),
+                        "task_family": decision.task_family,
                         "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
                         "workflow_policy_id": decision.workflow_policy.get("policy_id"),
                         "primary_task_type": decision.primary_task_type,
@@ -527,6 +546,7 @@ class SingleAgentFlowMixin:
                         "event_count": event_count,
                         "token_count": token_count + 1,
                         "decision": decision.model_dump(),
+                        "task_family": decision.task_family,
                         "report_filename": report_artifact.report_filename,
                     },
                 )
@@ -883,6 +903,7 @@ class SingleAgentFlowMixin:
                     "event_count": event_count,
                     "token_count": token_count,
                     "decision": decision.model_dump(),
+                    "task_family": decision.task_family,
                     "report_filename": report_artifact.report_filename,
                     "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
                     "workflow_policy_id": decision.workflow_policy.get("policy_id"),

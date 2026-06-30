@@ -36,8 +36,10 @@ def test_alarm_triage_without_device_blocks_realtime_subgoals() -> None:
     )
 
     assert route.primary_task_type == TaskType.ALARM_TRIAGE
+    assert route.task_family == "diagnosis"
     assert payload["fault_code_hint"] == "E102"
     assert decision.primary_task_type == "alarm_triage"
+    assert decision.task_family == "diagnosis"
     assert decision.needs_knowledge is True
     assert decision.needs_sql is False
     assert decision.enabled_nodes["knowledge"] is True
@@ -79,6 +81,7 @@ def test_action_request_routes_to_guarded_workflow() -> None:
     )
 
     assert decision.primary_task_type == "action_request"
+    assert decision.task_family == "action_or_workorder"
     assert decision.action_type == "restart_device"
     assert decision.risk_level == "high_risk"
     assert decision.enabled_nodes["permission_check"] is True
@@ -101,6 +104,7 @@ def test_device_running_report_collects_fresh_sql_evidence() -> None:
     assert payload["equipment_hint"] == "J1"
     assert payload["needs_sql"] is True
     assert decision.primary_task_type == "report_generation"
+    assert decision.task_family == "reporting"
     assert decision.needs_sql is True
     assert decision.enabled_nodes["sql"] is True
     assert "sql_db_query" in decision.runtime_tools
@@ -117,6 +121,7 @@ def test_permission_scope_question_routes_without_runtime_tools() -> None:
     )
 
     assert decision.primary_task_type == "permission_scope_query"
+    assert decision.task_family == "meta"
     assert decision.needs_sql is False
     assert decision.needs_knowledge is False
     assert decision.enabled_nodes["sql"] is False
@@ -200,10 +205,14 @@ def test_composite_alarm_question_builds_intent_stack_and_safe_union() -> None:
     )
 
     assert decision.primary_task_type == "alarm_triage"
+    assert decision.task_family == "diagnosis"
     assert decision.candidate_task_types
     assert "explain_alarm_code" in decision.intent_stack
     assert "check_current_status" in decision.intent_stack
     assert "resolution_recommendation" in decision.intent_stack
+    assert "explain_fault_code" in [goal["goal_type"] for goal in decision.goals]
+    assert "recommend_resolution" in [goal["goal_type"] for goal in decision.goals]
+    assert "explain_alarm_code" in decision.goal_set["intent_stack_projection"]
     assert decision.flags["safe_union_workflow"] is True
     assert decision.needs_knowledge is True
 
@@ -222,11 +231,14 @@ def test_report_handoff_uses_previous_evidence_bundle_context() -> None:
     )
 
     assert decision.primary_task_type == "report_generation"
+    assert decision.task_family == "reporting"
     assert decision.report_from_previous_artifact is True
     assert decision.resolved_context.get("relation_to_previous") in {None, "report_handoff"}
     assert decision.context_resolution["last_evidence_bundle_id"] == "eb_trace"
     assert decision.active_case_id == "eb_trace"
     assert "report_generation" in decision.intent_stack
+    assert decision.goal_set["primary_goal_id"]
+    assert "generate_report" in [goal["goal_type"] for goal in decision.goals]
 
 
 def test_switch_to_j2_overrides_previous_active_asset() -> None:

@@ -254,6 +254,7 @@ def decide_capabilities(
     if needs_report:
         route.flags["need_report"] = True
     _apply_plan_mode_flags(route)
+    _sync_goal_projection_after_route_adjustments(route)
 
     plan = build_workflow_plan(route, needs_report=needs_report)
     needs_sql = plan.resolved_nodes.get("sql", False)
@@ -267,8 +268,14 @@ def decide_capabilities(
             needs_report=True,
             report_from_previous_artifact=True,
             primary_task_type=route.primary_task_type.value,
+            task_family=route.task_family,
+            task_family_reason=route.task_family_reason,
+            task_family_source=route.task_family_source,
+            task_family_warnings=route.task_family_warnings,
             candidate_task_types=[item.value for item in route.candidate_task_types],
             intent_stack=route.intent_stack,
+            goals=[item.model_dump(exclude_none=True) for item in route.goals],
+            goal_set=route.goal_set,
             resolved_context=route.resolved_context,
             context_resolution=route.context_resolution,
             active_case_id=route.resolved_context.get("active_case_id")
@@ -317,8 +324,14 @@ def decide_capabilities(
         needs_report=needs_report,
         report_from_previous_artifact=False,
         primary_task_type=route.primary_task_type.value,
+        task_family=route.task_family,
+        task_family_reason=route.task_family_reason,
+        task_family_source=route.task_family_source,
+        task_family_warnings=route.task_family_warnings,
         candidate_task_types=[item.value for item in route.candidate_task_types],
         intent_stack=route.intent_stack,
+        goals=[item.model_dump(exclude_none=True) for item in route.goals],
+        goal_set=route.goal_set,
         resolved_context=route.resolved_context,
         context_resolution=route.context_resolution,
         active_case_id=route.resolved_context.get("active_case_id")
@@ -396,6 +409,27 @@ def _apply_plan_mode_flags(route: Any) -> None:
         )
     elif route.plan_mode == "new_diagnosis_then_workorder":
         route.flags["need_workorder_decision"] = True
+
+
+def _sync_goal_projection_after_route_adjustments(route: Any) -> None:
+    """Keep debug goal projection aligned after legacy route adjustments."""
+
+    goal_set = dict(getattr(route, "goal_set", {}) or {})
+    if not goal_set:
+        return
+    projection = list(goal_set.get("intent_stack_projection") or [])
+    changed = False
+    for intent in route.intent_stack:
+        if intent not in projection:
+            projection.append(intent)
+            changed = True
+    if changed:
+        goal_set["intent_stack_projection"] = projection
+        summary = str(goal_set.get("goal_summary") or "").strip()
+        suffix = "projection synchronized with legacy route adjustments"
+        goal_set["goal_summary"] = f"{summary}；{suffix}" if summary else suffix
+        route.goal_set = goal_set
+        route.goal_summary = goal_set["goal_summary"]
 
 
 def _backfill_resolved_context_from_legacy(route: Any) -> None:

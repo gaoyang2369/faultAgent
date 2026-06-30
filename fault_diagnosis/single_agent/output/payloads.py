@@ -18,6 +18,7 @@ from ...context import summarize_resolved_context
 from ...runtime.diagnosis_contract_adapter import build_diagnosis_contract_payload
 from ..contracts import AgentTrace, SingleAgentDecision
 from ..reporting import extract_report_url
+from ..workflow import summarize_goal_set
 
 RUNTIME_NAME = "restricted_single_agent"
 
@@ -35,17 +36,20 @@ def build_direct_complete_payload(
     """Build the complete payload for lightweight direct replies."""
 
     resolved_context = summarize_resolved_context(decision.resolved_context)
+    goal_set = summarize_goal_set(decision.goal_set)
     return {
         "type": "chat_complete",
         "thread_id": thread_id,
         "trace_id": trace_id,
         "request_id": request_id,
         "runtime": RUNTIME_NAME,
+        "task_family": decision.task_family,
         "final_content": final_answer,
         "report_filename": None,
         "report_url": None,
         "decision": decision.model_dump(),
         "resolved_context": resolved_context,
+        "goal_set": goal_set,
         "authorization": decision.authorization,
         "ui_payload": build_ui_payload(decision=decision),
         "trace": trace.model_dump(exclude_none=True),
@@ -70,24 +74,32 @@ def build_report_handoff_complete_payload(
     """Build the complete payload for report generation from an existing artifact."""
 
     resolved_context = summarize_resolved_context(decision.resolved_context)
+    goal_set = summarize_goal_set(decision.goal_set)
     return {
         "type": "chat_complete",
         "thread_id": thread_id,
         "trace_id": trace_id,
         "request_id": request_id,
         "runtime": RUNTIME_NAME,
+        "task_family": decision.task_family,
         "final_content": final_answer,
         "report_filename": report_artifact.report_filename,
         "report_url": extract_report_url(report_artifact.save_result),
         "decision": decision.model_dump(),
         "resolved_context": resolved_context,
+        "goal_set": goal_set,
         "authorization": decision.authorization,
         "ui_payload": build_ui_payload(decision=decision, report_artifact=report_artifact),
         "todos": todos,
         "workflow_route": {
             "primary_task_type": decision.primary_task_type,
+            "task_family": decision.task_family,
+            "task_family_reason": decision.task_family_reason,
+            "task_family_source": decision.task_family_source,
+            "task_family_warnings": decision.task_family_warnings,
             "candidate_task_types": decision.candidate_task_types,
             "intent_stack": decision.intent_stack,
+            "goal_set": goal_set,
             "resolved_context": resolved_context,
             "context_resolution": decision.context_resolution,
             "active_case_id": decision.active_case_id,
@@ -138,17 +150,20 @@ def build_diagnosis_complete_payload(
     """Build the full complete payload for diagnosis workflows."""
 
     resolved_context = summarize_resolved_context(decision.resolved_context)
+    goal_set = summarize_goal_set(decision.goal_set)
     complete_payload = {
         "type": "chat_complete",
         "thread_id": thread_id,
         "trace_id": trace_id,
         "request_id": request_id,
         "runtime": RUNTIME_NAME,
+        "task_family": decision.task_family,
         "final_content": final_answer,
         "report_filename": report_artifact.report_filename,
         "report_url": extract_report_url(report_artifact.save_result),
         "decision": decision.model_dump(),
         "resolved_context": resolved_context,
+        "goal_set": goal_set,
         "authorization": decision.authorization,
         "sql_artifact": sql_artifact.model_dump(exclude_none=True),
         "knowledge_artifact": knowledge_artifact.model_dump(exclude_none=True),
@@ -174,8 +189,13 @@ def build_diagnosis_complete_payload(
         ),
         "workflow_route": {
             "primary_task_type": decision.primary_task_type,
+            "task_family": decision.task_family,
+            "task_family_reason": decision.task_family_reason,
+            "task_family_source": decision.task_family_source,
+            "task_family_warnings": decision.task_family_warnings,
             "candidate_task_types": decision.candidate_task_types,
             "intent_stack": decision.intent_stack,
+            "goal_set": goal_set,
             "resolved_context": resolved_context,
             "context_resolution": decision.context_resolution,
             "active_case_id": decision.active_case_id,

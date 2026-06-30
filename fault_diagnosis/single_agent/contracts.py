@@ -31,8 +31,14 @@ class SingleAgentDecision(BaseModel):
     needs_report: bool = False
     report_from_previous_artifact: bool = False
     primary_task_type: str = "fault_diagnosis"
+    task_family: str = "diagnosis"
+    task_family_reason: str = ""
+    task_family_source: str = "task_type_mapping"
+    task_family_warnings: list[str] = Field(default_factory=list)
     candidate_task_types: list[str] = Field(default_factory=list)
     intent_stack: list[str] = Field(default_factory=list)
+    goals: list[dict[str, Any]] = Field(default_factory=list)
+    goal_set: dict[str, Any] = Field(default_factory=dict)
     resolved_context: dict[str, Any] = Field(default_factory=dict)
     context_resolution: dict[str, Any] = Field(default_factory=dict)
     active_case_id: str | None = None

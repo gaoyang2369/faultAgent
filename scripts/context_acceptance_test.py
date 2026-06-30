@@ -137,6 +137,9 @@ def scenario_report_then_workorder(client: TestClient) -> None:
     assert_true(context["inherited_slots"].get("device") == "J1", "A must inherit J1")
     assert_true(context["stale_evidence"] is True, "A must mark stale evidence")
     assert_true(snapshot["evidence_gaps"]["should_refresh_runtime_data"] is True, "A stale workorder must refresh runtime data")
+    assert_true(snapshot["task_family"] in {"diagnosis", "action_or_workorder"}, "A must expose stable task_family")
+    assert_true("decide_workorder" in snapshot["goal_set"]["goal_types"], "A must include workorder goal")
+    assert_true("refresh_current_status" in snapshot["goal_set"]["goal_types"], "A stale workorder must include refresh goal")
     assert_true("J2" not in json.dumps(context, ensure_ascii=False), "A must not bind unrelated J2")
 
 
@@ -149,7 +152,9 @@ def scenario_status_then_report(client: TestClient) -> None:
     assert_true(context["relation_to_previous"] == "report_handoff", "B relation must be report_handoff")
     assert_true(bool(context["referenced_artifact_id"]), "B must reference previous artifact")
     assert_true(snapshot["evidence_gaps"]["evidence_mode"] in {"reuse_previous_artifact", "reuse_and_refresh_status"}, "B must reuse evidence")
+    assert_true(snapshot["task_family"] == "reporting", "B must expose reporting task_family")
     assert_true(snapshot["enabled_nodes"].get("report") is True, "B must enable report node")
+    assert_true("generate_report" in snapshot["goal_set"]["goal_types"], "B must include report goal")
 
 
 def scenario_explicit_device_switch(client: TestClient) -> None:
@@ -161,6 +166,8 @@ def scenario_explicit_device_switch(client: TestClient) -> None:
     assert_true(context["relation_to_previous"] in {"new_case", "correction"}, "C relation must be new_case/correction")
     assert_true(not context.get("referenced_artifact_id"), "C must not inherit J1 artifact")
     assert_true(context["inherited_slots"].get("device") != "J1", "C must not inherit J1")
+    assert_true(snapshot["task_family"] == "runtime_status", "C must expose runtime_status task_family")
+    assert_true("check_runtime_status" in snapshot["goal_set"]["goal_types"], "C must include current status goal")
 
 
 def scenario_ambiguous_reference(client: TestClient) -> None:
@@ -173,6 +180,8 @@ def scenario_ambiguous_reference(client: TestClient) -> None:
     assert_true(context["relation_to_previous"] == "ambiguous", "D relation must be ambiguous")
     assert_true(bool(context["missing_context"]), "D must ask user to clarify object")
     assert_true(not context.get("referenced_artifact_id"), "D must not pick latest artifact")
+    assert_true("clarify_missing_context" in snapshot["goal_set"]["goal_types"], "D must include clarification goal")
+    assert_true(bool(snapshot["goal_set"]["blocked_goals"]), "D must have blocked business goal")
 
 
 def scenario_unauthorized_inheritance(client: TestClient) -> None:
@@ -187,6 +196,7 @@ def scenario_unauthorized_inheritance(client: TestClient) -> None:
     assert_true(context.get("pending_action_count") == 0, "E must not inherit pending actions")
     assert_true(bool(context.get("missing_context")), "E must explain missing context")
     assert_true("授权范围" in context.get("context_resolution_reason", ""), "E reason must mention authorization")
+    assert_true(snapshot["goal_set"]["primary_goal_id"], "E must keep non-empty goal set")
     assert_true("J1" not in text and "/reports/" not in text and "A07089" not in text, "E must not leak previous details")
 
 
@@ -210,6 +220,7 @@ def scenario_bad_snapshot_fallback(client: TestClient) -> None:
     assert_true(context["relation_to_previous"] == "report_handoff", "F relation must be report_handoff")
     assert_true(context["inherited_slots"].get("device") == "J1", "F must fall back to artifact payload")
     assert_true("schema_version" in context["context_resolution_reason"], "F must expose snapshot schema fallback reason")
+    assert_true("generate_report" in snapshot["goal_set"]["goal_types"], "F must include report goal")
 
 
 SCENARIOS: list[tuple[str, Callable[[TestClient], None]]] = [

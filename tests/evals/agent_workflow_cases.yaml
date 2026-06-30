@@ -15,6 +15,7 @@ cases:
   turns:
   - J1 当前运行状态怎么样
   expected:
+    task_family: runtime_status
     context:
       source: current_message
     intent:
@@ -55,6 +56,7 @@ cases:
   turns:
   - A07089 是什么意思
   expected:
+    task_family: knowledge_lookup
     context:
       source: current_message
     intent:
@@ -94,6 +96,7 @@ cases:
   turns:
   - J1 的 A07089 现在还在报警吗，怎么处理
   expected:
+    task_family: diagnosis
     context:
       source: current_message
     intent:
@@ -106,6 +109,14 @@ cases:
       - explain_alarm_code
       - check_current_status
       - resolution_recommendation
+      intent_stack_projection_contains:
+      - explain_alarm_code
+      - check_current_status
+      - resolution_recommendation
+      goal_types_contains:
+      - explain_fault_code
+      - check_runtime_status
+      - recommend_resolution
     workflow:
       policy_id: alarm_triage_v1
       enabled_nodes:
@@ -138,6 +149,7 @@ cases:
   turns:
   - 诊断 J1 A07089 的原因
   expected:
+    task_family: diagnosis
     context:
       source: current_message
     intent:
@@ -181,6 +193,7 @@ cases:
   turns:
   - 评估 J1 最近健康风险
   expected:
+    task_family: diagnosis
     context:
       source: current_message
     intent:
@@ -216,6 +229,7 @@ cases:
   turns:
   - 生成 J1 的运行报告
   expected:
+    task_family: reporting
     context:
       source: current_message
     intent:
@@ -255,6 +269,7 @@ cases:
   turns:
   - 帮我重启 J1
   expected:
+    task_family: action_or_workorder
     context:
       source: current_message
     intent:
@@ -307,6 +322,7 @@ cases:
   turns:
   - 对 J1 的异常做根因分析
   expected:
+    task_family: diagnosis
     context:
       source: current_message
     intent:
@@ -361,6 +377,15 @@ cases:
       - explain_alarm_code
       - check_current_status
       - resolution_recommendation
+      intent_stack_projection_contains:
+      - explain_alarm_code
+      - check_current_status
+      - resolution_recommendation
+      goal_types_contains:
+      - explain_fault_code
+      - check_runtime_status
+      - diagnose_fault
+      - recommend_resolution
     workflow:
       policy_id: alarm_triage_v1
       enabled_nodes:
@@ -404,6 +429,12 @@ cases:
       intent_stack_contains:
       - report_generation
       - explain_alarm_code
+      intent_stack_projection_contains:
+      - report_generation
+      - explain_alarm_code
+      goal_types_contains:
+      - generate_report
+      - explain_fault_code
     workflow:
       policy_id: report_generation_v1
       enabled_nodes:
@@ -585,6 +616,10 @@ cases:
       - J1
       intent_stack_contains:
       - report_generation
+      intent_stack_projection_contains:
+      - report_generation
+      goal_types_contains:
+      - generate_report
     workflow:
       policy_id: report_generation_v1
       context_relation: continue_current_frame
@@ -787,6 +822,10 @@ cases:
     intent:
       intent_stack_contains:
       - workorder_decision
+      intent_stack_projection_contains:
+      - workorder_decision
+      goal_types_contains:
+      - decide_workorder
     workflow:
       plan_mode: workorder_decision_from_artifact
       enabled_nodes:
@@ -903,6 +942,12 @@ cases:
     intent:
       intent_stack_contains:
       - workorder_decision
+      intent_stack_projection_contains:
+      - workorder_decision
+      - check_current_status
+      goal_types_contains:
+      - refresh_current_status
+      - decide_workorder
     workflow:
       plan_mode: workorder_decision_from_artifact
       evidence_gaps:

@@ -5,7 +5,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .contracts import TaskRoute, TaskType, WorkflowObjects, WorkflowSubgoal, WorkflowTimeWindow
+from .contracts import GoalSet, TaskRoute, TaskType, WorkflowObjects, WorkflowSubgoal, WorkflowTimeWindow
+from .goals import build_goal_set
+from .task_family import resolve_task_family
 
 _ALARM_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{3,5})(?![A-Z0-9])", re.IGNORECASE)
 _DEVICE_RE = re.compile(
@@ -99,19 +101,58 @@ def route_task(
     objects = _extract_objects(payload, normalized)
     task_type, confidence = _classify_task(normalized, objects, effective_report_from_previous_artifact)
     requested_output = _requested_output(task_type, normalized)
-    intent_stack = _intent_stack(task_type, normalized, objects, requested_output, effective_report_from_previous_artifact)
-    candidate_task_types = _candidate_task_types(task_type, intent_stack)
     time_window = _time_window(task_type, payload, normalized)
-    flags = _flags_for_task(task_type, normalized, objects, requested_output, effective_report_from_previous_artifact)
-    _apply_intent_flags(flags, intent_stack, objects)
     missing_slots = _missing_slots(task_type, objects, time_window, normalized)
+    risk_level = _risk_level(task_type, normalized)
+    legacy_intent_candidates = _intent_stack(
+        task_type,
+        normalized,
+        objects,
+        requested_output,
+        effective_report_from_previous_artifact,
+    )
+    goal_set = build_goal_set(
+        message=normalized,
+        payload=payload,
+        resolved_context=resolved_context_payload,
+        route_hint={
+            "task_type": task_type,
+            "requested_output": requested_output,
+            "objects": objects,
+            "missing_slots": missing_slots,
+            "risk_level": risk_level,
+            "legacy_intent_candidates": legacy_intent_candidates,
+        },
+    )
+    intent_stack = _dedupe([*goal_set.intent_stack_projection, *legacy_intent_candidates])
+    candidate_task_types = _candidate_task_types(task_type, intent_stack)
+    flags = _flags_for_task(task_type, normalized, objects, requested_output, effective_report_from_previous_artifact)
+    projection_mismatch = set(goal_set.intent_stack_projection) != set(legacy_intent_candidates)
+    if projection_mismatch:
+        flags["goal_projection_mismatch"] = True
+        goal_set = _with_projection_mismatch_summary(goal_set, legacy_intent_candidates)
+    _apply_intent_flags(flags, intent_stack, objects)
     subgoals = _subgoals(task_type, objects, flags, missing_slots)
     action_type = _action_type(normalized) if task_type == TaskType.ACTION_REQUEST else None
+    task_family = resolve_task_family(
+        task_type=task_type,
+        requested_output=requested_output,
+        goals=list(goal_set.goals),
+        resolved_context=resolved_context_payload,
+        intent_stack=intent_stack,
+    )
 
     return TaskRoute(
         primary_task_type=task_type,
+        task_family=task_family.task_family,
+        task_family_reason=task_family.reason,
+        task_family_source=task_family.source,
+        task_family_warnings=task_family.warnings,
         candidate_task_types=candidate_task_types,
         intent_stack=intent_stack,
+        goals=list(goal_set.goals),
+        goal_set=goal_set.model_dump(exclude_none=True),
+        goal_summary=goal_set.goal_summary,
         resolved_context=resolved_context_payload,
         context_resolution=dict(payload.get("context_resolution") or {}),
         relation_to_previous=str(resolved_context_payload.get("relation_to_previous") or "new_task"),
@@ -127,7 +168,7 @@ def route_task(
         time_window=time_window,
         subgoals=subgoals,
         missing_slots=missing_slots,
-        risk_level=_risk_level(task_type, normalized),
+        risk_level=risk_level,
         requested_output=requested_output,
         flags=flags,
         action_type=action_type,
@@ -140,6 +181,16 @@ def _resolved_context_payload(resolved_context: Any | None) -> dict[str, Any]:
     if hasattr(resolved_context, "model_dump"):
         return resolved_context.model_dump(exclude_none=True)
     return dict(resolved_context or {}) if isinstance(resolved_context, dict) else {}
+
+
+def _with_projection_mismatch_summary(goal_set: GoalSet, legacy_intents: list[str]) -> GoalSet:
+    data = goal_set.model_dump(exclude_none=True)
+    projected = ", ".join(goal_set.intent_stack_projection) or "none"
+    legacy = ", ".join(legacy_intents) or "none"
+    suffix = f"projection differs from legacy intents: projected=[{projected}], legacy=[{legacy}]"
+    summary = str(data.get("goal_summary") or "").strip()
+    data["goal_summary"] = f"{summary}；{suffix}" if summary else suffix
+    return GoalSet.model_validate(data)
 
 
 def _classify_task(

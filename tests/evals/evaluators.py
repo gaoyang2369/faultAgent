@@ -59,6 +59,7 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
 
     failures: list[str] = []
     expected = case.get("expected") or {}
+    route = expected.get("route") or {}
     context = expected.get("context") or {}
     intent = expected.get("intent") or {}
     workflow = expected.get("workflow") or {}
@@ -67,7 +68,11 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
     positive = bool(
         context
         or intent.get("domain_task")
+        or expected.get("task_family")
+        or route.get("task_family")
         or intent.get("intent_stack_contains")
+        or intent.get("intent_stack_projection_contains")
+        or intent.get("goal_types_contains")
         or intent.get("device_ids")
         or intent.get("alarm_codes")
         or workflow.get("policy_id")
@@ -103,14 +108,19 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
 def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalResult:
     failures: list[str] = []
     expected = case.get("expected") or {}
+    route = expected.get("route") or {}
     intent = expected.get("intent") or {}
     context = expected.get("context") or {}
     workflow = expected.get("workflow") or {}
     tools = expected.get("tools") or {}
 
     expect_equal(failures, snapshot, "intent_axes.domain_task", intent.get("domain_task"))
+    expect_equal(failures, snapshot, "task_family", expected.get("task_family"))
+    expect_equal(failures, snapshot, "workflow_route.task_family", route.get("task_family"))
     expect_equal(failures, snapshot, "intent_axes.continuation_type", intent.get("continuation_type"))
     expect_contains_all(failures, snapshot, "intent_axes.intent_stack", intent.get("intent_stack_contains"))
+    expect_contains_all(failures, snapshot, "intent_stack_projection", intent.get("intent_stack_projection_contains"))
+    expect_contains_all(failures, snapshot, "goal_set.goal_types", intent.get("goal_types_contains"))
     expect_contains_all(failures, snapshot, "intent_axes.object_binding.device_ids", intent.get("device_ids"))
     expect_contains_all(failures, snapshot, "intent_axes.object_binding.alarm_codes", intent.get("alarm_codes"))
 

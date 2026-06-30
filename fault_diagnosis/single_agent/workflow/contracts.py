@@ -22,9 +22,27 @@ class TaskType(str, Enum):
     PERMISSION_SCOPE_QUERY = "permission_scope_query"
 
 
+TaskFamily = Literal[
+    "knowledge_lookup",
+    "runtime_status",
+    "diagnosis",
+    "reporting",
+    "action_or_workorder",
+    "meta",
+]
+TaskFamilySource = Literal[
+    "task_type_mapping",
+    "goal_hint_fallback",
+    "direct_response",
+    "unknown_fallback",
+]
 SubgoalStatus = Literal["ready", "blocked", "skipped"]
 RiskLevel = Literal["read_only", "requires_confirmation", "write_action", "high_risk"]
+GoalRiskLevel = Literal["read_only", "requires_confirmation", "high_risk"]
+GoalExpectedOutput = Literal["answer", "report", "workorder_decision", "clarification"]
+GoalSource = Literal["explicit_user_request", "inferred_from_context", "compatibility_projection"]
 NodeSetting = bool | Literal["conditional"]
+GOAL_SET_SCHEMA_VERSION = "goal_set.v1"
 
 
 class WorkflowObjects(BaseModel):
@@ -57,12 +75,58 @@ class WorkflowSubgoal(BaseModel):
     missing_slots: list[str] = Field(default_factory=list)
 
 
+class IntentGoal(BaseModel):
+    """One structured user goal independent of workflow tool selection."""
+
+    goal_id: str
+    goal_type: str
+    description: str
+    status: SubgoalStatus = "ready"
+    depends_on: list[str] = Field(default_factory=list)
+    required_slots: list[str] = Field(default_factory=list)
+    missing_slots: list[str] = Field(default_factory=list)
+    required_evidence: list[str] = Field(default_factory=list)
+    expected_output: GoalExpectedOutput = "answer"
+    risk_level: GoalRiskLevel = "read_only"
+    source: GoalSource = "explicit_user_request"
+    context_refs: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+
+class GoalSet(BaseModel):
+    """Structured goal set projected to the legacy intent stack for compatibility."""
+
+    schema_version: str = GOAL_SET_SCHEMA_VERSION
+    primary_goal_id: str | None = None
+    goals: list[IntentGoal] = Field(default_factory=list)
+    execution_order: list[str] = Field(default_factory=list)
+    blocked_goals: list[str] = Field(default_factory=list)
+    intent_stack_projection: list[str] = Field(default_factory=list)
+    goal_summary: str = ""
+
+
+class TaskFamilyResolution(BaseModel):
+    """Coarse task-family mapping used only for observation and migration."""
+
+    task_family: TaskFamily = "diagnosis"
+    reason: str = ""
+    source: TaskFamilySource = "task_type_mapping"
+    warnings: list[str] = Field(default_factory=list)
+
+
 class TaskRoute(BaseModel):
     """Structured output of the intent router."""
 
     primary_task_type: TaskType = TaskType.FAULT_DIAGNOSIS
+    task_family: TaskFamily = "diagnosis"
+    task_family_reason: str = ""
+    task_family_source: TaskFamilySource = "task_type_mapping"
+    task_family_warnings: list[str] = Field(default_factory=list)
     candidate_task_types: list[TaskType] = Field(default_factory=list)
     intent_stack: list[str] = Field(default_factory=list)
+    goals: list[IntentGoal] = Field(default_factory=list)
+    goal_set: dict[str, Any] = Field(default_factory=dict)
+    goal_summary: str = ""
     resolved_context: dict[str, Any] = Field(default_factory=dict)
     context_resolution: dict[str, Any] = Field(default_factory=dict)
     relation_to_previous: str = "new_task"

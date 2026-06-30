@@ -12,6 +12,7 @@ from ..security.contracts import AuthContext
 from ..security.policy_engine import apply_authorization_to_decision, authorize_workflow
 from .context import ContextManager
 from .intent import fallback_understanding_payload, decide_capabilities
+from .workflow import summarize_goal_set
 
 
 PLAN_SNAPSHOT_SCHEMA_VERSION = "agent_plan_snapshot.v1"
@@ -22,6 +23,12 @@ class PlanSnapshot(BaseModel):
 
     schema_version: str = PLAN_SNAPSHOT_SCHEMA_VERSION
     resolved_context: dict[str, Any] = Field(default_factory=dict)
+    goal_set: dict[str, Any] = Field(default_factory=dict)
+    task_family: str = "diagnosis"
+    task_family_reason: str = ""
+    task_family_source: str = "task_type_mapping"
+    goals: list[dict[str, Any]] = Field(default_factory=list)
+    intent_stack_projection: list[str] = Field(default_factory=list)
     intent_axes: dict[str, Any] = Field(default_factory=dict)
     workflow_route: dict[str, Any] = Field(default_factory=dict)
     workflow_policy: dict[str, Any] = Field(default_factory=dict)
@@ -92,13 +99,22 @@ def build_plan_snapshot(
 
     resolved_context_summary = summarize_resolved_context(decision.resolved_context)
     resolved_context_summary["thread_id"] = thread_id
+    goal_set_summary = summarize_goal_set(decision.goal_set)
 
     return PlanSnapshot(
         resolved_context=resolved_context_summary,
+        goal_set=goal_set_summary,
+        task_family=decision.task_family,
+        task_family_reason=decision.task_family_reason,
+        task_family_source=decision.task_family_source,
+        goals=_compact_goals(decision.goals),
+        intent_stack_projection=list(goal_set_summary.get("intent_stack_projection") or []),
         intent_axes={
             "domain_task": decision.primary_task_type,
+            "task_family": decision.task_family,
             "candidate_task_types": decision.candidate_task_types,
             "intent_stack": decision.intent_stack,
+            "intent_stack_projection": list(goal_set_summary.get("intent_stack_projection") or []),
             "continuation_type": decision.relation_to_previous,
             "object_binding": decision.objects,
             "time_window": decision.time_window,
@@ -108,8 +124,12 @@ def build_plan_snapshot(
         },
         workflow_route={
             "primary_task_type": decision.primary_task_type,
+            "task_family": decision.task_family,
+            "task_family_reason": decision.task_family_reason,
+            "task_family_source": decision.task_family_source,
             "candidate_task_types": decision.candidate_task_types,
             "intent_stack": decision.intent_stack,
+            "goal_set": goal_set_summary,
             "relation_to_previous": decision.relation_to_previous,
             "plan_mode": decision.plan_mode,
             "evidence_mode": decision.evidence_mode,
@@ -153,6 +173,29 @@ def _referenced_artifact_payload(decision: Any) -> dict[str, Any]:
         "relation": decision.relation_to_previous,
         "evidence_mode": decision.evidence_mode,
     }
+
+
+def _compact_goals(goals: Any) -> list[dict[str, Any]]:
+    if not isinstance(goals, list):
+        return []
+    compact: list[dict[str, Any]] = []
+    for item in goals:
+        data = item.model_dump(exclude_none=True) if hasattr(item, "model_dump") else dict(item or {}) if isinstance(item, dict) else {}
+        if not data:
+            continue
+        compact.append(
+            {
+                "goal_id": data.get("goal_id"),
+                "goal_type": data.get("goal_type"),
+                "status": data.get("status"),
+                "depends_on": list(data.get("depends_on") or []),
+                "missing_slots": list(data.get("missing_slots") or []),
+                "context_refs": list(data.get("context_refs") or []),
+                "expected_output": data.get("expected_output"),
+                "risk_level": data.get("risk_level"),
+            }
+        )
+    return compact
 
 
 def _skip_reasons(decision: Any, authorization: dict[str, Any]) -> dict[str, str]:
