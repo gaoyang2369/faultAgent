@@ -40,6 +40,7 @@ def build_direct_complete_payload(
     shadow_plan = dict(decision.shadow_plan_summary or {})
     planning_diff = dict(decision.planning_diff_summary or {})
     planner_gate = dict(decision.planner_gate_summary or {})
+    diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
     return {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -56,6 +57,7 @@ def build_direct_complete_payload(
         "shadow_plan": shadow_plan,
         "planning_diff": planning_diff,
         "planner_gate": planner_gate,
+        "diagnosis_readiness": diagnosis_readiness,
         "authorization": decision.authorization,
         "ui_payload": build_ui_payload(decision=decision),
         "trace": trace.model_dump(exclude_none=True),
@@ -84,6 +86,7 @@ def build_report_handoff_complete_payload(
     shadow_plan = dict(decision.shadow_plan_summary or {})
     planning_diff = dict(decision.planning_diff_summary or {})
     planner_gate = dict(decision.planner_gate_summary or {})
+    diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
     return {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -100,6 +103,7 @@ def build_report_handoff_complete_payload(
         "shadow_plan": shadow_plan,
         "planning_diff": planning_diff,
         "planner_gate": planner_gate,
+        "diagnosis_readiness": diagnosis_readiness,
         "authorization": decision.authorization,
         "ui_payload": build_ui_payload(decision=decision, report_artifact=report_artifact),
         "todos": todos,
@@ -115,6 +119,7 @@ def build_report_handoff_complete_payload(
             "shadow_plan": shadow_plan,
             "planning_diff": planning_diff,
             "planner_gate": planner_gate,
+            "diagnosis_readiness": diagnosis_readiness,
             "resolved_context": resolved_context,
             "context_resolution": decision.context_resolution,
             "active_case_id": decision.active_case_id,
@@ -169,6 +174,7 @@ def build_diagnosis_complete_payload(
     shadow_plan = dict(decision.shadow_plan_summary or {})
     planning_diff = dict(decision.planning_diff_summary or {})
     planner_gate = dict(decision.planner_gate_summary or {})
+    diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
     complete_payload = {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -185,6 +191,7 @@ def build_diagnosis_complete_payload(
         "shadow_plan": shadow_plan,
         "planning_diff": planning_diff,
         "planner_gate": planner_gate,
+        "diagnosis_readiness": diagnosis_readiness,
         "authorization": decision.authorization,
         "sql_artifact": sql_artifact.model_dump(exclude_none=True),
         "knowledge_artifact": knowledge_artifact.model_dump(exclude_none=True),
@@ -220,6 +227,7 @@ def build_diagnosis_complete_payload(
             "shadow_plan": shadow_plan,
             "planning_diff": planning_diff,
             "planner_gate": planner_gate,
+            "diagnosis_readiness": diagnosis_readiness,
             "resolved_context": resolved_context,
             "context_resolution": decision.context_resolution,
             "active_case_id": decision.active_case_id,

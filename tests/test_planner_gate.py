@@ -166,8 +166,11 @@ def test_diagnosis_is_blocked() -> None:
     )
 
     assert gate.selected_execution_source == "legacy_policy"
-    assert "unsupported_task_family" in gate.blockers
-    assert "diagnosis_not_migrated" in gate.blockers
+    assert gate.mode == "dry_run"
+    assert "unsupported_task_family" not in gate.blockers
+    assert "diagnosis_dry_run_only" in gate.blockers
+    assert "diagnosis_active_not_enabled" in gate.blockers
+    assert gate.safety_summary["diagnosis_readiness"]["ready_for_active"] is False
 
 
 def test_action_workorder_is_blocked() -> None:

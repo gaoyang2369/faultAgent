@@ -16,6 +16,7 @@ class PlannerGateDecision(BaseModel):
     schema_version: str = PLANNER_GATE_SCHEMA_VERSION
     mode: PlannerGateMode = "disabled"
     eligible: bool = False
+    dry_run_eligible: bool = False
     selected_execution_source: PlannerGateExecutionSource = "legacy_policy"
     allowed_task_family: bool = False
     task_family: str = ""

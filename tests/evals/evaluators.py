@@ -65,6 +65,7 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
     shadow_plan = expected.get("shadow_plan") or {}
     planning_diff = expected.get("planning_diff") or {}
     planner_gate = expected.get("planner_gate") or {}
+    diagnosis_readiness = expected.get("diagnosis_readiness") or {}
     context = expected.get("context") or {}
     intent = expected.get("intent") or {}
     workflow = expected.get("workflow") or {}
@@ -81,6 +82,9 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
         or planning_diff.get("max_severity")
         or planner_gate.get("selected_execution_source")
         or planner_gate.get("mode_in")
+        or diagnosis_readiness.get("diagnosis_mode")
+        or diagnosis_readiness.get("recommended_next_phase")
+        or diagnosis_readiness.get("recommended_next_phase_in")
         or intent.get("intent_stack_contains")
         or intent.get("intent_stack_projection_contains")
         or intent.get("goal_types_contains")
@@ -123,6 +127,7 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
     shadow_plan = expected.get("shadow_plan") or {}
     planning_diff = expected.get("planning_diff") or {}
     planner_gate = expected.get("planner_gate") or {}
+    diagnosis_readiness = expected.get("diagnosis_readiness") or {}
     intent = expected.get("intent") or {}
     context = expected.get("context") or {}
     workflow = expected.get("workflow") or {}
@@ -138,6 +143,7 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
     expect_contains_all(failures, snapshot, "shadow_plan.authorized_runtime_tools", shadow_plan.get("authorized_runtime_tools"))
     evaluate_planning_diff_expectations(failures, snapshot, planning_diff)
     evaluate_planner_gate_expectations(failures, snapshot, planner_gate)
+    evaluate_diagnosis_readiness_expectations(failures, snapshot, diagnosis_readiness)
     expect_equal(failures, snapshot, "intent_axes.continuation_type", intent.get("continuation_type"))
     expect_contains_all(failures, snapshot, "intent_axes.intent_stack", intent.get("intent_stack_contains"))
     expect_contains_all(failures, snapshot, "intent_stack_projection", intent.get("intent_stack_projection_contains"))
@@ -255,6 +261,49 @@ def evaluate_planner_gate_expectations(
         max_rank = SEVERITY_RANK.get(str(max_severity), 99)
         if actual_rank > max_rank:
             failures.append(f"planner_gate.max_diff_severity: expected <= {max_severity!r}, got {(snapshot.get('planning_diff') or {}).get('severity')!r}")
+
+
+def evaluate_diagnosis_readiness_expectations(
+    failures: list[str],
+    snapshot: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    if not expected:
+        return
+    readiness = snapshot.get("diagnosis_readiness") or (snapshot.get("planner_gate") or {}).get("diagnosis_readiness") or {}
+    if not isinstance(readiness, dict) or not readiness:
+        failures.append("diagnosis_readiness: missing")
+        return
+    expect_equal(failures, {"diagnosis_readiness": readiness}, "diagnosis_readiness.diagnosis_mode", expected.get("diagnosis_mode"))
+    if "evidence_complete" in expected and bool(readiness.get("evidence_complete")) is not bool(expected.get("evidence_complete")):
+        failures.append(
+            f"diagnosis_readiness.evidence_complete: expected {expected.get('evidence_complete')!r}, got {readiness.get('evidence_complete')!r}"
+        )
+    if "ready_for_active" in expected and bool(readiness.get("ready_for_active")) is not bool(expected.get("ready_for_active")):
+        failures.append(
+            f"diagnosis_readiness.ready_for_active: expected {expected.get('ready_for_active')!r}, got {readiness.get('ready_for_active')!r}"
+        )
+    expect_equal(
+        failures,
+        {"diagnosis_readiness": readiness},
+        "diagnosis_readiness.recommended_next_phase",
+        expected.get("recommended_next_phase"),
+    )
+    allowed_next = expected.get("recommended_next_phase_in") or []
+    if allowed_next and readiness.get("recommended_next_phase") not in allowed_next:
+        failures.append(
+            f"diagnosis_readiness.recommended_next_phase: expected one of {allowed_next!r}, got {readiness.get('recommended_next_phase')!r}"
+        )
+    min_blocked = expected.get("min_blocked_reason_count")
+    if min_blocked is not None and int(readiness.get("blocked_reason_count") or 0) < int(min_blocked):
+        failures.append(
+            f"diagnosis_readiness.blocked_reason_count: expected >= {min_blocked!r}, got {readiness.get('blocked_reason_count')!r}"
+        )
+    max_missing = expected.get("max_missing_critical_evidence_count")
+    if max_missing is not None and int(readiness.get("missing_critical_evidence_count") or 0) > int(max_missing):
+        failures.append(
+            f"diagnosis_readiness.missing_critical_evidence_count: expected <= {max_missing!r}, got {readiness.get('missing_critical_evidence_count')!r}"
+        )
 
 
 def evaluate_trace_case(case: dict[str, Any], events: list[dict[str, Any]], complete: dict[str, Any]) -> EvalResult:

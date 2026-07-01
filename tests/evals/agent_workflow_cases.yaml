@@ -129,6 +129,10 @@ cases:
       enabled_nodes:
       - sql
       - knowledge
+    diagnosis_readiness:
+      diagnosis_mode: alarm_triage
+      ready_for_active: false
+      recommended_next_phase: candidate_for_limited_active
     context:
       source: current_message
     intent:
@@ -197,6 +201,10 @@ cases:
       max_severity: error
       no_critical: true
       migration_ready: false
+    diagnosis_readiness:
+      diagnosis_mode: fault_diagnosis
+      ready_for_active: false
+      recommended_next_phase: candidate_for_limited_active
     context:
       source: current_message
     intent:
@@ -247,6 +255,12 @@ cases:
       enabled_nodes:
       - sql
       - analysis
+    diagnosis_readiness:
+      diagnosis_mode: health_assessment
+      ready_for_active: false
+      recommended_next_phase_in:
+      - keep_legacy
+      - more_eval
     context:
       source: current_message
     intent:
@@ -394,6 +408,12 @@ cases:
       - sql
       - knowledge
       - analysis
+    diagnosis_readiness:
+      diagnosis_mode: root_cause_analysis
+      ready_for_active: false
+      recommended_next_phase_in:
+      - keep_legacy
+      - more_eval
     context:
       source: current_message
     intent:

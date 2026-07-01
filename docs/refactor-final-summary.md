@@ -1,6 +1,6 @@
 # 意图 / 上下文 / Planner 重构最终总结
 
-本文档汇总 Phase 1 到 Phase 4.3 的整体改造结果，用于替代分散的阶段审计说明，并记录当前真实执行边界。
+本文档汇总 Phase 1 到 Phase 4.4.1 的整体改造结果，用于替代分散的阶段审计说明，并记录当前真实执行边界。
 
 ## 总体结论
 
@@ -12,6 +12,7 @@
 - Phase 4.1：新增确定性 `ShadowPlanner`，只生成观测用途的 planner 输出。
 - Phase 4.2：新增确定性 `PlanningDiff`，比较 legacy policy 与 shadow planner。
 - Phase 4.3：新增 `PlannerGate`，用于低风险只读任务的 planner-gated execution preview。
+- Phase 4.4.1：新增 `DiagnosisReadiness`，允许 diagnosis 进入 planner-gate dry-run 观测，但不允许 active 接管。
 
 旧执行主干仍然保留：
 
@@ -21,7 +22,7 @@ TaskType + intent_stack + route flags + WorkflowPolicy + authorization
 -> restricted single-agent stages and tool calls
 ```
 
-`ResolvedContext`、`GoalSet`、`TaskFamily`、`ShadowPlanner`、`PlanningDiff` 都是增量的观测、调试和 eval 层。只有 `PlannerGate` 允许影响执行，而且必须显式开启并处于 active 模式；即使 active，也只能对 `knowledge_lookup`、`runtime_status`、`reporting` 三类只读任务收窄节点和工具资格。
+`ResolvedContext`、`GoalSet`、`TaskFamily`、`ShadowPlanner`、`PlanningDiff`、`DiagnosisReadiness` 都是增量的观测、调试和 eval 层。只有 `PlannerGate` 允许影响执行，而且必须显式开启并处于 active 模式；即使 active，也只能对 `knowledge_lookup`、`runtime_status`、`reporting` 三类只读任务收窄节点和工具资格。Phase 4.4.1 中 diagnosis 只进入 dry-run readiness 观测，真实执行仍保持 `legacy_policy`。
 
 ## 当前默认行为
 
@@ -29,11 +30,13 @@ TaskType + intent_stack + route flags + WorkflowPolicy + authorization
 
 - `ENABLE_PLANNER_GATED_EXECUTION=false`
 - `PLANNER_GATED_DRY_RUN=true`
+- `PLANNER_GATE_DIAGNOSIS_DRY_RUN=true`
+- `PLANNER_GATE_ENABLE_DIAGNOSIS_ACTIVE=false`
 - `PLANNER_GATED_TASK_FAMILIES=knowledge_lookup,runtime_status,reporting`
 - `PLANNER_GATED_REQUIRE_DIFF_STATUS=aligned,acceptable_diff`
 - `PLANNER_GATED_MAX_DIFF_SEVERITY=warning`
 
-默认配置下，`planner_gate.selected_execution_source` 始终是 `legacy_policy`。`enabled_nodes` 和 `runtime_tools` 仍由 legacy workflow policy 与 authorization 选择。
+默认配置下，`planner_gate.selected_execution_source` 始终是 `legacy_policy`。diagnosis 可以生成 dry-run `diagnosis_readiness`，但 `enabled_nodes` 和 `runtime_tools` 仍由 legacy workflow policy 与 authorization 选择。
 
 ## 环境变量开关
 
@@ -42,11 +45,13 @@ TaskType + intent_stack + route flags + WorkflowPolicy + authorization
 | `ENABLE_PLAN_ENDPOINT` | `false` | 在本地 / dev eval 路径中启用 `/chat/plan`。 |
 | `ENABLE_PLANNER_GATED_EXECUTION` | `false` | 启用 planner gate 评估。disabled 模式永远不改变执行。 |
 | `PLANNER_GATED_DRY_RUN` | `true` | gate 开启时只计算 eligibility，仍保持 `legacy_policy`。 |
+| `PLANNER_GATE_DIAGNOSIS_DRY_RUN` | `true` | 允许 diagnosis 进入 planner-gate dry-run readiness 观测。 |
+| `PLANNER_GATE_ENABLE_DIAGNOSIS_ACTIVE` | `false` | 预留诊断 active 开关；Phase 4.4.1 下不授权 active。 |
 | `PLANNER_GATED_TASK_FAMILIES` | `knowledge_lookup,runtime_status,reporting` | 允许进入只读 gate 评估的任务族。 |
 | `PLANNER_GATED_REQUIRE_DIFF_STATUS` | `aligned,acceptable_diff` | active projection 允许的 planning diff 状态。 |
 | `PLANNER_GATED_MAX_DIFF_SEVERITY` | `warning` | gate 允许的最高 planning diff severity。 |
 
-Phase 4.3 没有任何环境变量允许 diagnosis/action/workorder 迁移执行。
+Phase 4.4.1 没有任何环境变量允许 action/workorder 迁移执行。diagnosis 只允许 dry-run 观测，`ready_for_active` 始终为 `false`。
 
 ## 阶段总览
 
@@ -58,6 +63,7 @@ Phase 4.3 没有任何环境变量允许 diagnosis/action/workorder 迁移执行
 | 4.1 | 构建确定性 shadow planner。 | `planning/contracts.py`、`planning/shadow_planner.py`、`planning/summaries.py`。 | compact `shadow_plan`、`shadow_plan_summary`；full plan 只用于离线 artifact/debug。 | 不影响。shadow plan 不被 execution policy/stages/tools 读取。 | `scripts/shadow_planner_acceptance_test.py`：5 passed。 |
 | 4.2 | 比较 legacy policy 与 shadow plan。 | `planning/diff_contracts.py`、`planning/diff_evaluator.py`、`planning/diff_summaries.py`。 | compact `planning_diff`、`planning_diff_summary`；full diff 只用于 artifact/debug。 | 不影响。diff 不写 execution flags 或 policy-readable 字段。 | `scripts/planning_diff_acceptance_test.py`：7 passed。 |
 | 4.3 | 预览只读 planner-gated execution。 | `planning/gate_contracts.py`、`planning/gate.py`。 | compact `planner_gate`、`planner_gate_summary`、`selected_execution_source`。 | 默认不影响。active 模式只能在 legacy policy/auth/diff 检查之后收窄只读节点和工具。 | `scripts/planner_gate_acceptance_test.py`：11 passed；已生成 observation report。 |
+| 4.4.1 | 允许 diagnosis dry-run readiness 观测。 | `planning/diagnosis_readiness.py`、`planning/gate.py`。 | compact `diagnosis_readiness`、`planner_gate.diagnosis_readiness`。 | 不影响。diagnosis 始终 `legacy_policy`，不改变 nodes/tools/stages。 | `scripts/diagnosis_dry_run_acceptance_test.py`：8 passed。 |
 
 ## 各层关系
 
@@ -178,6 +184,23 @@ active node projection 仅限：
 
 如果 legacy 与 shadow 都保留了 `permission_check`、`risk_check`、`audit_log`、`output_guardrail`、`evidence_validation` 等 safety nodes，active projection 会继续保留它们。如果 shadow 移除了 legacy safety node，gate 会 fallback 到 legacy。
 
+Phase 4.4.1 中，diagnosis 可以进入 dry-run observation，但 gate 会保留 `diagnosis_dry_run_only` 和 `diagnosis_active_not_enabled` blockers。即使全局 gate 处于 active 配置，diagnosis 的 `selected_execution_source` 仍然必须是 `legacy_policy`。
+
+### DiagnosisReadiness
+
+`DiagnosisReadiness` 回答的问题是：诊断类任务在 dry-run 观测中是否具备未来有限 active 的候选条件？
+
+它检查 runtime status、manual/reference、alarm/fault context、analysis basis、stale disclosure、missing evidence、authorization、planning diff 和 shadow tool scope。
+
+它不负责：
+
+- 授权 diagnosis active
+- 改变 enabled nodes
+- 改变 runtime tools
+- 跳过 SQL/RAG/analysis/report/workorder/evidence/output 阶段
+
+`ready_for_active` 在 Phase 4.4.1 始终为 `false`。`alarm_triage` 和 `fault_diagnosis` 可以被标为 `candidate_for_limited_active`，但只是下一阶段评估信号；`root_cause_analysis` 和 `health_assessment` 默认保持 `more_eval` 或 `keep_legacy`。
+
 ## 输出面
 
 `/chat/plan` 输出 compact summaries：
@@ -188,15 +211,18 @@ active node projection 仅限：
 - `shadow_plan`
 - `planning_diff`
 - `planner_gate`
+- `diagnosis_readiness`
 
 SSE complete 输出 compact summaries：
 
 - 顶层 `resolved_context`
 - 顶层 `planning_diff`
 - 顶层 `planner_gate`
+- 顶层 `diagnosis_readiness`
 - `workflow_route.resolved_context`
 - `workflow_route.planning_diff`
 - `workflow_route.planner_gate`
+- `workflow_route.diagnosis_readiness`
 - `decision.shadow_plan_summary`
 - `decision.planning_diff_summary`
 - `decision.planner_gate_summary`
@@ -211,13 +237,14 @@ Compact summaries 会刻意省略 SQL 原文、长 evidence、报告正文、报
 
 最近一次验证结果：
 
-- `PYTHONPATH=. pytest -q`：197 passed。
+- `PYTHONPATH=. pytest -q`：207 passed。
 - `PYTHONPATH=. python tests/evals/run_plan_eval.py`：42/42 passed。
 - `PYTHONPATH=. python scripts/context_acceptance_test.py`：6 passed。
 - `PYTHONPATH=. python scripts/goal_acceptance_test.py`：5 passed。
 - `PYTHONPATH=. python scripts/shadow_planner_acceptance_test.py`：5 passed。
 - `PYTHONPATH=. python scripts/planning_diff_acceptance_test.py`：7 passed。
 - `PYTHONPATH=. python scripts/planner_gate_acceptance_test.py`：11 passed。
+- `PYTHONPATH=. python scripts/diagnosis_dry_run_acceptance_test.py`：8 passed。
 - `PYTHONPATH=. python scripts/planner_gate_observation_report.py`：report generated。
 - `git diff --check`：clean。
 
@@ -255,4 +282,4 @@ active 变化都是只读投影。没有 active case 把 runtime tools 扩大到
 - 任何会跳过 permission、risk、audit、evidence validation 或 output guardrail 的路径
 - 自动派单、复位、启停设备、修改参数，或输出已完成动作语义
 
-Phase 4.4 可以进入设计评审或 dry-run 设计，但不应在没有单独批准和新 acceptance gates 的情况下开始 diagnosis/action/workorder active migration。
+Phase 4.4.2 可以进入 diagnosis limited-active 设计评审，但不应在没有单独批准和新 acceptance gates 的情况下开始 diagnosis active migration。action/workorder 仍然不进入 active migration。

@@ -240,6 +240,9 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             planner_gate = getattr(self._workflow_task_decision, "planner_gate_summary", {}) or {}
             if planner_gate:
                 trace_metadata.setdefault("planner_gate", planner_gate)
+                diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
+                if diagnosis_readiness:
+                    trace_metadata.setdefault("diagnosis_readiness", diagnosis_readiness)
         if self.evidence_bundle is not None:
             trace_metadata.setdefault("evidence_bundle_id", getattr(self.evidence_bundle, "bundle_id", None))
             trace_metadata.setdefault("evidence_count", len(getattr(self.evidence_bundle, "evidence_items", []) or []))

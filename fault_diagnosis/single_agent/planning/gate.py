@@ -7,6 +7,7 @@ from typing import Any
 from fault_diagnosis import config
 
 from ..contracts import SingleAgentLimits
+from .diagnosis_readiness import build_diagnosis_readiness, summarize_diagnosis_readiness
 from .gate_contracts import PlannerGateDecision
 
 _SEVERITY_RANK = {"none": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
@@ -37,20 +38,25 @@ def build_planner_gate(
     """Build a deterministic gate decision without mutating execution state."""
 
     settings = _settings(config_overrides)
-    mode = _mode(settings)
     legacy_nodes = _bool_dict(getattr(decision, "enabled_nodes", {}) or {})
     legacy_runtime_tools = _strings(getattr(decision, "runtime_tools", []) or [])
     shadow = _to_dict(shadow_plan)
     diff = _to_dict(planning_diff)
     task_family = str(getattr(decision, "task_family", "") or "")
     primary_task_type = str(getattr(decision, "primary_task_type", "") or "")
+    mode = _mode(settings, task_family=task_family)
     allowed_families = set(settings["task_families"])
     required_status = list(settings["required_diff_status"])
     observed_status = str(diff.get("overall_status") or "")
     observed_severity = str(diff.get("severity") or "")
     shadow_tools = _shadow_authorized_tools(shadow)
     allowed_runtime_tools = _dedupe([tool for tool in legacy_runtime_tools if tool in SingleAgentLimits().allowed_tools])
-    allowed_task_family = task_family in allowed_families and task_family in _LOW_RISK_TASK_FAMILIES
+    diagnosis_dry_run = task_family == "diagnosis" and bool(settings["diagnosis_dry_run"])
+    allowed_task_family = (
+        task_family in allowed_families
+        and task_family in _LOW_RISK_TASK_FAMILIES
+    ) or diagnosis_dry_run
+    diagnosis_readiness = None
     blockers: list[str] = []
     reasons: list[str] = []
 
@@ -58,12 +64,32 @@ def build_planner_gate(
         blockers.append("planner_gate_disabled")
     if not allowed_task_family:
         blockers.append("unsupported_task_family")
+    if task_family == "diagnosis":
+        diagnosis_readiness = build_diagnosis_readiness(
+            decision=decision,
+            shadow_plan=shadow_plan,
+            planning_diff=planning_diff,
+        )
+        if diagnosis_dry_run:
+            blockers.append("diagnosis_dry_run_only")
+            if not settings["diagnosis_active"]:
+                blockers.append("diagnosis_active_not_enabled")
+        else:
+            blockers.append("diagnosis_active_not_enabled")
+        _extend_blockers(blockers, diagnosis_readiness.blocked_reasons)
     if task_family == "action_or_workorder" or primary_task_type == "action_request" or getattr(decision, "action_type", None):
         blockers.append("action_or_workorder_not_migrated")
     decision_risk = str(getattr(decision, "risk_level", "") or "")
     if decision_risk in _BLOCKED_RISK_LEVELS:
         blockers.append(f"risk_not_migrated:{decision_risk}")
-    _extend_blockers(blockers, _goal_blockers(getattr(decision, "goal_set", {}) or {}, getattr(decision, "goals", []) or []))
+    _extend_blockers(
+        blockers,
+        _goal_blockers(
+            getattr(decision, "goal_set", {}) or {},
+            getattr(decision, "goals", []) or [],
+            task_family=task_family,
+        ),
+    )
     relation = str((getattr(decision, "resolved_context", {}) or {}).get("relation_to_previous") or getattr(decision, "relation_to_previous", "") or "")
     if relation in _BLOCKED_RELATIONS:
         blockers.append(f"blocked_context_relation:{relation}")
@@ -97,13 +123,25 @@ def build_planner_gate(
     )
     if allowed_task_family:
         reasons.append("task_family_allowed_for_read_only_preview")
+    if diagnosis_dry_run:
+        reasons.append("diagnosis_dry_run_observation")
     if not final_runtime_tools and final_nodes:
         blockers.append("empty_final_runtime_tools")
     eligible = not blockers
-    selected_source = "planner_gated" if eligible and mode == "active" else "legacy_policy"
+    diagnosis_dry_run_eligible = bool(diagnosis_dry_run and diagnosis_readiness and not diagnosis_readiness.blocked_reasons)
+    selected_source = "planner_gated" if eligible and mode == "active" and task_family != "diagnosis" else "legacy_policy"
+    safety_summary = {
+        "critical_count": int((diff.get("counters") or {}).get("critical_count") or diff.get("critical_count") or 0),
+        "shadow_tools_subset_legacy": set(shadow_tools).issubset(set(legacy_runtime_tools)),
+        "safety_nodes_preserved": not _removes_safety_node(legacy_nodes, _shadow_enabled_nodes(shadow)),
+        "dry_run": mode == "dry_run",
+    }
+    if diagnosis_readiness is not None:
+        safety_summary["diagnosis_readiness"] = diagnosis_readiness.model_dump(exclude_none=True)
     return PlannerGateDecision(
         mode=mode,
         eligible=eligible,
+        dry_run_eligible=diagnosis_dry_run_eligible if task_family == "diagnosis" else (eligible and mode == "dry_run"),
         selected_execution_source=selected_source,
         allowed_task_family=allowed_task_family,
         task_family=task_family,
@@ -118,12 +156,7 @@ def build_planner_gate(
         final_runtime_tools=final_runtime_tools if selected_source == "planner_gated" else legacy_runtime_tools,
         final_enabled_nodes=sorted(final_nodes) if selected_source == "planner_gated" else sorted(node for node, enabled in legacy_nodes.items() if enabled),
         fallback_to_legacy=selected_source != "planner_gated",
-        safety_summary={
-            "critical_count": int((diff.get("counters") or {}).get("critical_count") or diff.get("critical_count") or 0),
-            "shadow_tools_subset_legacy": set(shadow_tools).issubset(set(legacy_runtime_tools)),
-            "safety_nodes_preserved": not _removes_safety_node(legacy_nodes, _shadow_enabled_nodes(shadow)),
-            "dry_run": mode == "dry_run",
-        },
+        safety_summary=safety_summary,
     )
 
 
@@ -134,12 +167,16 @@ def summarize_planner_gate(value: Any) -> dict[str, Any]:
     return {
         "mode": data.get("mode", "disabled"),
         "eligible": bool(data.get("eligible", False)),
+        "dry_run_eligible": bool(data.get("dry_run_eligible", False)),
         "selected_execution_source": data.get("selected_execution_source", "legacy_policy"),
         "blockers": list(data.get("blockers") or [])[:8],
         "reasons": list(data.get("reasons") or [])[:8],
         "final_enabled_nodes": list(data.get("final_enabled_nodes") or []),
         "final_runtime_tools": list(data.get("final_runtime_tools") or []),
         "fallback_to_legacy": bool(data.get("fallback_to_legacy", True)),
+        "diagnosis_readiness": summarize_diagnosis_readiness(
+            (_to_dict(data.get("safety_summary"))).get("diagnosis_readiness")
+        ),
     }
 
 
@@ -161,19 +198,23 @@ def _settings(overrides: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "enabled": bool(overrides.get("enabled", config.ENABLE_PLANNER_GATED_EXECUTION)),
         "dry_run": bool(overrides.get("dry_run", config.PLANNER_GATED_DRY_RUN)),
+        "diagnosis_dry_run": bool(overrides.get("diagnosis_dry_run", config.PLANNER_GATE_DIAGNOSIS_DRY_RUN)),
+        "diagnosis_active": bool(overrides.get("diagnosis_active", config.PLANNER_GATE_ENABLE_DIAGNOSIS_ACTIVE)),
         "task_families": list(overrides.get("task_families", config.PLANNER_GATED_TASK_FAMILIES)),
         "required_diff_status": list(overrides.get("required_diff_status", config.PLANNER_GATED_REQUIRE_DIFF_STATUS)),
         "max_diff_severity": str(overrides.get("max_diff_severity", config.PLANNER_GATED_MAX_DIFF_SEVERITY) or "warning"),
     }
 
 
-def _mode(settings: dict[str, Any]) -> str:
+def _mode(settings: dict[str, Any], *, task_family: str) -> str:
+    if task_family == "diagnosis" and settings["diagnosis_dry_run"]:
+        return "dry_run"
     if not settings["enabled"]:
         return "disabled"
     return "dry_run" if settings["dry_run"] else "active"
 
 
-def _goal_blockers(goal_set: dict[str, Any], goals_value: Any) -> list[str]:
+def _goal_blockers(goal_set: dict[str, Any], goals_value: Any, *, task_family: str) -> list[str]:
     blockers: list[str] = []
     goals = goal_set.get("goals") if isinstance(goal_set, dict) else goals_value
     for goal in goals or []:
@@ -181,7 +222,10 @@ def _goal_blockers(goal_set: dict[str, Any], goals_value: Any) -> list[str]:
         goal_type = str(data.get("goal_type") or "")
         risk = str(data.get("risk_level") or "")
         if goal_type in _BLOCKED_GOAL_TYPES:
-            blockers.append("action_or_workorder_not_migrated" if goal_type == "decide_workorder" else "diagnosis_not_migrated")
+            if goal_type == "decide_workorder":
+                blockers.append("action_or_workorder_not_migrated")
+            elif task_family != "diagnosis":
+                blockers.append("diagnosis_not_migrated")
         if risk in _BLOCKED_RISK_LEVELS:
             blockers.append(f"risk_not_migrated:{risk}")
     return blockers

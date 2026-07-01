@@ -11,6 +11,7 @@ from .contracts import (
 from .diff_contracts import EvidenceDiff, NodeDiff, OutputDiff, PlanningDiff, SafetyDiff, ToolDiff
 from .diff_evaluator import build_planning_diff
 from .diff_summaries import summarize_planning_diff
+from .diagnosis_readiness import DiagnosisReadiness, build_diagnosis_readiness, summarize_diagnosis_readiness
 from .gate import apply_planner_gate_to_decision, build_planner_gate, summarize_planner_gate
 from .gate_contracts import PlannerGateDecision
 from .shadow_planner import attach_shadow_plan_summary, build_planning_input, build_shadow_plan, build_shadow_plan_for_decision
@@ -27,6 +28,7 @@ __all__ = [
     "PlanningDecision",
     "PlanningInput",
     "PlannerGateDecision",
+    "DiagnosisReadiness",
     "SafetyDiff",
     "ToolDiff",
     "ToolPlan",
@@ -34,10 +36,12 @@ __all__ = [
     "build_shadow_plan",
     "build_shadow_plan_for_decision",
     "build_planning_diff",
+    "build_diagnosis_readiness",
     "build_planner_gate",
     "apply_planner_gate_to_decision",
     "attach_shadow_plan_summary",
     "summarize_shadow_plan",
     "summarize_planning_diff",
+    "summarize_diagnosis_readiness",
     "summarize_planner_gate",
 ]

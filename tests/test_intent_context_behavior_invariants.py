@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fault_diagnosis.diagnosis.contracts import DiagnosisRequest
 from fault_diagnosis.single_agent.intent import decide_capabilities, fallback_understanding_payload
+from fault_diagnosis.single_agent.planning import apply_planner_gate_to_decision, build_planner_gate
 from fault_diagnosis.single_agent.workflow import TaskRoute, TaskType, build_workflow_plan, route_task
 
 
@@ -159,3 +160,29 @@ def test_execution_policy_stages_and_tools_do_not_reference_planner_gate() -> No
     runner_text = (ROOT / "fault_diagnosis/single_agent/runner.py").read_text(encoding="utf-8")
     tool_call_section = runner_text[runner_text.index("    def _start_tool_call"):]
     assert "planner_gate" not in tool_call_section
+
+
+def test_diagnosis_dry_run_planner_gate_does_not_change_execution_projection() -> None:
+    decision = _decision("诊断 J1 A07089 的原因")
+    decision.authorization = {"mode": "allow"}
+    before_nodes = dict(decision.enabled_nodes)
+    before_tools = list(decision.runtime_tools)
+    shadow = {
+        "nodes": [{"node": node, "desired_state": "enabled"} for node, enabled in before_nodes.items() if enabled],
+        "tool_plan": {"authorized_runtime_tools": list(before_tools)},
+        "evidence_plan": {"required_evidence": ["runtime_data", "knowledge_source", "diagnosis_basis"]},
+        "output_plan": {"expected_output": "answer", "required_disclosures": []},
+    }
+
+    gate = build_planner_gate(
+        decision=decision,
+        shadow_plan=shadow,
+        planning_diff={"overall_status": "aligned", "severity": "none", "counters": {}},
+        config_overrides={"enabled": True, "dry_run": False, "diagnosis_dry_run": True, "diagnosis_active": False},
+    )
+    apply_planner_gate_to_decision(decision, gate)
+
+    assert decision.task_family == "diagnosis"
+    assert gate.selected_execution_source == "legacy_policy"
+    assert decision.enabled_nodes == before_nodes
+    assert decision.runtime_tools == before_tools

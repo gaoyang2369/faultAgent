@@ -26,6 +26,8 @@ def assert_true(condition: bool, message: str) -> None:
 def set_gate(*, enabled: bool, dry_run: bool) -> None:
     config.ENABLE_PLANNER_GATED_EXECUTION = enabled
     config.PLANNER_GATED_DRY_RUN = dry_run
+    config.PLANNER_GATE_DIAGNOSIS_DRY_RUN = True
+    config.PLANNER_GATE_ENABLE_DIAGNOSIS_ACTIVE = False
     config.PLANNER_GATED_TASK_FAMILIES = ["knowledge_lookup", "runtime_status", "reporting"]
     config.PLANNER_GATED_REQUIRE_DIFF_STATUS = ["aligned", "acceptable_diff"]
     config.PLANNER_GATED_MAX_DIFF_SEVERITY = "warning"
@@ -96,7 +98,10 @@ def scenario_diagnosis_blocked(client: TestClient) -> None:
     snapshot = plan(client, thread_id="planner-gate.F", message="诊断 J1 A07089 的原因")
     summary = gate(snapshot)
     assert_true(summary["selected_execution_source"] == "legacy_policy", "F diagnosis must stay legacy")
-    assert_true("unsupported_task_family" in summary["blockers"], "F must block unsupported family")
+    assert_true("unsupported_task_family" not in summary["blockers"], "F diagnosis now enters dry-run observation")
+    assert_true("diagnosis_dry_run_only" in summary["blockers"], "F must stay diagnosis dry-run only")
+    assert_true("diagnosis_active_not_enabled" in summary["blockers"], "F must block diagnosis active")
+    assert_true(summary.get("diagnosis_readiness", {}).get("ready_for_active") is False, "F readiness must never authorize active")
 
 
 def scenario_action_blocked(client: TestClient) -> None:
