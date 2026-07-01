@@ -243,6 +243,12 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
                 diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
                 if diagnosis_readiness:
                     trace_metadata.setdefault("diagnosis_readiness", diagnosis_readiness)
+                workorder_action_readiness = dict(planner_gate.get("workorder_action_readiness") or {})
+                if workorder_action_readiness:
+                    trace_metadata.setdefault("workorder_action_readiness", workorder_action_readiness)
+                manual_confirmation = dict(planner_gate.get("manual_confirmation") or {})
+                if manual_confirmation:
+                    trace_metadata.setdefault("manual_confirmation", manual_confirmation)
         if self.evidence_bundle is not None:
             trace_metadata.setdefault("evidence_bundle_id", getattr(self.evidence_bundle, "bundle_id", None))
             trace_metadata.setdefault("evidence_count", len(getattr(self.evidence_bundle, "evidence_items", []) or []))

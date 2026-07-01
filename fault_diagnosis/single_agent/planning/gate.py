@@ -7,8 +7,10 @@ from typing import Any
 from fault_diagnosis import config
 
 from ..contracts import SingleAgentLimits
+from .action_readiness import build_workorder_action_readiness, summarize_workorder_action_readiness
 from .diagnosis_readiness import build_diagnosis_readiness, summarize_diagnosis_readiness
 from .gate_contracts import PlannerGateDecision
+from .manual_confirmation import build_manual_confirmation_requirement, summarize_manual_confirmation_requirement
 
 _SEVERITY_RANK = {"none": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
 _LOW_RISK_TASK_FAMILIES = {"knowledge_lookup", "runtime_status", "reporting"}
@@ -45,6 +47,26 @@ _DANGEROUS_OUTPUT_WORDS = (
     "已关闭",
     "已修改",
 )
+_HIGH_RISK_ACTION_WORDS = (
+    "workorder",
+    "dispatch",
+    "reset",
+    "restart",
+    "stop",
+    "shutdown",
+    "parameter",
+    "config",
+    "工单",
+    "派单",
+    "派发",
+    "复位",
+    "重启",
+    "停机",
+    "启停",
+    "参数",
+    "配置",
+    "修改",
+)
 
 
 def build_planner_gate(
@@ -79,6 +101,8 @@ def build_planner_gate(
     diagnosis_readiness = None
     diagnosis_active_scope: list[str] = []
     diagnosis_active_blockers: list[str] = []
+    workorder_action_readiness = None
+    manual_confirmation = None
     blockers: list[str] = []
     reasons: list[str] = []
 
@@ -111,6 +135,19 @@ def build_planner_gate(
             blockers.append("diagnosis_active_not_enabled")
         _extend_blockers(blockers, diagnosis_readiness.blocked_reasons)
         _extend_blockers(blockers, diagnosis_active_blockers)
+    high_risk_request = _is_workorder_or_action(decision, shadow)
+    if high_risk_request:
+        workorder_action_readiness = build_workorder_action_readiness(
+            decision=decision,
+            shadow_plan=shadow_plan,
+            planning_diff=planning_diff,
+        )
+        manual_confirmation = build_manual_confirmation_requirement(
+            decision=decision,
+            workorder_action_readiness=workorder_action_readiness,
+        )
+        _extend_blockers(blockers, workorder_action_readiness.blockers)
+        reasons.append("workorder_action_dry_run_observation")
     if task_family == "action_or_workorder" or primary_task_type == "action_request" or getattr(decision, "action_type", None):
         blockers.append("action_or_workorder_not_migrated")
     decision_risk = str(getattr(decision, "risk_level", "") or "")
@@ -189,6 +226,10 @@ def build_planner_gate(
         diagnosis_readiness.active_allowed = selected_source == "planner_gated"
         diagnosis_readiness.ready_for_active = selected_source == "planner_gated"
         safety_summary["diagnosis_readiness"] = diagnosis_readiness.model_dump(exclude_none=True)
+    if workorder_action_readiness is not None:
+        safety_summary["workorder_action_readiness"] = workorder_action_readiness.model_dump(exclude_none=True)
+    if manual_confirmation is not None:
+        safety_summary["manual_confirmation"] = manual_confirmation.model_dump(exclude_none=True)
     return PlannerGateDecision(
         mode=mode,
         eligible=eligible,
@@ -229,6 +270,12 @@ def summarize_planner_gate(value: Any) -> dict[str, Any]:
         "fallback_to_legacy": bool(data.get("fallback_to_legacy", True)),
         "diagnosis_readiness": summarize_diagnosis_readiness(
             (_to_dict(data.get("safety_summary"))).get("diagnosis_readiness")
+        ),
+        "workorder_action_readiness": summarize_workorder_action_readiness(
+            (_to_dict(data.get("safety_summary"))).get("workorder_action_readiness")
+        ),
+        "manual_confirmation": summarize_manual_confirmation_requirement(
+            (_to_dict(data.get("safety_summary"))).get("manual_confirmation")
         ),
     }
 
@@ -280,6 +327,34 @@ def _settings(overrides: dict[str, Any] | None) -> dict[str, Any]:
         "required_diff_status": list(overrides.get("required_diff_status", config.PLANNER_GATED_REQUIRE_DIFF_STATUS)),
         "max_diff_severity": str(overrides.get("max_diff_severity", config.PLANNER_GATED_MAX_DIFF_SEVERITY) or "warning"),
     }
+
+
+def _is_workorder_or_action(decision: Any, shadow: dict[str, Any]) -> bool:
+    task_family = str(getattr(decision, "task_family", "") or "")
+    primary_task_type = str(getattr(decision, "primary_task_type", "") or "")
+    if task_family == "action_or_workorder" or primary_task_type == "action_request" or getattr(decision, "action_type", None):
+        return True
+    output = _to_dict(shadow.get("output_plan"))
+    if str(output.get("expected_output") or "") in {"workorder_decision", "workorder_draft"}:
+        return True
+    if "workorder_decision" in _shadow_enabled_nodes(shadow):
+        return True
+    for goal in _goals_for_decision(decision):
+        if str(goal.get("goal_type") or "") in {"decide_workorder", "create_workorder_draft"}:
+            return True
+    text = " ".join(
+        _strings(
+            [
+                getattr(decision, "user_goal", "") or "",
+                getattr(decision, "action_type", "") or "",
+                getattr(decision, "action_target", "") or "",
+                *list(getattr(decision, "intent_stack", []) or []),
+            ]
+        )
+    ).lower()
+    if any(word in text for word in _HIGH_RISK_ACTION_WORDS):
+        return True
+    return False
 
 
 def _mode(settings: dict[str, Any], *, task_family: str) -> str:

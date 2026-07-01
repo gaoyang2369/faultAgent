@@ -363,6 +363,19 @@ cases:
       enabled_nodes:
       - permission_check
       - risk_check
+    planner_gate:
+      selected_execution_source: legacy_policy
+    workorder_action_readiness:
+      ready_for_active: false
+      dry_run_only: true
+      action_type: device_action
+      requires_human_confirmation: true
+      recommended_next_phase: keep_legacy
+    manual_confirmation:
+      required: true
+      confirmation_type: reset
+      required_role: admin
+      allowed_next_step: deny
     context:
       source: current_message
     intent:
@@ -761,6 +774,18 @@ cases:
   expected:
     context:
       used_active_asset: true
+    planner_gate:
+      selected_execution_source: legacy_policy
+    workorder_action_readiness:
+      ready_for_active: false
+      dry_run_only: true
+      action_type: workorder_draft
+      requires_human_confirmation: true
+    manual_confirmation:
+      required: true
+      confirmation_type: workorder_draft
+      required_role: engineer
+      allowed_next_step: draft_only
     intent:
       domain_task: action_request
       intent_stack_contains:
@@ -1440,6 +1465,19 @@ cases:
   expected:
     context:
       source: current_message
+    planner_gate:
+      selected_execution_source: legacy_policy
+    workorder_action_readiness:
+      ready_for_active: false
+      dry_run_only: true
+      action_type: device_action
+      requires_human_confirmation: true
+      recommended_next_phase: keep_legacy
+    manual_confirmation:
+      required: true
+      confirmation_type: stop_machine
+      required_role: admin
+      allowed_next_step: deny
     intent:
       domain_task: action_request
       device_ids:
@@ -1485,6 +1523,18 @@ cases:
   expected:
     context:
       used_active_asset: true
+    planner_gate:
+      selected_execution_source: legacy_policy
+    workorder_action_readiness:
+      ready_for_active: false
+      dry_run_only: true
+      action_type: workorder_decision
+      requires_human_confirmation: true
+    manual_confirmation:
+      required: true
+      confirmation_type: dispatch
+      required_role: admin
+      allowed_next_step: ask_confirmation
     intent:
       intent_stack_contains:
       - dispatch_workorder

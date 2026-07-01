@@ -66,6 +66,8 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
     planning_diff = expected.get("planning_diff") or {}
     planner_gate = expected.get("planner_gate") or {}
     diagnosis_readiness = expected.get("diagnosis_readiness") or {}
+    workorder_action_readiness = expected.get("workorder_action_readiness") or {}
+    manual_confirmation = expected.get("manual_confirmation") or {}
     context = expected.get("context") or {}
     intent = expected.get("intent") or {}
     workflow = expected.get("workflow") or {}
@@ -86,6 +88,10 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
         or diagnosis_readiness.get("active_mode_in")
         or diagnosis_readiness.get("recommended_next_phase")
         or diagnosis_readiness.get("recommended_next_phase_in")
+        or workorder_action_readiness.get("action_type")
+        or workorder_action_readiness.get("recommended_next_phase")
+        or manual_confirmation.get("allowed_next_step")
+        or manual_confirmation.get("confirmation_type")
         or intent.get("intent_stack_contains")
         or intent.get("intent_stack_projection_contains")
         or intent.get("goal_types_contains")
@@ -129,6 +135,8 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
     planning_diff = expected.get("planning_diff") or {}
     planner_gate = expected.get("planner_gate") or {}
     diagnosis_readiness = expected.get("diagnosis_readiness") or {}
+    workorder_action_readiness = expected.get("workorder_action_readiness") or {}
+    manual_confirmation = expected.get("manual_confirmation") or {}
     intent = expected.get("intent") or {}
     context = expected.get("context") or {}
     workflow = expected.get("workflow") or {}
@@ -145,6 +153,8 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
     evaluate_planning_diff_expectations(failures, snapshot, planning_diff)
     evaluate_planner_gate_expectations(failures, snapshot, planner_gate)
     evaluate_diagnosis_readiness_expectations(failures, snapshot, diagnosis_readiness)
+    evaluate_workorder_action_readiness_expectations(failures, snapshot, workorder_action_readiness)
+    evaluate_manual_confirmation_expectations(failures, snapshot, manual_confirmation)
     expect_equal(failures, snapshot, "intent_axes.continuation_type", intent.get("continuation_type"))
     expect_contains_all(failures, snapshot, "intent_axes.intent_stack", intent.get("intent_stack_contains"))
     expect_contains_all(failures, snapshot, "intent_stack_projection", intent.get("intent_stack_projection_contains"))
@@ -337,6 +347,73 @@ def evaluate_diagnosis_readiness_expectations(
         present = sorted(item for item in forbidden_scope if item in scope)
         if present:
             failures.append(f"diagnosis_readiness.active_scope: forbidden scope present {present!r}")
+
+
+def evaluate_workorder_action_readiness_expectations(
+    failures: list[str],
+    snapshot: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    if not expected:
+        return
+    readiness = snapshot.get("workorder_action_readiness") or (snapshot.get("planner_gate") or {}).get("workorder_action_readiness") or {}
+    if not isinstance(readiness, dict) or not readiness:
+        failures.append("workorder_action_readiness: missing")
+        return
+    expect_equal(
+        failures,
+        {"workorder_action_readiness": readiness},
+        "workorder_action_readiness.action_type",
+        expected.get("action_type"),
+    )
+    for key in ("ready_for_active", "dry_run_only", "requires_human_confirmation", "stale_refresh_required"):
+        if key in expected and bool(readiness.get(key)) is not bool(expected.get(key)):
+            failures.append(f"workorder_action_readiness.{key}: expected {expected.get(key)!r}, got {readiness.get(key)!r}")
+    expect_equal(
+        failures,
+        {"workorder_action_readiness": readiness},
+        "workorder_action_readiness.recommended_next_phase",
+        expected.get("recommended_next_phase"),
+    )
+    min_blockers = expected.get("min_blocker_count")
+    if min_blockers is not None and int(readiness.get("blocker_count") or 0) < int(min_blockers):
+        failures.append(
+            f"workorder_action_readiness.blocker_count: expected >= {min_blockers!r}, got {readiness.get('blocker_count')!r}"
+        )
+
+
+def evaluate_manual_confirmation_expectations(
+    failures: list[str],
+    snapshot: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    if not expected:
+        return
+    contract = snapshot.get("manual_confirmation") or (snapshot.get("planner_gate") or {}).get("manual_confirmation") or {}
+    if not isinstance(contract, dict) or not contract:
+        failures.append("manual_confirmation: missing")
+        return
+    for key in ("required",):
+        if key in expected and bool(contract.get(key)) is not bool(expected.get(key)):
+            failures.append(f"manual_confirmation.{key}: expected {expected.get(key)!r}, got {contract.get(key)!r}")
+    expect_equal(
+        failures,
+        {"manual_confirmation": contract},
+        "manual_confirmation.confirmation_type",
+        expected.get("confirmation_type"),
+    )
+    expect_equal(
+        failures,
+        {"manual_confirmation": contract},
+        "manual_confirmation.required_role",
+        expected.get("required_role"),
+    )
+    expect_equal(
+        failures,
+        {"manual_confirmation": contract},
+        "manual_confirmation.allowed_next_step",
+        expected.get("allowed_next_step"),
+    )
 
 
 def evaluate_trace_case(case: dict[str, Any], events: list[dict[str, Any]], complete: dict[str, Any]) -> EvalResult:

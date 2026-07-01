@@ -41,6 +41,8 @@ class PlanSnapshot(BaseModel):
     planning_diff: dict[str, Any] = Field(default_factory=dict)
     planner_gate: dict[str, Any] = Field(default_factory=dict)
     diagnosis_readiness: dict[str, Any] = Field(default_factory=dict)
+    workorder_action_readiness: dict[str, Any] = Field(default_factory=dict)
+    manual_confirmation: dict[str, Any] = Field(default_factory=dict)
     goals: list[dict[str, Any]] = Field(default_factory=list)
     intent_stack_projection: list[str] = Field(default_factory=list)
     intent_axes: dict[str, Any] = Field(default_factory=dict)
@@ -126,6 +128,8 @@ def build_plan_snapshot(
     planner_gate = build_planner_gate(decision=decision, shadow_plan=shadow_plan, planning_diff=planning_diff)
     planner_gate_summary = summarize_planner_gate(planner_gate)
     diagnosis_readiness = dict(planner_gate_summary.get("diagnosis_readiness") or {})
+    workorder_action_readiness = dict(planner_gate_summary.get("workorder_action_readiness") or {})
+    manual_confirmation = dict(planner_gate_summary.get("manual_confirmation") or {})
     decision.planner_gate_summary = planner_gate_summary
     decision = apply_planner_gate_to_decision(decision, planner_gate)
 
@@ -144,6 +148,8 @@ def build_plan_snapshot(
         planning_diff=planning_diff_summary,
         planner_gate=planner_gate_summary,
         diagnosis_readiness=diagnosis_readiness,
+        workorder_action_readiness=workorder_action_readiness,
+        manual_confirmation=manual_confirmation,
         goals=_compact_goals(decision.goals),
         intent_stack_projection=list(goal_set_summary.get("intent_stack_projection") or []),
         intent_axes={
@@ -162,6 +168,8 @@ def build_plan_snapshot(
             "planning_diff": planning_diff_summary,
             "planner_gate": planner_gate_summary,
             "diagnosis_readiness": diagnosis_readiness,
+            "workorder_action_readiness": workorder_action_readiness,
+            "manual_confirmation": manual_confirmation,
         },
         workflow_route={
             "primary_task_type": decision.primary_task_type,
@@ -183,6 +191,8 @@ def build_plan_snapshot(
             "planning_diff": planning_diff_summary,
             "planner_gate": planner_gate_summary,
             "diagnosis_readiness": diagnosis_readiness,
+            "workorder_action_readiness": workorder_action_readiness,
+            "manual_confirmation": manual_confirmation,
         },
         workflow_policy=dict(decision.workflow_policy or {}),
         enabled_nodes=enabled_nodes,

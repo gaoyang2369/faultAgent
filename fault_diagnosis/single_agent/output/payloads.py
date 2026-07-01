@@ -41,6 +41,8 @@ def build_direct_complete_payload(
     planning_diff = dict(decision.planning_diff_summary or {})
     planner_gate = dict(decision.planner_gate_summary or {})
     diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
+    workorder_action_readiness = dict(planner_gate.get("workorder_action_readiness") or {})
+    manual_confirmation = dict(planner_gate.get("manual_confirmation") or {})
     return {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -58,7 +60,32 @@ def build_direct_complete_payload(
         "planning_diff": planning_diff,
         "planner_gate": planner_gate,
         "diagnosis_readiness": diagnosis_readiness,
+        "workorder_action_readiness": workorder_action_readiness,
+        "manual_confirmation": manual_confirmation,
         "authorization": decision.authorization,
+        "workflow_route": {
+            "primary_task_type": decision.primary_task_type,
+            "task_family": decision.task_family,
+            "task_family_reason": decision.task_family_reason,
+            "task_family_source": decision.task_family_source,
+            "task_family_warnings": decision.task_family_warnings,
+            "candidate_task_types": decision.candidate_task_types,
+            "intent_stack": decision.intent_stack,
+            "goal_set": goal_set,
+            "shadow_plan": shadow_plan,
+            "planning_diff": planning_diff,
+            "planner_gate": planner_gate,
+            "diagnosis_readiness": diagnosis_readiness,
+            "workorder_action_readiness": workorder_action_readiness,
+            "manual_confirmation": manual_confirmation,
+            "resolved_context": resolved_context,
+            "relation_to_previous": decision.relation_to_previous,
+            "plan_mode": decision.plan_mode,
+            "evidence_mode": decision.evidence_mode,
+            "missing_or_stale_evidence": decision.missing_or_stale_evidence,
+            "should_refresh_runtime_data": decision.should_refresh_runtime_data,
+            "action_target": decision.action_target,
+        },
         "ui_payload": build_ui_payload(decision=decision),
         "trace": trace.model_dump(exclude_none=True),
         "todos": [],
@@ -87,6 +114,8 @@ def build_report_handoff_complete_payload(
     planning_diff = dict(decision.planning_diff_summary or {})
     planner_gate = dict(decision.planner_gate_summary or {})
     diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
+    workorder_action_readiness = dict(planner_gate.get("workorder_action_readiness") or {})
+    manual_confirmation = dict(planner_gate.get("manual_confirmation") or {})
     return {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -104,6 +133,8 @@ def build_report_handoff_complete_payload(
         "planning_diff": planning_diff,
         "planner_gate": planner_gate,
         "diagnosis_readiness": diagnosis_readiness,
+        "workorder_action_readiness": workorder_action_readiness,
+        "manual_confirmation": manual_confirmation,
         "authorization": decision.authorization,
         "ui_payload": build_ui_payload(decision=decision, report_artifact=report_artifact),
         "todos": todos,
@@ -120,6 +151,8 @@ def build_report_handoff_complete_payload(
             "planning_diff": planning_diff,
             "planner_gate": planner_gate,
             "diagnosis_readiness": diagnosis_readiness,
+            "workorder_action_readiness": workorder_action_readiness,
+            "manual_confirmation": manual_confirmation,
             "resolved_context": resolved_context,
             "context_resolution": decision.context_resolution,
             "active_case_id": decision.active_case_id,
@@ -175,6 +208,8 @@ def build_diagnosis_complete_payload(
     planning_diff = dict(decision.planning_diff_summary or {})
     planner_gate = dict(decision.planner_gate_summary or {})
     diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
+    workorder_action_readiness = dict(planner_gate.get("workorder_action_readiness") or {})
+    manual_confirmation = dict(planner_gate.get("manual_confirmation") or {})
     complete_payload = {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -192,6 +227,8 @@ def build_diagnosis_complete_payload(
         "planning_diff": planning_diff,
         "planner_gate": planner_gate,
         "diagnosis_readiness": diagnosis_readiness,
+        "workorder_action_readiness": workorder_action_readiness,
+        "manual_confirmation": manual_confirmation,
         "authorization": decision.authorization,
         "sql_artifact": sql_artifact.model_dump(exclude_none=True),
         "knowledge_artifact": knowledge_artifact.model_dump(exclude_none=True),
@@ -228,6 +265,8 @@ def build_diagnosis_complete_payload(
             "planning_diff": planning_diff,
             "planner_gate": planner_gate,
             "diagnosis_readiness": diagnosis_readiness,
+            "workorder_action_readiness": workorder_action_readiness,
+            "manual_confirmation": manual_confirmation,
             "resolved_context": resolved_context,
             "context_resolution": decision.context_resolution,
             "active_case_id": decision.active_case_id,
