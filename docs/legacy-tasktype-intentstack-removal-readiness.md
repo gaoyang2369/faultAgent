@@ -139,3 +139,42 @@ Remaining blockers before true removal:
 - public contracts, output renderers/templates, planner/gate contracts, tests/evals, and artifact compatibility still require the fields.
 
 Next phase: Phase 5.4 can start localized internal legacy removal planning, but public schema removal is still blocked. The immediate safe target is reducing the workflow policy fallback path only where evals prove no enabled-node or runtime-tool expansion.
+
+## Phase 5.4 Internal Legacy Removal Result
+
+Phase 5.4 moved remaining low-risk internal readers behind compatibility helpers and clarified the scan into internal execution metrics versus compatibility assertions.
+
+Migrated:
+
+- output rendering, security authorization, and local dev mode now use `single_agent/compat/legacy_intent.py` for deprecated task values.
+- workflow policy node resolution continues to use GoalSet/task-family axes and no longer uses direct legacy intent fields in the main resolver.
+- planner/diff/gate compatibility projections remain centralized through the compat adapter.
+- `legacy_dependency_scan.py` primary read/write counts now exclude tests/evals/scripts and report them separately as compatibility dependencies.
+
+Removed:
+
+- direct `primary_task_type` reads from renderer/security/dev-mode execution helpers
+- enum-based SQL conditional checks in the policy node resolver
+
+Not removed:
+
+- public `TaskType`, `primary_task_type`, `candidate_task_types`, or `intent_stack`
+- SSE complete, `/chat/plan`, artifact, trace, or eval compatibility outputs
+- legacy artifact compatibility reads
+- action/workorder dry-run and manual-confirmation guardrails
+
+Scan result from Phase 5.3 baseline:
+
+- Internal `TaskType` read/write files: `27/28` -> `10/3`
+- Internal `intent_stack` read/write files: `15/15` -> `5/2`
+- All compatibility references, including tests/evals/scripts: `TaskType 25/27`, `intent_stack 16/15`
+- policy dependency files: `1` -> `1`
+- `disallowed_dependency_hits`: `0`
+
+Remaining blockers before true removal:
+
+- `workflow/policies.py` still keeps the legacy policy registry and fallback/parity check.
+- `workflow/router.py` still creates public compatibility projections.
+- public contracts, output templates/contracts, planning/gate contracts, tests/evals, and artifact compatibility still require legacy fields.
+
+Next phase: Phase 5.5 can prepare public compatibility stabilization and removal criteria. It should not remove fields yet; it should prove consumers can tolerate compatibility-only fields becoming optional or separately versioned.

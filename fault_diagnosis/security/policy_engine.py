@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from fault_diagnosis.single_agent.compat import legacy_task_value
+
 from .contracts import AuthContext, AuthorizationDecision
 from .assets import asset_is_in_scope
 from .permissions import effective_resource_scope
@@ -33,7 +35,7 @@ def _requested_assets(decision: Any) -> list[str]:
 
 
 def authorize_workflow(auth: AuthContext, decision: Any) -> AuthorizationDecision:
-    task_type = str(getattr(decision, "primary_task_type", "status_query") or "status_query")
+    task_type = legacy_task_value(decision, default="status_query")
     permission = WORKFLOW_PERMISSION_BY_TASK.get(task_type)
     resource_scope = effective_resource_scope(auth)
     data_scope = resource_scope.model_dump()

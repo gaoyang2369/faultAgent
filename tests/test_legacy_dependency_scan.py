@@ -9,13 +9,15 @@ def test_legacy_dependency_scan_finds_policy_and_intent_stack_dependencies() -> 
     policy_paths = {item["path"] for item in payload["categories"]["policy_logic"]}
     task_paths = {item["path"] for item in payload["task_type"]["readers"] + payload["task_type"]["writers"]}
     intent_paths = {item["path"] for item in payload["intent_stack"]["readers"] + payload["intent_stack"]["writers"]}
+    compatibility_paths = {item["path"] for item in payload["categories"]["test_or_eval"]}
 
     assert "fault_diagnosis/single_agent/workflow/policies.py" in policy_paths
     assert "fault_diagnosis/single_agent/workflow/evidence_gap.py" not in policy_paths
     assert "fault_diagnosis/single_agent/stages.py" not in policy_paths
     assert "fault_diagnosis/single_agent/compat/legacy_intent.py" in intent_paths
-    assert any(path.startswith("tests/") for path in task_paths)
-    assert any(path.startswith("tests/") for path in intent_paths)
+    assert not any(path.startswith("tests/") for path in task_paths)
+    assert not any(path.startswith("tests/") for path in intent_paths)
+    assert any(path.startswith("tests/") for path in compatibility_paths)
     assert payload["readiness"]["can_delete_task_type_now"] is False
     assert payload["readiness"]["can_delete_intent_stack_now"] is False
 

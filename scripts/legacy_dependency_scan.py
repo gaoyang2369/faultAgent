@@ -63,27 +63,39 @@ def run_scan(root: Path = ROOT) -> dict[str, object]:
     intent_writes = _filter_writes(intent_hits, fields=("intent_stack",))
     task_reads = _subtract_hits(task_hits, task_writes)
     intent_reads = _subtract_hits(intent_hits, intent_writes)
+    internal_task_reads = _internal_hits(task_reads)
+    internal_task_writes = _internal_hits(task_writes)
+    internal_intent_reads = _internal_hits(intent_reads)
+    internal_intent_writes = _internal_hits(intent_writes)
 
     payload: dict[str, object] = {
         "schema_version": "legacy_dependency_scan.v1",
         "root": str(root),
         "summary": {
-            "task_type_read_files": len(_paths(task_reads)),
-            "task_type_write_files": len(_paths(task_writes)),
-            "intent_stack_read_files": len(_paths(intent_reads)),
-            "intent_stack_write_files": len(_paths(intent_writes)),
+            "task_type_read_files": len(_paths(internal_task_reads)),
+            "task_type_write_files": len(_paths(internal_task_writes)),
+            "intent_stack_read_files": len(_paths(internal_intent_reads)),
+            "intent_stack_write_files": len(_paths(internal_intent_writes)),
+            "all_task_type_read_files": len(_paths(task_reads)),
+            "all_task_type_write_files": len(_paths(task_writes)),
+            "all_intent_stack_read_files": len(_paths(intent_reads)),
+            "all_intent_stack_write_files": len(_paths(intent_writes)),
             "test_or_eval_dependency_files": len(_paths(_category_hits([*task_hits, *intent_hits], "test_or_eval"))),
             "frontend_dependency_files": len(_paths(_category_hits([*task_hits, *intent_hits], "frontend"))),
             "artifact_schema_dependency_files": len(_paths(_category_hits([*task_hits, *intent_hits], "artifact_schema"))),
             "policy_dependency_files": len(_paths(_category_hits([*task_hits, *intent_hits], "policy_logic"))),
         },
         "task_type": {
-            "readers": [hit.to_dict() for hit in task_reads],
-            "writers": [hit.to_dict() for hit in task_writes],
+            "readers": [hit.to_dict() for hit in internal_task_reads],
+            "writers": [hit.to_dict() for hit in internal_task_writes],
+            "all_readers": [hit.to_dict() for hit in task_reads],
+            "all_writers": [hit.to_dict() for hit in task_writes],
         },
         "intent_stack": {
-            "readers": [hit.to_dict() for hit in intent_reads],
-            "writers": [hit.to_dict() for hit in intent_writes],
+            "readers": [hit.to_dict() for hit in internal_intent_reads],
+            "writers": [hit.to_dict() for hit in internal_intent_writes],
+            "all_readers": [hit.to_dict() for hit in intent_reads],
+            "all_writers": [hit.to_dict() for hit in intent_writes],
         },
         "categories": {
             "test_or_eval": [hit.to_dict() for hit in _category_hits([*task_hits, *intent_hits], "test_or_eval")],
@@ -178,6 +190,18 @@ def _category_hits(hits: list[Hit], category: str) -> list[Hit]:
 
 def _paths(hits: list[Hit]) -> set[str]:
     return {hit.path for hit in hits}
+
+
+def _internal_hits(hits: list[Hit]) -> list[Hit]:
+    return [
+        hit
+        for hit in _unique_hits(hits)
+        if not (
+            hit.path.startswith("tests/")
+            or hit.path.startswith("scripts/")
+            or hit.path.startswith("agent_fronted/")
+        )
+    ]
 
 
 def _unique_hits(hits: list[Hit]) -> list[Hit]:

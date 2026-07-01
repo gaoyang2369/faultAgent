@@ -66,8 +66,8 @@ def sync_goal_projection_for_legacy_route(route: Any) -> None:
 def project_task_type_for_compat(route_or_decision: Any) -> dict[str, Any]:
     """Return deprecated task-type fields for compatibility consumers."""
 
-    primary = _enum_value(getattr(route_or_decision, "primary_task_type", None))
-    candidates = [_enum_value(item) for item in list(getattr(route_or_decision, "candidate_task_types", []) or [])]
+    primary = _enum_value(_field(route_or_decision, "primary_task_type"))
+    candidates = [_enum_value(item) for item in list(_field(route_or_decision, "candidate_task_types", []) or [])]
     return {
         "primary_task_type": primary or "fault_diagnosis",
         "candidate_task_types": _dedupe(candidates),
@@ -175,7 +175,7 @@ def project_plan_axis_fields_for_compat(route_or_decision: Any) -> dict[str, Any
 def legacy_task_value(route_or_decision: Any, *, default: str = "fault_diagnosis") -> str:
     """Return the deprecated primary task value for compatibility fallbacks."""
 
-    primary = _enum_value(getattr(route_or_decision, "primary_task_type", None))
+    primary = _enum_value(_field(route_or_decision, "primary_task_type"))
     return primary or default
 
 
@@ -188,8 +188,8 @@ def is_legacy_task(route_or_decision: Any, *task_values: str) -> bool:
 def legacy_intents(route_or_decision: Any) -> list[str]:
     """Return deprecated intent projection with GoalSet preferred for new logic."""
 
-    goal_projection = _intent_stack_projection(getattr(route_or_decision, "goal_set", {}) or {})
-    raw_intents = _strings(getattr(route_or_decision, "intent_stack", []) or [])
+    goal_projection = _intent_stack_projection(_field(route_or_decision, "goal_set", {}) or {})
+    raw_intents = _strings(_field(route_or_decision, "intent_stack", []) or [])
     return _dedupe([*goal_projection, *raw_intents])
 
 
@@ -342,6 +342,12 @@ def _model_validate_like(original: Any, data: dict[str, Any]) -> Any:
     if hasattr(model_type, "model_validate"):
         return model_type.model_validate(data)
     return data
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
 
 
 def _missing_compat(value: Any) -> bool:

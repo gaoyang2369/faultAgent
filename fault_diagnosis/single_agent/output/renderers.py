@@ -16,6 +16,7 @@ from ...diagnosis.contracts import (
     WorkOrderSuggestion,
 )
 from ...security.assets import resolve_asset
+from ..compat import legacy_task_value
 from ..contracts import SingleAgentDecision
 from ..reporting import extract_report_url
 from .contracts import OutputContract, OutputSectionContract, RenderedAnswer, RenderedSection
@@ -53,9 +54,9 @@ def render_final_answer(
     sql_artifact: SqlStepArtifact | None = None,
     knowledge_artifact: KnowledgeStepArtifact | None = None,
 ) -> RenderedAnswer:
-    """Render the final answer selected by ``decision.primary_task_type``."""
+    """Render the final answer selected by the compatibility task value."""
 
-    task_type = coerce_task_type(decision.primary_task_type)
+    task_type = coerce_task_type(legacy_task_value(decision))
     contract = get_output_contract(task_type)
     context = _RenderContext(
         decision=decision,
@@ -444,7 +445,7 @@ def _limitations_text(context: _RenderContext) -> str:
         return _sql_boundary_text(context)
     if data_state == "empty":
         return "授权范围内没有返回可用运行数据，本次不能判断设备正常、异常或根因。"
-    if context.decision.primary_task_type == "report_generation" and _report_blocked_by_authorization(context):
+    if legacy_task_value(context.decision) == "report_generation" and _report_blocked_by_authorization(context):
         return "当前身份缺少报告生成权限，本次不形成故障诊断报告、根因结论或健康评估。"
     missing = context.missing_evidence()
     if missing:
@@ -465,7 +466,7 @@ def _report_title(context: _RenderContext) -> str:
         title = str(getattr(artifact, "report_title", "") or "").strip()
         if title:
             return title
-    if context.decision.primary_task_type == "report_generation" and not _report_generated(context):
+    if legacy_task_value(context.decision) == "report_generation" and not _report_generated(context):
         return "DCMA 权限受限状态摘要"
     goal = str(context.decision.user_goal or "").strip()
     if "运行" in goal and "报告" in goal:

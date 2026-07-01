@@ -61,12 +61,12 @@ def test_legacy_deprecation_check_can_write_to_custom_output_dir(tmp_path: Path)
     assert payload["summary"]["disallowed_dependency_hits"] == 0
 
 
-def test_phase5_3_legacy_dependency_scan_metrics_drop_from_phase5_2_baseline() -> None:
+def test_phase5_4_internal_legacy_dependency_scan_metrics_drop_from_phase5_3_baseline() -> None:
     payload = run_scan(ROOT)
     summary = payload["summary"]
 
-    assert summary["task_type_read_files"] <= 28
-    assert summary["task_type_write_files"] <= 28
-    assert summary["intent_stack_read_files"] <= 15
-    assert summary["intent_stack_write_files"] <= 15
+    assert summary["task_type_read_files"] <= 20
+    assert summary["task_type_write_files"] <= 20
+    assert summary["intent_stack_read_files"] <= 10
+    assert summary["intent_stack_write_files"] <= 10
     assert summary["policy_dependency_files"] <= 3

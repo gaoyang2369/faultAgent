@@ -335,11 +335,11 @@ def select_policy_from_intent_axes(route: TaskRoute) -> WorkflowPolicy:
     axes disagree with the legacy-selected policy, keep legacy execution.
     """
 
-    legacy_policy = get_policy(legacy_task_value(route))
     axis_task = _task_type_from_axes(route)
     if axis_task is None:
-        return legacy_policy
+        return get_policy(legacy_task_value(route))
     axis_policy = POLICIES[axis_task]
+    legacy_policy = get_policy(legacy_task_value(route))
     if axis_policy.policy_id != legacy_policy.policy_id:
         return legacy_policy
     return axis_policy
@@ -507,9 +507,9 @@ def _resolve_node(
             return False
         if "assess_severity" in goals and route.has_device_context():
             return True
-        if policy.task_type in {TaskType.ALARM_TRIAGE, TaskType.KNOWLEDGE_QA}:
+        if policy.policy_id in {"alarm_triage_v1", "knowledge_qa_v1"}:
             return bool(route.has_device_context() and flags.get("need_sql"))
-        if policy.task_type == TaskType.REPORT_GENERATION:
+        if policy.policy_id == "report_generation_v1":
             return bool(flags.get("need_sql"))
         return bool(
             flags.get("need_sql")
