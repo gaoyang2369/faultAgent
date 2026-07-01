@@ -109,9 +109,8 @@ def test_build_workflow_plan_does_not_read_shadow_plan() -> None:
     assert changed.runtime_tools == baseline.runtime_tools
 
 
-def test_execution_policy_and_tools_do_not_reference_task_family() -> None:
+def test_execution_tools_do_not_reference_task_family_as_runtime_input() -> None:
     paths = [
-        ROOT / "fault_diagnosis/single_agent/workflow/policies.py",
         ROOT / "fault_diagnosis/single_agent/workflow/evidence_gap.py",
         ROOT / "fault_diagnosis/single_agent/stages.py",
         ROOT / "fault_diagnosis/single_agent/sql_safety.py",

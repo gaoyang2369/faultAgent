@@ -83,6 +83,75 @@ def project_route_fields_for_compat(route_or_decision: Any) -> dict[str, Any]:
     }
 
 
+def legacy_planning_input_fields_for_compat(source: Any | None = None, legacy_kwargs: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return deprecated PlanningInput fields from a route, decision, or kwargs."""
+
+    legacy_kwargs = dict(legacy_kwargs or {})
+    if isinstance(source, dict):
+        source = _DictObject(source)
+    if source is None:
+        source = _DictObject(legacy_kwargs)
+    route_fields = project_route_fields_for_compat(source)
+    primary = legacy_kwargs.get("primary_task_type", route_fields["primary_task_type"])
+    intents = legacy_kwargs.get("intent_stack", route_fields["intent_stack"])
+    return {
+        "primary_task_type": _enum_value(primary) or "fault_diagnosis",
+        "intent_stack": _dedupe(_strings(intents)),
+    }
+
+
+def legacy_projection_for_shadow_plan(planning_input: Any, legacy: dict[str, Any]) -> dict[str, Any]:
+    """Return the shadow-plan legacy projection without leaking field reads."""
+
+    return {
+        "legacy_primary_task_type": legacy_task_value(planning_input, default=""),
+        "legacy_intent_stack": legacy_intents(planning_input),
+        "legacy_enabled_nodes": legacy.get("legacy_enabled_nodes") or legacy.get("enabled_nodes"),
+        "legacy_runtime_tools": legacy.get("legacy_runtime_tools") or legacy.get("runtime_tools"),
+        "legacy_requested_output": legacy.get("legacy_requested_output") or legacy.get("requested_output"),
+        "legacy_evidence_mode": legacy.get("legacy_evidence_mode") or legacy.get("evidence_mode"),
+        "legacy_should_refresh_runtime_data": bool(
+            legacy.get("legacy_should_refresh_runtime_data", legacy.get("should_refresh_runtime_data", False))
+        ),
+    }
+
+
+def legacy_projection_warnings_for_planning_input(planning_input: Any) -> list[str]:
+    """Return compatibility warnings for missing deprecated planning fields."""
+
+    warnings: list[str] = []
+    if not legacy_task_value(planning_input, default=""):
+        warnings.append("missing_legacy_primary_task_type")
+    if not legacy_intents(planning_input):
+        warnings.append("missing_legacy_intent_stack")
+    return warnings
+
+
+def merge_legacy_projection_for_planning_diff(legacy: dict[str, Any], projection: dict[str, Any]) -> dict[str, Any]:
+    """Merge shadow legacy_projection into diff legacy view."""
+
+    merged = dict(legacy)
+    mapping = {
+        "primary_task_type": "legacy_primary_task_type",
+        "intent_stack": "legacy_intent_stack",
+        "enabled_nodes": "legacy_enabled_nodes",
+        "runtime_tools": "legacy_runtime_tools",
+        "requested_output": "legacy_requested_output",
+        "evidence_mode": "legacy_evidence_mode",
+        "should_refresh_runtime_data": "legacy_should_refresh_runtime_data",
+    }
+    for key, projection_key in mapping.items():
+        if _missing_compat(merged.get(key)) and projection_key in projection:
+            merged[key] = projection.get(projection_key)
+    return merged
+
+
+def planner_gate_task_fields_for_compat(route_or_decision: Any) -> dict[str, Any]:
+    """Return deprecated task fields accepted by PlannerGateDecision."""
+
+    return {"primary_task_type": legacy_task_value(route_or_decision, default="")}
+
+
 def build_task_payload_for_compat(route_or_decision: Any, *, include_task_type_alias: bool = False) -> dict[str, Any]:
     """Return legacy task metadata for evidence/artifact compatibility."""
 
@@ -273,6 +342,21 @@ def _model_validate_like(original: Any, data: dict[str, Any]) -> Any:
     if hasattr(model_type, "model_validate"):
         return model_type.model_validate(data)
     return data
+
+
+def _missing_compat(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+class _DictObject:
+    def __init__(self, data: dict[str, Any]) -> None:
+        self._data = dict(data)
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self._data[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
 
 
 def _goal_dicts(values: Any) -> list[dict[str, Any]]:

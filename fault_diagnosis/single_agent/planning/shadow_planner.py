@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..compat import (
+    legacy_planning_input_fields_for_compat,
+    legacy_projection_for_shadow_plan,
+    legacy_projection_warnings_for_planning_input,
+    project_route_fields_for_compat,
+)
 from .contracts import EvidencePlan, NodePlan, OutputPlan, PlanningDecision, PlanningInput, ToolPlan
 from .summaries import summarize_shadow_plan
 
@@ -25,24 +31,24 @@ def build_planning_input(
     auth_summary: dict[str, Any] | None = None,
     resolved_context: dict[str, Any] | None = None,
     goal_set: dict[str, Any] | None = None,
-    primary_task_type: str = "",
-    intent_stack: list[str] | None = None,
+    legacy_route: dict[str, Any] | None = None,
     task_family: str = "",
     referenced_artifact_id: str | None = None,
     referenced_report_id: str | None = None,
     evidence_refs: list[str] | None = None,
+    **legacy_kwargs: Any,
 ) -> PlanningInput:
     """Build a normalized PlanningInput without side effects."""
 
     context = dict(resolved_context or {})
+    compat_fields = legacy_planning_input_fields_for_compat(legacy_route, legacy_kwargs)
     return PlanningInput(
         message=message,
         request_payload_summary=dict(request_payload_summary or {}),
         auth_summary=dict(auth_summary or {}),
         resolved_context=context,
         goal_set=dict(goal_set or {}),
-        primary_task_type=str(primary_task_type or ""),
-        intent_stack=list(intent_stack or []),
+        **compat_fields,
         task_family=str(task_family or ""),
         referenced_artifact_id=referenced_artifact_id or context.get("referenced_artifact_id"),
         referenced_report_id=referenced_report_id or context.get("referenced_report_id"),
@@ -102,17 +108,14 @@ def build_shadow_plan(planning_input: PlanningInput, legacy_plan: dict[str, Any]
         evidence_plan=evidence,
         tool_plan=tool_plan,
         output_plan=output,
-        legacy_projection={
-            "legacy_primary_task_type": planning_input.primary_task_type,
-            "legacy_intent_stack": list(planning_input.intent_stack),
-            "legacy_enabled_nodes": legacy_nodes,
-            "legacy_runtime_tools": legacy_runtime_tools,
-            "legacy_requested_output": legacy.get("legacy_requested_output") or legacy.get("requested_output"),
-            "legacy_evidence_mode": legacy.get("legacy_evidence_mode") or legacy.get("evidence_mode"),
-            "legacy_should_refresh_runtime_data": bool(
-                legacy.get("legacy_should_refresh_runtime_data", legacy.get("should_refresh_runtime_data", False))
-            ),
-        },
+        legacy_projection=legacy_projection_for_shadow_plan(
+            planning_input,
+            {
+                **legacy,
+                "legacy_enabled_nodes": legacy_nodes,
+                "legacy_runtime_tools": legacy_runtime_tools,
+            },
+        ),
         planner_warnings=list(dict.fromkeys(warnings)),
     )
     decision.planner_summary = _summary(decision)
@@ -134,8 +137,7 @@ def build_shadow_plan_for_decision(
         auth_summary=auth_summary or {},
         resolved_context=getattr(decision, "resolved_context", {}) or {},
         goal_set=getattr(decision, "goal_set", {}) or {},
-        primary_task_type=getattr(decision, "primary_task_type", ""),
-        intent_stack=list(getattr(decision, "intent_stack", []) or []),
+        legacy_route=project_route_fields_for_compat(decision),
         task_family=getattr(decision, "task_family", ""),
         referenced_artifact_id=getattr(decision, "referenced_artifact_id", None),
         referenced_report_id=(getattr(decision, "resolved_context", {}) or {}).get("referenced_report_id"),
@@ -332,10 +334,7 @@ def _apply_security_context_rules(
 
 
 def _apply_legacy_projection(planning_input: PlanningInput, legacy: dict[str, Any], warnings: list[str]) -> None:
-    if not planning_input.primary_task_type:
-        warnings.append("missing_legacy_primary_task_type")
-    if not planning_input.intent_stack:
-        warnings.append("missing_legacy_intent_stack")
+    warnings.extend(legacy_projection_warnings_for_planning_input(planning_input))
 
 
 def _node_plans(specs: dict[str, dict[str, Any]]) -> list[NodePlan]:

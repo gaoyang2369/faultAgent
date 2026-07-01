@@ -1,6 +1,6 @@
 # Legacy TaskType / intent_stack Removal Readiness
 
-Current status: `compatibility-only migration in progress`.
+Current status: `workflow policy migration in progress`.
 
 Phase 5.1 does not remove `TaskType`, `primary_task_type`, `candidate_task_types`, or `intent_stack`. These fields are now deprecated compatibility fields, but they are still required by existing execution and public-output surfaces.
 
@@ -100,3 +100,42 @@ Scan result:
 ## Next Phase
 
 Phase 5.3 should target workflow policy migration. It should move policy selection and conditional node resolution away from legacy task/intent fields while continuing to emit public compatibility fields until downstream consumers no longer require them.
+
+## Phase 5.3 Workflow Policy Migration Result
+
+Phase 5.3 reduced workflow policy dependency on `TaskType` / `intent_stack` as primary execution inputs.
+
+Migrated:
+
+- policy selection now enters through `select_policy_from_intent_axes(route)`, preferring task family, GoalSet goal types, resolved context, and action/workorder readiness-style fields.
+- node resolution now uses `resolve_nodes_from_goals(route)` for SQL, knowledge, analysis, report, recommendation, workorder, permission, risk, and audit nodes.
+- planning diff, shadow planner, and planner gate compatibility projections now route through `single_agent/compat/legacy_intent.py`.
+- GoalSet and task-family helpers no longer import the legacy `TaskType` enum solely for value normalization.
+
+Removed:
+
+- old duplicated `intent_stack` node-resolution branch in `workflow/policies.py`
+- unused planning diff `_missing` helper
+- repeated planning legacy projection/merge code outside the compat adapter
+
+Not removed:
+
+- public `TaskType`, `primary_task_type`, `candidate_task_types`, or `intent_stack` fields
+- SSE complete, `/chat/plan`, artifact, trace, or eval compatibility outputs
+- `workflow/policies.py` legacy policy registry and fallback path
+- action/workorder dry-run and manual confirmation guardrails
+
+Scan result from Phase 5.2 baseline:
+
+- `TaskType` read/write files: `33/33` -> `27/28`
+- `intent_stack` read/write files: `20/20` -> `15/15`
+- policy dependency files: `7` -> `1`
+- `disallowed_dependency_hits`: `0`
+
+Remaining blockers before true removal:
+
+- `workflow/policies.py` still owns the legacy policy registry and must keep fallback behavior while parity coverage grows.
+- `workflow/router.py` still generates compatibility projections.
+- public contracts, output renderers/templates, planner/gate contracts, tests/evals, and artifact compatibility still require the fields.
+
+Next phase: Phase 5.4 can start localized internal legacy removal planning, but public schema removal is still blocked. The immediate safe target is reducing the workflow policy fallback path only where evals prove no enabled-node or runtime-tool expansion.

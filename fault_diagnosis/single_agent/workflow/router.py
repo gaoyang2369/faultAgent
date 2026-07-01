@@ -140,7 +140,7 @@ def route_task(
         requested_output=requested_output,
         goals=list(goal_set.goals),
         resolved_context=resolved_context_payload,
-        intent_stack=intent_stack,
+        compat_intents=intent_stack,
     )
 
     return TaskRoute(

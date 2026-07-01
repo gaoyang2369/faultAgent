@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from ..compat import (
+    build_task_payload_for_compat,
+    goal_types,
+    legacy_task_value,
+    route_is_action_request,
+    route_requests_workorder_followup,
+)
 from .contracts import NodeSetting, TaskRoute, TaskType, WorkflowPlan, WorkflowPolicy
 
 _SQL_TOOLS = ["sql_db_query_checker", "sql_db_query"]
@@ -309,7 +316,7 @@ POLICIES: dict[TaskType, WorkflowPolicy] = {
 
 
 def get_policy(task_type: TaskType | str) -> WorkflowPolicy:
-    """Return the policy for ``task_type`` with fault diagnosis as fallback."""
+    """Deprecated fallback policy lookup for legacy task classifiers."""
 
     if isinstance(task_type, TaskType):
         normalized = task_type
@@ -321,10 +328,27 @@ def get_policy(task_type: TaskType | str) -> WorkflowPolicy:
     return POLICIES[normalized]
 
 
+def select_policy_from_intent_axes(route: TaskRoute) -> WorkflowPolicy:
+    """Select policy from task family, GoalSet, context and readiness axes.
+
+    The legacy classifier remains as a compatibility fallback. When the new
+    axes disagree with the legacy-selected policy, keep legacy execution.
+    """
+
+    legacy_policy = get_policy(legacy_task_value(route))
+    axis_task = _task_type_from_axes(route)
+    if axis_task is None:
+        return legacy_policy
+    axis_policy = POLICIES[axis_task]
+    if axis_policy.policy_id != legacy_policy.policy_id:
+        return legacy_policy
+    return axis_policy
+
+
 def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> WorkflowPlan:
     """Resolve policy nodes and runtime tool allowlist for a route."""
 
-    policy = get_policy(route.primary_task_type)
+    policy = select_policy_from_intent_axes(route)
     plan_mode_nodes = _nodes_for_plan_mode(route.plan_mode)
     if plan_mode_nodes is not None:
         return WorkflowPlan(
@@ -339,18 +363,18 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
                     for item in route.subgoals
                     if item.status == "blocked"
                 ],
-                "intent_stack": list(route.intent_stack),
-                "candidate_task_types": [item.value for item in route.candidate_task_types],
+                **build_task_payload_for_compat(route),
                 "plan_mode": route.plan_mode,
                 "evidence_mode": route.evidence_mode,
             },
         )
     node_names = set(policy.enabled_nodes)
-    node_names.update(_nodes_required_by_intents(route))
+    node_names.update(resolve_nodes_from_goals(route))
     resolved_nodes = {
         node_name: _resolve_node(
             node_name,
             policy.enabled_nodes.get(node_name, "conditional"),
+            policy=policy,
             route=route,
             needs_report=needs_report,
         )
@@ -368,8 +392,7 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
                 for item in route.subgoals
                 if item.status == "blocked"
             ],
-            "intent_stack": list(route.intent_stack),
-            "candidate_task_types": [item.value for item in route.candidate_task_types],
+            **build_task_payload_for_compat(route),
             "plan_mode": route.plan_mode,
             "evidence_mode": route.evidence_mode,
         },
@@ -408,20 +431,49 @@ def _nodes_for_plan_mode(plan_mode: str) -> dict[str, bool] | None:
     return None
 
 
-def _nodes_required_by_intents(route: TaskRoute) -> set[str]:
-    intents = set(route.intent_stack)
+def _task_type_from_axes(route: TaskRoute) -> TaskType | None:
+    goals = set(goal_types(route))
+    task_family = str(route.task_family or "")
+    relation = str((route.resolved_context or {}).get("relation_to_previous") or route.relation_to_previous or "")
+    if "answer_meta_question" in goals or task_family == "meta":
+        return TaskType.PERMISSION_SCOPE_QUERY
+    if "generate_report" in goals or route.requested_output == "report" or relation == "report_handoff":
+        return TaskType.REPORT_GENERATION
+    if task_family == "action_or_workorder" or route.action_type:
+        return TaskType.ACTION_REQUEST
+    if task_family == "runtime_status" or goals.intersection({"check_runtime_status", "refresh_current_status"}):
+        if not goals.difference({"check_runtime_status", "refresh_current_status"}):
+            return TaskType.STATUS_QUERY
+    if task_family == "knowledge_lookup":
+        return TaskType.KNOWLEDGE_QA
+    if task_family == "diagnosis":
+        if "diagnose_fault" in goals:
+            return TaskType.FAULT_DIAGNOSIS
+        if goals.intersection({"explain_fault_code", "recommend_resolution"}) and goals.intersection(
+            {"check_runtime_status", "refresh_current_status", "assess_severity"}
+        ):
+            return TaskType.ALARM_TRIAGE
+        if goals == {"assess_severity"}:
+            return TaskType.HEALTH_ASSESSMENT
+    return None
+
+
+def resolve_nodes_from_goals(route: TaskRoute) -> set[str]:
+    """Resolve node requirements from GoalSet/task-family/readiness axes."""
+
+    goals = set(goal_types(route))
     nodes: set[str] = {"analysis"}
-    if "explain_alarm_code" in intents:
+    if "explain_fault_code" in goals:
         nodes.add("knowledge")
-    if "check_current_status" in intents:
+    if goals.intersection({"check_runtime_status", "refresh_current_status"}):
         nodes.add("sql")
-    if intents.intersection({"fault_impact", "severity_assessment"}):
+    if goals.intersection({"diagnose_fault", "assess_severity"}):
         nodes.update({"sql", "knowledge", "analysis"})
-    if "resolution_recommendation" in intents:
+    if "recommend_resolution" in goals:
         nodes.update({"knowledge", "analysis", "resolution_recommendation"})
-    if "report_generation" in intents:
+    if "generate_report" in goals or route.requested_output == "report":
         nodes.add("report")
-    if "action_request" in intents:
+    if route_is_action_request(route):
         nodes.update(
             {
                 "permission_check",
@@ -433,11 +485,7 @@ def _nodes_required_by_intents(route: TaskRoute) -> set[str]:
                 "audit_log",
             }
         )
-    if "workorder_decision" in intents:
-        nodes.update({"permission_check", "risk_check", "workorder_decision", "audit_log"})
-    if "create_workorder_draft" in intents:
-        nodes.update({"permission_check", "risk_check", "workorder_decision", "audit_log"})
-    if "dispatch_workorder" in intents:
+    if route_requests_workorder_followup(route) and (route.flags.get("need_workorder_decision") or route.action_target == "workorder"):
         nodes.update({"permission_check", "risk_check", "workorder_decision", "audit_log"})
     return nodes
 
@@ -446,6 +494,7 @@ def _resolve_node(
     node_name: str,
     setting: NodeSetting,
     *,
+    policy: WorkflowPolicy,
     route: TaskRoute,
     needs_report: bool,
 ) -> bool:
@@ -453,28 +502,27 @@ def _resolve_node(
         return setting
     flags = route.flags
     if node_name == "sql":
-        if "check_current_status" in route.intent_stack and not route.has_device_context():
+        goals = set(goal_types(route))
+        if goals.intersection({"check_runtime_status", "refresh_current_status"}) and not route.has_device_context():
             return False
-        if (
-            set(route.intent_stack).intersection({"fault_impact", "severity_assessment"})
-            and route.has_device_context()
-        ):
+        if "assess_severity" in goals and route.has_device_context():
             return True
-        if route.primary_task_type in {TaskType.ALARM_TRIAGE, TaskType.KNOWLEDGE_QA}:
+        if policy.task_type in {TaskType.ALARM_TRIAGE, TaskType.KNOWLEDGE_QA}:
             return bool(route.has_device_context() and flags.get("need_sql"))
-        if route.primary_task_type == TaskType.REPORT_GENERATION:
+        if policy.task_type == TaskType.REPORT_GENERATION:
             return bool(flags.get("need_sql"))
         return bool(
             flags.get("need_sql")
             or route.has_device_context()
-            or route.primary_task_type == TaskType.ACTION_REQUEST
+            or route_is_action_request(route)
         )
     if node_name == "knowledge":
+        goals = set(goal_types(route))
         return bool(
             flags.get("need_knowledge")
             or route.objects.alarm_codes
             or flags.get("need_resolution")
-            or "explain_alarm_code" in route.intent_stack
+            or "explain_fault_code" in goals
         )
     if node_name == "resolution_recommendation":
         return bool(flags.get("need_resolution") or flags.get("need_analysis"))

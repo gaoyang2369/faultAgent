@@ -6,7 +6,7 @@ from typing import Any
 
 from fault_diagnosis import config
 
-from ..compat import legacy_intents, legacy_task_value, route_is_action_or_workorder
+from ..compat import legacy_intents, planner_gate_task_fields_for_compat, route_is_action_or_workorder
 from ..contracts import SingleAgentLimits
 from .action_readiness import build_workorder_action_readiness, summarize_workorder_action_readiness
 from .diagnosis_readiness import build_diagnosis_readiness, summarize_diagnosis_readiness
@@ -85,7 +85,6 @@ def build_planner_gate(
     shadow = _to_dict(shadow_plan)
     diff = _to_dict(planning_diff)
     task_family = str(getattr(decision, "task_family", "") or "")
-    primary_task_type = legacy_task_value(decision, default="")
     mode = _mode(settings, task_family=task_family)
     allowed_families = set(settings["task_families"])
     required_status = list(settings["required_diff_status"])
@@ -238,7 +237,7 @@ def build_planner_gate(
         selected_execution_source=selected_source,
         allowed_task_family=allowed_task_family,
         task_family=task_family,
-        primary_task_type=primary_task_type,
+        **planner_gate_task_fields_for_compat(decision),
         reasons=_dedupe(reasons),
         blockers=_dedupe(blockers),
         required_diff_status=required_status,

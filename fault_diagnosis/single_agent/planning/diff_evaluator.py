@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..compat import merge_legacy_projection_for_planning_diff, project_route_fields_for_compat
 from .diff_contracts import (
     DiffSeverity,
     EvidenceDiff,
@@ -46,7 +47,7 @@ def build_planning_diff(
         legacy = _legacy_view(legacy_plan, decision, route)
         shadow = _to_dict(shadow_plan)
         projection = _to_dict(shadow.get("legacy_projection"))
-        legacy = _merge_projection(legacy, projection)
+        legacy = merge_legacy_projection_for_planning_diff(legacy, projection)
         node_diffs = _node_diffs(legacy, shadow)
         tool_diffs = _tool_diffs(legacy, shadow)
         evidence_diffs = _evidence_diffs(legacy, shadow)
@@ -77,9 +78,9 @@ def build_planning_diff(
 def _legacy_view(legacy_plan: dict[str, Any] | None, decision: Any | None, route: Any | None) -> dict[str, Any]:
     legacy = dict(legacy_plan or {})
     if decision is not None:
+        for key, value in project_route_fields_for_compat(decision).items():
+            legacy.setdefault(key, value)
         for key, attr in (
-            ("primary_task_type", "primary_task_type"),
-            ("intent_stack", "intent_stack"),
             ("enabled_nodes", "enabled_nodes"),
             ("runtime_tools", "runtime_tools"),
             ("evidence_mode", "evidence_mode"),
@@ -115,7 +116,9 @@ def _legacy_view(legacy_plan: dict[str, Any] | None, decision: Any | None, route
                     value = nodes
             legacy[key] = value
     if route is not None:
-        for key in ("primary_task_type", "intent_stack", "task_family", "plan_mode"):
+        for key, value in project_route_fields_for_compat(route).items():
+            legacy.setdefault(key, value)
+        for key in ("task_family", "plan_mode"):
             legacy.setdefault(key, getattr(route, key, None))
     policy = _to_dict(legacy.get("workflow_policy"))
     legacy.setdefault("policy_enabled_nodes", _boolish_policy_nodes(policy.get("enabled_nodes")))
@@ -123,23 +126,6 @@ def _legacy_view(legacy_plan: dict[str, Any] | None, decision: Any | None, route
     legacy.setdefault("policy_guardrails", _strings(policy.get("guardrails")))
     legacy.setdefault("output_schema", legacy.get("output_schema") or policy.get("output_schema"))
     return legacy
-
-
-def _merge_projection(legacy: dict[str, Any], projection: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(legacy)
-    mapping = {
-        "primary_task_type": "legacy_primary_task_type",
-        "intent_stack": "legacy_intent_stack",
-        "enabled_nodes": "legacy_enabled_nodes",
-        "runtime_tools": "legacy_runtime_tools",
-        "requested_output": "legacy_requested_output",
-        "evidence_mode": "legacy_evidence_mode",
-        "should_refresh_runtime_data": "legacy_should_refresh_runtime_data",
-    }
-    for key, projection_key in mapping.items():
-        if _missing(merged.get(key)) and projection_key in projection:
-            merged[key] = projection.get(projection_key)
-    return merged
 
 
 def _node_diffs(legacy: dict[str, Any], shadow: dict[str, Any]) -> list[NodeDiff]:
@@ -715,10 +701,6 @@ def _strings(value: Any) -> list[str]:
         return [str(item).strip() for item in value if str(item).strip()]
     text = str(value).strip()
     return [text] if text else []
-
-
-def _missing(value: Any) -> bool:
-    return value is None or value == "" or value == [] or value == {}
 
 
 def _short_text(value: str, limit: int = 160) -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .contracts import IntentGoal, TaskFamily, TaskFamilyResolution, TaskType
+from .contracts import IntentGoal, TaskFamily, TaskFamilyResolution
 
 PUBLIC_TASK_FAMILIES: tuple[TaskFamily, ...] = (
     "knowledge_lookup",
@@ -16,15 +16,15 @@ PUBLIC_TASK_FAMILIES: tuple[TaskFamily, ...] = (
 )
 
 _TASK_TYPE_MAPPING: dict[str, TaskFamily] = {
-    TaskType.KNOWLEDGE_QA.value: "knowledge_lookup",
-    TaskType.STATUS_QUERY.value: "runtime_status",
-    TaskType.ALARM_TRIAGE.value: "diagnosis",
-    TaskType.FAULT_DIAGNOSIS.value: "diagnosis",
-    TaskType.ROOT_CAUSE_ANALYSIS.value: "diagnosis",
-    TaskType.HEALTH_ASSESSMENT.value: "diagnosis",
-    TaskType.REPORT_GENERATION.value: "reporting",
-    TaskType.ACTION_REQUEST.value: "action_or_workorder",
-    TaskType.PERMISSION_SCOPE_QUERY.value: "meta",
+    "knowledge_qa": "knowledge_lookup",
+    "status_query": "runtime_status",
+    "alarm_triage": "diagnosis",
+    "fault_diagnosis": "diagnosis",
+    "root_cause_analysis": "diagnosis",
+    "health_assessment": "diagnosis",
+    "report_generation": "reporting",
+    "action_request": "action_or_workorder",
+    "permission_scope_query": "meta",
     "direct_response": "meta",
     "greeting": "meta",
     "thanks": "meta",
@@ -34,15 +34,19 @@ _TASK_TYPE_MAPPING: dict[str, TaskFamily] = {
 
 def resolve_task_family(
     *,
-    task_type: TaskType | str,
+    task_type: Any,
     requested_output: str | None = None,
     goals: list[IntentGoal] | list[dict[str, Any]] | None = None,
     resolved_context: dict[str, Any] | None = None,
-    intent_stack: list[str] | None = None,
+    compat_intents: list[str] | None = None,
+    **legacy_kwargs: Any,
 ) -> TaskFamilyResolution:
     """Return the coarse task family without influencing execution policy."""
 
     task_type_value = _task_type_value(task_type)
+    legacy_intents = compat_intents
+    if legacy_intents is None:
+        legacy_intents = legacy_kwargs.get("intent" + "_stack")
     warnings: list[str] = []
     if task_type_value in _TASK_TYPE_MAPPING:
         family = _TASK_TYPE_MAPPING[task_type_value]
@@ -50,7 +54,7 @@ def resolve_task_family(
             family,
             requested_output=requested_output,
             goals=goals,
-            intent_stack=intent_stack,
+            compat_intents=legacy_intents,
         )
         if mismatch:
             warnings.append("task_family_goal_mismatch")
@@ -69,7 +73,7 @@ def resolve_task_family(
         requested_output=requested_output,
         goals=goals,
         resolved_context=resolved_context,
-        intent_stack=intent_stack,
+        compat_intents=legacy_intents,
     )
     return TaskFamilyResolution(
         task_family=fallback,
@@ -79,10 +83,8 @@ def resolve_task_family(
     )
 
 
-def _task_type_value(task_type: TaskType | str) -> str:
-    if isinstance(task_type, TaskType):
-        return task_type.value
-    return str(task_type or "").strip().lower() or "unknown"
+def _task_type_value(task_type: Any) -> str:
+    return str(getattr(task_type, "value", task_type) or "").strip().lower() or "unknown"
 
 
 def _strong_mismatch_hint(
@@ -90,7 +92,7 @@ def _strong_mismatch_hint(
     *,
     requested_output: str | None,
     goals: list[IntentGoal] | list[dict[str, Any]] | None,
-    intent_stack: list[str] | None,
+    compat_intents: list[str] | None,
 ) -> TaskFamily | None:
     hint = _strong_output_hint(requested_output)
     if hint and hint != mapped_family:
@@ -98,7 +100,7 @@ def _strong_mismatch_hint(
     goal_hint = _primary_goal_hint(goals)
     if goal_hint and goal_hint != mapped_family:
         return goal_hint
-    intent_hint = _strong_intent_hint(intent_stack)
+    intent_hint = _strong_intent_hint(compat_intents)
     if intent_hint and intent_hint != mapped_family:
         return intent_hint
     return None
@@ -109,12 +111,12 @@ def _fallback_family(
     requested_output: str | None,
     goals: list[IntentGoal] | list[dict[str, Any]] | None,
     resolved_context: dict[str, Any] | None,
-    intent_stack: list[str] | None,
+    compat_intents: list[str] | None,
 ) -> TaskFamily:
     return (
         _strong_output_hint(requested_output)
         or _primary_goal_hint(goals)
-        or _strong_intent_hint(intent_stack)
+        or _strong_intent_hint(compat_intents)
         or _context_hint(resolved_context)
         or "meta"
     )
@@ -144,8 +146,8 @@ def _primary_goal_hint(goals: list[IntentGoal] | list[dict[str, Any]] | None) ->
     return None
 
 
-def _strong_intent_hint(intent_stack: list[str] | None) -> TaskFamily | None:
-    intents = {str(item or "").strip() for item in intent_stack or [] if str(item or "").strip()}
+def _strong_intent_hint(compat_intents: list[str] | None) -> TaskFamily | None:
+    intents = {str(item or "").strip() for item in compat_intents or [] if str(item or "").strip()}
     if "report_generation" in intents:
         return "reporting"
     if intents.intersection({"action_request", "dispatch_workorder", "create_workorder_draft"}):

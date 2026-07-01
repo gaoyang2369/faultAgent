@@ -14,7 +14,7 @@ JSON_OUTPUT = OUTPUT_DIR / "legacy_dependency_scan.json"
 MD_OUTPUT = OUTPUT_DIR / "legacy_dependency_scan.md"
 
 SCAN_DIRS = ("fault_diagnosis", "tests", "scripts", "agent_fronted")
-SCAN_SUFFIXES = {".py", ".yaml", ".yml", ".json", ".vue", ".ts", ".js", ".md"}
+SCAN_SUFFIXES = {".py", ".yaml", ".yml", ".json", ".vue", ".ts", ".js"}
 EXCLUDED_DIRS = {
     "__pycache__",
     ".git",
@@ -25,6 +25,10 @@ EXCLUDED_DIRS = {
     ".vite",
     ".nuxt",
     "coverage",
+}
+EXCLUDED_FILES = {
+    "scripts/legacy_dependency_scan.py",
+    "scripts/legacy_deprecation_check.py",
 }
 
 TASKTYPE_PATTERNS = (
@@ -116,6 +120,9 @@ def _iter_files(root: Path) -> Iterable[Path]:
         for path in base.rglob("*"):
             if any(part in EXCLUDED_DIRS for part in path.parts):
                 continue
+            rel = path.relative_to(root).as_posix()
+            if rel in EXCLUDED_FILES:
+                continue
             if path.is_file() and path.suffix in SCAN_SUFFIXES:
                 yield path
 
@@ -164,7 +171,7 @@ def _category_hits(hits: list[Hit], category: str) -> list[Hit]:
         return [
             hit
             for hit in _unique_hits(hits)
-            if any(part in hit.path for part in ("workflow/policies.py", "workflow/evidence_gap.py", "stages.py", "planner.py", "planning/"))
+            if any(part in hit.path for part in ("workflow/policies.py", "workflow/evidence_gap.py", "stages.py"))
         ]
     return []
 

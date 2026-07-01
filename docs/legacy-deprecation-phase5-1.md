@@ -101,3 +101,36 @@ Remaining deletion blockers:
 - public contracts, output templates/renderers, planner comparison contracts, tests/evals, and artifact compatibility still expose or assert legacy fields.
 
 Next step: Phase 5.3 should focus on workflow policy migration. It should move policy selection and conditional node resolution toward GoalSet/task-family/readiness inputs while continuing to emit the public legacy fields.
+
+## Phase 5.3 Workflow Policy Migration Result
+
+Phase 5.3 moved the workflow policy selector and node-resolution logic toward GoalSet/task-family axes while keeping legacy execution fallback.
+
+Migrated internal dependencies:
+
+- `workflow/policies.py` now selects through `select_policy_from_intent_axes(route)`, using task family, GoalSet goal types, resolved context, and readiness-style action/workorder fields first.
+- `resolve_nodes_from_goals(route)` replaces the duplicated `intent_stack` branch for SQL, knowledge, analysis, report, recommendation, workorder, permission, risk, and audit nodes.
+- If GoalSet/task-family axes disagree with the legacy policy selection, execution falls back to the legacy policy unless the result is already proven safe.
+- `planning/diff_evaluator.py`, `planning/gate.py`, and `planning/shadow_planner.py` now obtain deprecated compatibility fields through `single_agent/compat/legacy_intent.py`.
+- `workflow/goals.py` and `workflow/task_family.py` no longer import the `TaskType` enum just to normalize compatibility values.
+
+Deleted or reduced old code:
+
+- Removed the old `_nodes_required_by_intents` branch in `workflow/policies.py`.
+- Removed the unused `_missing` helper from `planning/diff_evaluator.py`.
+- Removed repeated planning legacy-field merge/projection logic from planning modules and centralized it in the compat adapter.
+
+Current scan movement from the Phase 5.2 baseline:
+
+- `TaskType` read/write files: `33/33` -> `27/28`
+- `intent_stack` read/write files: `20/20` -> `15/15`
+- policy dependency files: `7` -> `1`
+- `disallowed_dependency_hits`: remains `0`
+
+Remaining deletion blockers:
+
+- `workflow/policies.py` still retains `TaskType` policy registry and legacy fallback.
+- `workflow/router.py` still generates compatibility fields.
+- public contracts, output templates/renderers, planner/gate contracts, tests/evals, and artifact compatibility still expose or assert legacy fields.
+
+Next step: Phase 5.4 can plan internal legacy removal locally, but public fields still cannot be removed. The safest next target is workflow policy fallback reduction after more eval coverage proves GoalSet/task-family policy parity.

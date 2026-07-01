@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .contracts import GoalSet, IntentGoal, TaskType, WorkflowObjects
+from .contracts import GoalSet, IntentGoal, WorkflowObjects
 
 GOAL_PRIORITY = {
     "clarify_missing_context": 0,
@@ -365,9 +365,7 @@ def _goal_dicts(value: Any) -> list[dict[str, Any]]:
 
 
 def _task_type_value(value: Any) -> str:
-    if isinstance(value, TaskType):
-        return value.value
-    return str(value or "")
+    return str(getattr(value, "value", value) or "")
 
 
 def _object_values(objects: Any, key: str) -> list[str]:
