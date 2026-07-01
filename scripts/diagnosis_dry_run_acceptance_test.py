@@ -133,7 +133,7 @@ def scenario_ambiguous_context(client: TestClient, stats: list[dict[str, Any]]) 
     assert_execution_unchanged(snapshot)
     ready = readiness(snapshot)
     assert_true(ready["ready_for_active"] is False, "F ready_for_active must stay false")
-    assert_true(ready["blocked_reason_count"] > 0, "F must be blocked")
+    assert_true(bool(planner_gate(snapshot)["blockers"]), "F must be blocked")
     stats.append(ready)
 
 
@@ -146,7 +146,7 @@ def scenario_unauthorized_inheritance(client: TestClient, stats: list[dict[str, 
     assert_execution_unchanged(snapshot)
     assert_true("J1" not in text and "A07089" not in text, "G readiness must not leak details")
     ready = readiness(snapshot)
-    assert_true(ready["blocked_reason_count"] > 0, "G must be blocked")
+    assert_true(bool(planner_gate(snapshot)["blockers"]), "G must be blocked")
     stats.append(ready)
 
 

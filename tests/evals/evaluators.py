@@ -83,6 +83,7 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
         or planner_gate.get("selected_execution_source")
         or planner_gate.get("mode_in")
         or diagnosis_readiness.get("diagnosis_mode")
+        or diagnosis_readiness.get("active_mode_in")
         or diagnosis_readiness.get("recommended_next_phase")
         or diagnosis_readiness.get("recommended_next_phase_in")
         or intent.get("intent_stack_contains")
@@ -261,6 +262,16 @@ def evaluate_planner_gate_expectations(
         max_rank = SEVERITY_RANK.get(str(max_severity), 99)
         if actual_rank > max_rank:
             failures.append(f"planner_gate.max_diff_severity: expected <= {max_severity!r}, got {(snapshot.get('planning_diff') or {}).get('severity')!r}")
+    contains_scope = expected.get("active_scope_contains") or []
+    if contains_scope:
+        missing_scope = sorted(item for item in contains_scope if item not in set(gate.get("active_scope") or []))
+        if missing_scope:
+            failures.append(f"planner_gate.active_scope: missing {missing_scope!r}")
+    absent_scope = expected.get("active_scope_absent") or []
+    if absent_scope:
+        present_scope = sorted(item for item in absent_scope if item in set(gate.get("active_scope") or []))
+        if present_scope:
+            failures.append(f"planner_gate.active_scope: forbidden scope present {present_scope!r}")
 
 
 def evaluate_diagnosis_readiness_expectations(
@@ -283,6 +294,15 @@ def evaluate_diagnosis_readiness_expectations(
         failures.append(
             f"diagnosis_readiness.ready_for_active: expected {expected.get('ready_for_active')!r}, got {readiness.get('ready_for_active')!r}"
         )
+    if "active_allowed" in expected and bool(readiness.get("active_allowed")) is not bool(expected.get("active_allowed")):
+        failures.append(
+            f"diagnosis_readiness.active_allowed: expected {expected.get('active_allowed')!r}, got {readiness.get('active_allowed')!r}"
+        )
+    active_modes = expected.get("active_mode_in") or []
+    if active_modes and readiness.get("active_mode") not in active_modes:
+        failures.append(
+            f"diagnosis_readiness.active_mode: expected one of {active_modes!r}, got {readiness.get('active_mode')!r}"
+        )
     expect_equal(
         failures,
         {"diagnosis_readiness": readiness},
@@ -295,15 +315,28 @@ def evaluate_diagnosis_readiness_expectations(
             f"diagnosis_readiness.recommended_next_phase: expected one of {allowed_next!r}, got {readiness.get('recommended_next_phase')!r}"
         )
     min_blocked = expected.get("min_blocked_reason_count")
-    if min_blocked is not None and int(readiness.get("blocked_reason_count") or 0) < int(min_blocked):
+    actual_blockers = int(readiness.get("active_blocker_count") or readiness.get("blocked_reason_count") or 0)
+    if min_blocked is not None and actual_blockers < int(min_blocked):
         failures.append(
-            f"diagnosis_readiness.blocked_reason_count: expected >= {min_blocked!r}, got {readiness.get('blocked_reason_count')!r}"
+            f"diagnosis_readiness.active_blocker_count: expected >= {min_blocked!r}, got {actual_blockers!r}"
         )
     max_missing = expected.get("max_missing_critical_evidence_count")
     if max_missing is not None and int(readiness.get("missing_critical_evidence_count") or 0) > int(max_missing):
         failures.append(
             f"diagnosis_readiness.missing_critical_evidence_count: expected <= {max_missing!r}, got {readiness.get('missing_critical_evidence_count')!r}"
         )
+    contains = expected.get("required_blockers_contains") or []
+    if contains:
+        blockers = set((snapshot.get("planner_gate") or {}).get("blockers") or [])
+        missing = sorted(item for item in contains if item not in blockers)
+        if missing:
+            failures.append(f"diagnosis_readiness.blockers: missing {missing!r}")
+    forbidden_scope = expected.get("forbidden_active_scope_contains") or []
+    if forbidden_scope:
+        scope = set(readiness.get("active_scope") or [])
+        present = sorted(item for item in forbidden_scope if item in scope)
+        if present:
+            failures.append(f"diagnosis_readiness.active_scope: forbidden scope present {present!r}")
 
 
 def evaluate_trace_case(case: dict[str, Any], events: list[dict[str, Any]], complete: dict[str, Any]) -> EvalResult:

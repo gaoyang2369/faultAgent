@@ -40,10 +40,12 @@ Full contract fields:
 Compact output fields:
 
 - `diagnosis_mode`
-- `evidence_complete`
 - `ready_for_active`
+- `active_allowed`
+- `active_mode`
+- `active_scope`
+- `active_blocker_count`
 - `missing_critical_evidence_count`
-- `blocked_reason_count`
 - `recommended_next_phase`
 
 ## Evidence Completeness
@@ -79,7 +81,7 @@ RCA and health assessment stay conservative. Their default recommendation is `mo
 
 ## Active Boundary
 
-`ready_for_active` is always `false` in this phase. `diagnosis_dry_run_only` and `diagnosis_active_not_enabled` remain planner-gate blockers for diagnosis tasks.
+`ready_for_active` and `active_allowed` are always `false` in this phase. `diagnosis_dry_run_only` and `diagnosis_active_not_enabled` remain planner-gate blockers for diagnosis tasks.
 
 Action and workorder paths remain blocked. This phase does not create, dispatch, close, execute, or modify workorders, and it does not perform device reset, stop/start, or parameter writes.
 

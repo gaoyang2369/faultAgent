@@ -129,9 +129,14 @@ cases:
       enabled_nodes:
       - sql
       - knowledge
+    planner_gate:
+      selected_execution_source: legacy_policy
     diagnosis_readiness:
       diagnosis_mode: alarm_triage
       ready_for_active: false
+      active_allowed: false
+      active_mode_in:
+      - dry_run
       recommended_next_phase: candidate_for_limited_active
     context:
       source: current_message
@@ -201,9 +206,14 @@ cases:
       max_severity: error
       no_critical: true
       migration_ready: false
+    planner_gate:
+      selected_execution_source: legacy_policy
     diagnosis_readiness:
       diagnosis_mode: fault_diagnosis
       ready_for_active: false
+      active_allowed: false
+      active_mode_in:
+      - dry_run
       recommended_next_phase: candidate_for_limited_active
     context:
       source: current_message
@@ -255,9 +265,14 @@ cases:
       enabled_nodes:
       - sql
       - analysis
+    planner_gate:
+      selected_execution_source: legacy_policy
     diagnosis_readiness:
       diagnosis_mode: health_assessment
       ready_for_active: false
+      active_allowed: false
+      active_mode_in:
+      - dry_run
       recommended_next_phase_in:
       - keep_legacy
       - more_eval
@@ -408,9 +423,14 @@ cases:
       - sql
       - knowledge
       - analysis
+    planner_gate:
+      selected_execution_source: legacy_policy
     diagnosis_readiness:
       diagnosis_mode: root_cause_analysis
       ready_for_active: false
+      active_allowed: false
+      active_mode_in:
+      - dry_run
       recommended_next_phase_in:
       - keep_legacy
       - more_eval

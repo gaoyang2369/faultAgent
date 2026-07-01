@@ -30,5 +30,6 @@ class PlannerGateDecision(BaseModel):
     planner_runtime_tools: list[str] = Field(default_factory=list)
     final_runtime_tools: list[str] = Field(default_factory=list)
     final_enabled_nodes: list[str] = Field(default_factory=list)
+    active_scope: list[str] = Field(default_factory=list)
     fallback_to_legacy: bool = True
     safety_summary: dict[str, Any] = Field(default_factory=dict)

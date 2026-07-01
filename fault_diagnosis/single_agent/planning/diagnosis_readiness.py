@@ -1,4 +1,4 @@
-"""Diagnosis dry-run readiness for Phase 4.4.1."""
+"""Diagnosis readiness for Phase 4.4 dry-run and limited active phases."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ DiagnosisMode = Literal[
     "unknown",
 ]
 RecommendedNextPhase = Literal["keep_legacy", "more_eval", "candidate_for_limited_active"]
+DiagnosisActiveMode = Literal["disabled", "dry_run", "limited_explanation"]
 
 _DIAGNOSIS_TASK_TYPES = {
     "alarm_triage",
@@ -32,10 +33,15 @@ _SEVERITY_RANK = {"none": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
 class DiagnosisReadiness(BaseModel):
     schema_version: str = DIAGNOSIS_READINESS_SCHEMA_VERSION
     ready_for_active: bool = False
+    active_allowed: bool = False
+    active_mode: DiagnosisActiveMode = "disabled"
+    active_scope: list[str] = Field(default_factory=list)
+    active_blockers: list[str] = Field(default_factory=list)
     evidence_complete: bool = False
     has_runtime_status: bool = False
     has_manual_reference: bool = False
     has_alarm_or_fault_context: bool = False
+    claims_have_supporting_evidence: bool = False
     stale_evidence_disclosed: bool = False
     missing_critical_evidence: list[str] = Field(default_factory=list)
     blocked_reasons: list[str] = Field(default_factory=list)
@@ -91,7 +97,6 @@ def build_diagnosis_readiness(
         shadow_nodes.intersection({"knowledge"})
         or legacy_nodes.get("knowledge")
         or runtime_tools.intersection(_KNOWLEDGE_TOOLS)
-        or required_evidence.intersection({"knowledge_source", "manual_or_fault_code_reference", "recommended_actions"})
     )
     has_alarm_or_fault = bool(
         objects.get("alarm_codes")
@@ -102,6 +107,12 @@ def build_diagnosis_readiness(
         )
     )
     has_analysis = bool(shadow_nodes.intersection({"analysis"}) or legacy_nodes.get("analysis"))
+    claims_have_support = _claims_have_supporting_evidence(
+        missing_evidence=missing_evidence,
+        required_evidence=required_evidence,
+        shadow_nodes=shadow_nodes,
+        legacy_nodes=legacy_nodes,
+    )
     missing_slots = set(_strings(getattr(decision, "missing_slots", []) or []))
     blockers: list[str] = []
     missing: list[str] = []
@@ -143,6 +154,9 @@ def build_diagnosis_readiness(
         blockers.append("shadow_tools_exceed_legacy_runtime_tools")
     if _would_skip_safety_node(legacy_nodes, shadow_nodes):
         blockers.append("diagnosis_would_skip_safety_node")
+    if not claims_have_support:
+        blockers.append("claims_without_supporting_evidence")
+        missing.append("claim_supporting_evidence")
     if missing_evidence and not disclosures:
         blockers.append("missing_evidence_not_disclosed")
     if missing and not disclosures and not stale_disclosed:
@@ -174,6 +188,7 @@ def build_diagnosis_readiness(
         has_runtime_status=has_runtime,
         has_manual_reference=has_manual,
         has_alarm_or_fault_context=has_alarm_or_fault,
+        claims_have_supporting_evidence=claims_have_support,
         stale_evidence_disclosed=stale_disclosed,
         missing_critical_evidence=missing,
         blocked_reasons=blockers,
@@ -190,10 +205,12 @@ def summarize_diagnosis_readiness(value: Any) -> dict[str, Any]:
     blocked = list(data.get("blocked_reasons") or [])
     return {
         "diagnosis_mode": data.get("diagnosis_mode", "unknown"),
-        "evidence_complete": bool(data.get("evidence_complete", False)),
-        "ready_for_active": False,
+        "ready_for_active": bool(data.get("ready_for_active", False)),
+        "active_allowed": bool(data.get("active_allowed", False)),
+        "active_mode": data.get("active_mode", "disabled"),
+        "active_scope": list(data.get("active_scope") or []),
+        "active_blocker_count": len(list(data.get("active_blockers") or [])),
         "missing_critical_evidence_count": len(missing),
-        "blocked_reason_count": len(blocked),
         "recommended_next_phase": data.get("recommended_next_phase", "keep_legacy"),
     }
 
@@ -247,6 +264,22 @@ def _would_skip_safety_node(legacy_nodes: dict[str, bool], shadow_nodes: set[str
     for node in ("evidence_validation", "output_guardrail"):
         if legacy_nodes.get(node) and node not in shadow_nodes:
             return True
+    return False
+
+
+def _claims_have_supporting_evidence(
+    *,
+    missing_evidence: set[str],
+    required_evidence: set[str],
+    shadow_nodes: set[str],
+    legacy_nodes: dict[str, bool],
+) -> bool:
+    if missing_evidence.intersection({"claim_supporting_evidence", "claims_supporting_evidence", "claims_without_supporting_evidence"}):
+        return False
+    if required_evidence.intersection({"diagnosis_basis", "severity_basis", "report_evidence"}):
+        return True
+    if shadow_nodes.intersection({"analysis", "evidence_validation"}) or legacy_nodes.get("analysis"):
+        return True
     return False
 
 
