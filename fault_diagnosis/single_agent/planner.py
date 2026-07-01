@@ -10,6 +10,7 @@ from ..diagnosis.steps import build_request_from_payload
 from ..context import summarize_resolved_context
 from ..security.contracts import AuthContext
 from ..security.policy_engine import apply_authorization_to_decision, authorize_workflow
+from .compat import project_plan_axis_fields_for_compat, project_route_fields_for_compat
 from .context import ContextManager
 from .intent import fallback_understanding_payload, decide_capabilities
 from .planning import (
@@ -132,6 +133,8 @@ def build_plan_snapshot(
     manual_confirmation = dict(planner_gate_summary.get("manual_confirmation") or {})
     decision.planner_gate_summary = planner_gate_summary
     decision = apply_planner_gate_to_decision(decision, planner_gate)
+    legacy_axis_fields = project_plan_axis_fields_for_compat(decision)
+    legacy_route_fields = project_route_fields_for_compat(decision)
 
     enabled_nodes = {key: bool(value) for key, value in (decision.enabled_nodes or {}).items() if value}
     skipped_nodes = {key: False for key, value in (decision.enabled_nodes or {}).items() if not value}
@@ -153,10 +156,8 @@ def build_plan_snapshot(
         goals=_compact_goals(decision.goals),
         intent_stack_projection=list(goal_set_summary.get("intent_stack_projection") or []),
         intent_axes={
-            "domain_task": decision.primary_task_type,
+            **legacy_axis_fields,
             "task_family": decision.task_family,
-            "candidate_task_types": decision.candidate_task_types,
-            "intent_stack": decision.intent_stack,
             "intent_stack_projection": list(goal_set_summary.get("intent_stack_projection") or []),
             "continuation_type": decision.relation_to_previous,
             "object_binding": decision.objects,
@@ -172,12 +173,10 @@ def build_plan_snapshot(
             "manual_confirmation": manual_confirmation,
         },
         workflow_route={
-            "primary_task_type": decision.primary_task_type,
+            **legacy_route_fields,
             "task_family": decision.task_family,
             "task_family_reason": decision.task_family_reason,
             "task_family_source": decision.task_family_source,
-            "candidate_task_types": decision.candidate_task_types,
-            "intent_stack": decision.intent_stack,
             "goal_set": goal_set_summary,
             "relation_to_previous": decision.relation_to_previous,
             "plan_mode": decision.plan_mode,

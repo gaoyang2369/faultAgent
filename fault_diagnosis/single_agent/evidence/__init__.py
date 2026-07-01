@@ -17,6 +17,7 @@ from ...diagnosis.contracts import (
     WorkOrderSuggestion,
 )
 from ...diagnosis.analysis.contracts import StructuredAnalysisArtifact
+from ..compat import build_task_payload_for_compat
 from ..contracts import SingleAgentDecision
 from .claims import build_claims
 from .knowledge import build_knowledge_evidence_items
@@ -40,10 +41,7 @@ def initialize_evidence_bundle(
     workflow_id = str(workflow_policy.get("workflow_id") or WORKFLOW_ID)
     workflow_version = str(workflow_policy.get("version") or WORKFLOW_VERSION)
     task = {
-        "task_type": decision.primary_task_type or "fault_diagnosis",
-        "primary_task_type": decision.primary_task_type or "fault_diagnosis",
-        "candidate_task_types": decision.candidate_task_types,
-        "intent_stack": decision.intent_stack,
+        **build_task_payload_for_compat(decision, include_task_type_alias=True),
         "context_resolution": decision.context_resolution,
         "active_case_id": decision.active_case_id,
         "relation_to_previous": decision.relation_to_previous,

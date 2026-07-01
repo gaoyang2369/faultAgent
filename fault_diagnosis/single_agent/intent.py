@@ -6,6 +6,15 @@ import re
 from typing import Any
 
 from ..diagnosis.contracts import DiagnosisRequest
+from .compat import (
+    ensure_legacy_intent,
+    has_legacy_intent,
+    is_legacy_task,
+    legacy_intents,
+    legacy_task_value,
+    project_route_fields_for_compat,
+    sync_goal_projection_for_legacy_route,
+)
 from .context import ConversationDiagnosisState
 from .contracts import SingleAgentDecision
 from .workflow import analyze_evidence_gap, build_workflow_plan, route_task
@@ -254,12 +263,13 @@ def decide_capabilities(
     if needs_report:
         route.flags["need_report"] = True
     _apply_plan_mode_flags(route)
-    _sync_goal_projection_after_route_adjustments(route)
+    sync_goal_projection_for_legacy_route(route)
 
     plan = build_workflow_plan(route, needs_report=needs_report)
     needs_sql = plan.resolved_nodes.get("sql", False)
     needs_knowledge = plan.resolved_nodes.get("knowledge", False)
     needs_report = plan.resolved_nodes.get("report", False)
+    route_fields = project_route_fields_for_compat(route)
 
     if report_from_previous_artifact:
         return SingleAgentDecision(
@@ -267,13 +277,11 @@ def decide_capabilities(
             needs_knowledge=needs_knowledge,
             needs_report=True,
             report_from_previous_artifact=True,
-            primary_task_type=route.primary_task_type.value,
+            **route_fields,
             task_family=route.task_family,
             task_family_reason=route.task_family_reason,
             task_family_source=route.task_family_source,
             task_family_warnings=route.task_family_warnings,
-            candidate_task_types=[item.value for item in route.candidate_task_types],
-            intent_stack=route.intent_stack,
             goals=[item.model_dump(exclude_none=True) for item in route.goals],
             goal_set=route.goal_set,
             resolved_context=route.resolved_context,
@@ -309,27 +317,26 @@ def decide_capabilities(
         )
 
     reason_parts = [
-        f"任务类型 {route.primary_task_type.value}",
+        f"任务类型 {legacy_task_value(route)}",
         "需要 SQL" if needs_sql else "跳过 SQL",
         "需要知识库" if needs_knowledge else "跳过知识库",
         "需要报告" if needs_report else "跳过报告",
     ]
     if plan.metadata.get("blocked_subgoals"):
         reason_parts.append("存在可继续但需披露的 blocked subgoal")
-    if route.intent_stack:
-        reason_parts.append(f"意图栈 {', '.join(route.intent_stack)}")
+    route_intents = legacy_intents(route)
+    if route_intents:
+        reason_parts.append(f"意图栈 {', '.join(route_intents)}")
     return SingleAgentDecision(
         needs_sql=needs_sql,
         needs_knowledge=needs_knowledge,
         needs_report=needs_report,
         report_from_previous_artifact=False,
-        primary_task_type=route.primary_task_type.value,
+        **route_fields,
         task_family=route.task_family,
         task_family_reason=route.task_family_reason,
         task_family_source=route.task_family_source,
         task_family_warnings=route.task_family_warnings,
-        candidate_task_types=[item.value for item in route.candidate_task_types],
-        intent_stack=route.intent_stack,
         goals=[item.model_dump(exclude_none=True) for item in route.goals],
         goal_set=route.goal_set,
         resolved_context=route.resolved_context,
@@ -378,8 +385,7 @@ def _apply_evidence_gap_to_route(route: Any, gap_plan: Any) -> None:
     if gap_plan.reason:
         route.flags["evidence_gap_reason"] = True
     if gap_plan.plan_mode in {"workorder_decision_from_artifact", "status_refresh_then_workorder", "new_diagnosis_then_workorder"}:
-        if "workorder_decision" not in route.intent_stack:
-            route.intent_stack.append("workorder_decision")
+        ensure_legacy_intent(route, "workorder_decision")
         route.action_target = "workorder"
 
 
@@ -411,27 +417,6 @@ def _apply_plan_mode_flags(route: Any) -> None:
         route.flags["need_workorder_decision"] = True
 
 
-def _sync_goal_projection_after_route_adjustments(route: Any) -> None:
-    """Keep debug goal projection aligned after legacy route adjustments."""
-
-    goal_set = dict(getattr(route, "goal_set", {}) or {})
-    if not goal_set:
-        return
-    projection = list(goal_set.get("intent_stack_projection") or [])
-    changed = False
-    for intent in route.intent_stack:
-        if intent not in projection:
-            projection.append(intent)
-            changed = True
-    if changed:
-        goal_set["intent_stack_projection"] = projection
-        summary = str(goal_set.get("goal_summary") or "").strip()
-        suffix = "projection synchronized with legacy route adjustments"
-        goal_set["goal_summary"] = f"{summary}；{suffix}" if summary else suffix
-        route.goal_set = goal_set
-        route.goal_summary = goal_set["goal_summary"]
-
-
 def _backfill_resolved_context_from_legacy(route: Any) -> None:
     if route.resolved_context:
         return
@@ -439,7 +424,7 @@ def _backfill_resolved_context_from_legacy(route: Any) -> None:
     if not context:
         return
     relation = route.relation_to_previous
-    if route.primary_task_type.value == "report_generation" and (
+    if is_legacy_task(route, "report_generation") and (
         context.get("last_evidence_bundle_id") or context.get("last_report_url")
     ):
         relation = "report_handoff"
@@ -508,11 +493,10 @@ def _apply_resolved_context_to_route(route: Any, resolved_context: Any) -> None:
             "freshness",
             "recommended_action_policy",
         ]
-        if "workorder_decision" not in route.intent_stack:
-            route.intent_stack.append("workorder_decision")
+        ensure_legacy_intent(route, "workorder_decision")
         route.action_target = "workorder"
     elif relation == "refresh_current_status":
-        route.plan_mode = "status_refresh_then_workorder" if "workorder_decision" in route.intent_stack else "refresh_current_status"
+        route.plan_mode = "status_refresh_then_workorder" if has_legacy_intent(route, "workorder_decision") else "refresh_current_status"
         route.evidence_mode = "reuse_and_refresh_status"
         route.missing_or_stale_evidence = list(
             dict.fromkeys([*route.missing_or_stale_evidence, "latest_realtime_status"])
@@ -521,8 +505,7 @@ def _apply_resolved_context_to_route(route: Any, resolved_context: Any) -> None:
     elif relation == "report_handoff":
         route.plan_mode = "report_from_artifact"
         route.evidence_mode = "reuse_previous_artifact"
-        if "report_generation" not in route.intent_stack:
-            route.intent_stack.append("report_generation")
+        ensure_legacy_intent(route, "report_generation")
     elif relation == "continuation":
         route.plan_mode = "explain_from_artifact" if route.referenced_artifact_id else "normal"
     elif relation == "ambiguous":

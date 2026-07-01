@@ -11,6 +11,7 @@ from ..common.logger import get_logger
 from ..diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from ..security.audit import get_security_audit_logger
 from ..security.policy_engine import apply_authorization_to_decision, authorize_workflow
+from .compat import legacy_task_value, project_route_fields_for_compat, project_task_type_for_compat
 from .contracts import SingleAgentDecision
 from .evidence import build_evidence_bundle, build_output_guardrail_result, initialize_evidence_bundle
 from .intent import build_lightweight_conversation_reply
@@ -200,7 +201,7 @@ class SingleAgentFlowMixin:
                 auth=self.auth_context,
                 decision=self.authorization_decision,
                 trace_id=self.trace_id,
-                resource={"task_type": decision.primary_task_type},
+                resource={"task_type": legacy_task_value(decision)},
             )
             self._record_artifact(
                 "authorization",
@@ -258,13 +259,11 @@ class SingleAgentFlowMixin:
             self._record_artifact(
                 "workflow_route",
                 {
-                    "primary_task_type": decision.primary_task_type,
+                    **project_route_fields_for_compat(decision),
                     "task_family": decision.task_family,
                     "task_family_reason": decision.task_family_reason,
                     "task_family_source": decision.task_family_source,
                     "task_family_warnings": decision.task_family_warnings,
-                    "candidate_task_types": decision.candidate_task_types,
-                    "intent_stack": decision.intent_stack,
                     "goals": decision.goals,
                     "goal_set": decision.goal_set,
                     "goal_summary": (decision.goal_set or {}).get("goal_summary", ""),
@@ -301,7 +300,7 @@ class SingleAgentFlowMixin:
                 "select_workflow_policy",
                 stage_started,
                 message=(
-                    f"{decision.workflow_policy.get('policy_id', decision.primary_task_type)}："
+                    f"{decision.workflow_policy.get('policy_id', legacy_task_value(decision))}："
                     f"启用节点 {', '.join(name for name, enabled in decision.enabled_nodes.items() if enabled) or '无工具节点'}"
                 ),
             )
@@ -531,7 +530,7 @@ class SingleAgentFlowMixin:
                         "planner_gate": decision.planner_gate_summary,
                         "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
                         "workflow_policy_id": decision.workflow_policy.get("policy_id"),
-                        "primary_task_type": decision.primary_task_type,
+                        **project_task_type_for_compat(decision),
                     },
                 )
                 complete_payload = build_diagnosis_complete_payload(
@@ -968,7 +967,7 @@ class SingleAgentFlowMixin:
                     "report_filename": report_artifact.report_filename,
                     "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
                     "workflow_policy_id": decision.workflow_policy.get("policy_id"),
-                    "primary_task_type": decision.primary_task_type,
+                    **project_task_type_for_compat(decision),
                 },
             )
 

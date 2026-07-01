@@ -15,6 +15,7 @@ from ...diagnosis.contracts import (
     WorkOrderSuggestion,
 )
 from ..contracts import SingleAgentDecision
+from ..compat import route_is_action_request
 from ..output.contracts import RenderedAnswer
 from ..output.renderers import ACTION_SAFE_FALLBACK, DANGEROUS_ACTION_COMPLETION_PATTERNS
 from .utils import first_non_empty
@@ -72,7 +73,7 @@ def build_output_guardrail_result(
         warnings.append("final_answer_empty")
     if rendered_answer is not None:
         warnings.extend(_validate_rendered_answer(rendered_answer))
-    if decision is not None and decision.primary_task_type == "action_request":
+    if decision is not None and route_is_action_request(decision):
         if _contains_dangerous_action_completion(final_answer):
             warnings.append("unsafe_action_execution_claim")
     if decision is not None and decision.action_type in {"create_workorder", "dispatch_workorder"}:
@@ -102,7 +103,7 @@ def build_output_guardrail_result(
     if guest_status_only and re.search(r"(?:根因|诊断结论|健康评分)[：:]", final_answer):
         warnings.append("guest_diagnosis_claim")
     safe_rewrite = ""
-    if decision is not None and decision.primary_task_type == "action_request" and "unsafe_action_execution_claim" in warnings:
+    if decision is not None and route_is_action_request(decision) and "unsafe_action_execution_claim" in warnings:
         safe_rewrite = ACTION_SAFE_FALLBACK
     return {
         "passed": not warnings,

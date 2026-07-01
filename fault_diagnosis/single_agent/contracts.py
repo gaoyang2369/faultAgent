@@ -30,7 +30,13 @@ class SingleAgentDecision(BaseModel):
     needs_knowledge: bool = False
     needs_report: bool = False
     report_from_previous_artifact: bool = False
-    primary_task_type: str = "fault_diagnosis"
+    primary_task_type: str = Field(
+        default="fault_diagnosis",
+        description=(
+            "Deprecated compatibility field: serialized legacy primary workflow "
+            "classifier retained for policy/frontend/eval/artifact compatibility."
+        ),
+    )
     task_family: str = "diagnosis"
     task_family_reason: str = ""
     task_family_source: str = "task_type_mapping"
@@ -38,8 +44,17 @@ class SingleAgentDecision(BaseModel):
     shadow_plan_summary: dict[str, Any] = Field(default_factory=dict)
     planning_diff_summary: dict[str, Any] = Field(default_factory=dict)
     planner_gate_summary: dict[str, Any] = Field(default_factory=dict)
-    candidate_task_types: list[str] = Field(default_factory=list)
-    intent_stack: list[str] = Field(default_factory=list)
+    candidate_task_types: list[str] = Field(
+        default_factory=list,
+        description="Deprecated compatibility field: legacy alternate task-type projection.",
+    )
+    intent_stack: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Deprecated compatibility field: legacy policy intent projection built "
+            "from GoalSet projection plus legacy candidates."
+        ),
+    )
     goals: list[dict[str, Any]] = Field(default_factory=list)
     goal_set: dict[str, Any] = Field(default_factory=dict)
     resolved_context: dict[str, Any] = Field(default_factory=dict)

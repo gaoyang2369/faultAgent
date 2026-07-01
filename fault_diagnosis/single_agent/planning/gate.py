@@ -6,6 +6,7 @@ from typing import Any
 
 from fault_diagnosis import config
 
+from ..compat import legacy_intents, legacy_task_value, route_is_action_or_workorder
 from ..contracts import SingleAgentLimits
 from .action_readiness import build_workorder_action_readiness, summarize_workorder_action_readiness
 from .diagnosis_readiness import build_diagnosis_readiness, summarize_diagnosis_readiness
@@ -84,7 +85,7 @@ def build_planner_gate(
     shadow = _to_dict(shadow_plan)
     diff = _to_dict(planning_diff)
     task_family = str(getattr(decision, "task_family", "") or "")
-    primary_task_type = str(getattr(decision, "primary_task_type", "") or "")
+    primary_task_type = legacy_task_value(decision, default="")
     mode = _mode(settings, task_family=task_family)
     allowed_families = set(settings["task_families"])
     required_status = list(settings["required_diff_status"])
@@ -148,7 +149,7 @@ def build_planner_gate(
         )
         _extend_blockers(blockers, workorder_action_readiness.blockers)
         reasons.append("workorder_action_dry_run_observation")
-    if task_family == "action_or_workorder" or primary_task_type == "action_request" or getattr(decision, "action_type", None):
+    if route_is_action_or_workorder(decision):
         blockers.append("action_or_workorder_not_migrated")
     decision_risk = str(getattr(decision, "risk_level", "") or "")
     if decision_risk in _BLOCKED_RISK_LEVELS:
@@ -330,9 +331,7 @@ def _settings(overrides: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _is_workorder_or_action(decision: Any, shadow: dict[str, Any]) -> bool:
-    task_family = str(getattr(decision, "task_family", "") or "")
-    primary_task_type = str(getattr(decision, "primary_task_type", "") or "")
-    if task_family == "action_or_workorder" or primary_task_type == "action_request" or getattr(decision, "action_type", None):
+    if route_is_action_or_workorder(decision):
         return True
     output = _to_dict(shadow.get("output_plan"))
     if str(output.get("expected_output") or "") in {"workorder_decision", "workorder_draft"}:
@@ -348,7 +347,7 @@ def _is_workorder_or_action(decision: Any, shadow: dict[str, Any]) -> bool:
                 getattr(decision, "user_goal", "") or "",
                 getattr(decision, "action_type", "") or "",
                 getattr(decision, "action_target", "") or "",
-                *list(getattr(decision, "intent_stack", []) or []),
+                *legacy_intents(decision),
             ]
         )
     ).lower()
@@ -498,7 +497,7 @@ def _needs_runtime_for_active(decision: Any, readiness: dict[str, Any], shadow: 
 
 
 def _pure_knowledge_explanation(decision: Any, shadow: dict[str, Any]) -> bool:
-    intents = set(_strings(getattr(decision, "intent_stack", []) or []))
+    intents = set(legacy_intents(decision))
     shadow_nodes = _shadow_enabled_nodes(shadow)
     return bool("explain_alarm_code" in intents and "check_current_status" not in intents and "sql" not in shadow_nodes)
 
@@ -506,7 +505,7 @@ def _pure_knowledge_explanation(decision: Any, shadow: dict[str, Any]) -> bool:
 def _needs_manual_for_active(decision: Any, readiness: dict[str, Any]) -> bool:
     if readiness.get("has_alarm_or_fault_context"):
         return True
-    intents = set(_strings(getattr(decision, "intent_stack", []) or []))
+    intents = set(legacy_intents(decision))
     return bool(intents.intersection({"explain_alarm_code", "resolution_recommendation"}))
 
 

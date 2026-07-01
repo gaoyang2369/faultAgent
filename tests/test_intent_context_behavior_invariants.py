@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from fault_diagnosis.diagnosis.contracts import DiagnosisRequest
+from fault_diagnosis.single_agent.contracts import AgentTrace, SingleAgentDecision
 from fault_diagnosis.single_agent.intent import decide_capabilities, fallback_understanding_payload
+from fault_diagnosis.single_agent.output.payloads import build_direct_complete_payload
 from fault_diagnosis.single_agent.planning import apply_planner_gate_to_decision, build_planner_gate
 from fault_diagnosis.single_agent.workflow import TaskRoute, TaskType, build_workflow_plan, route_task
 
@@ -184,5 +186,77 @@ def test_diagnosis_dry_run_planner_gate_does_not_change_execution_projection() -
 
     assert decision.task_family == "diagnosis"
     assert gate.selected_execution_source == "legacy_policy"
+    assert decision.enabled_nodes == before_nodes
+    assert decision.runtime_tools == before_tools
+
+
+def test_public_complete_payload_still_outputs_legacy_task_fields() -> None:
+    decision = _decision("J1 的 A07089 现在还在报警吗，怎么处理")
+    payload = build_direct_complete_payload(
+        thread_id="thread.legacy",
+        trace_id="trace.legacy",
+        request_id="request.legacy",
+        final_answer="ok",
+        decision=decision,
+        trace=AgentTrace(
+            trace_id="trace.legacy",
+            request_id="request.legacy",
+            thread_id="thread.legacy",
+            user_identity="tester",
+            user_message="test",
+        ),
+        event_count=0,
+    )
+
+    assert payload["decision"]["primary_task_type"] == "alarm_triage"
+    assert "candidate_task_types" in payload["decision"]
+    assert "intent_stack" in payload["decision"]
+    assert payload["workflow_route"]["primary_task_type"] == "alarm_triage"
+    assert payload["workflow_route"]["intent_stack"] == decision.intent_stack
+
+
+def test_high_risk_action_or_workorder_gate_remains_dry_run_only() -> None:
+    decision = SingleAgentDecision(
+        primary_task_type="action_request",
+        task_family="action_or_workorder",
+        intent_stack=["action_request", "create_workorder_draft"],
+        goal_set={"goals": [{"goal_type": "decide_workorder", "risk_level": "requires_confirmation"}]},
+        enabled_nodes={
+            "permission_check": True,
+            "risk_check": True,
+            "sql": True,
+            "knowledge": True,
+            "analysis": True,
+            "workorder_decision": True,
+            "output_guardrail": True,
+            "audit_log": True,
+        },
+        runtime_tools=["sql_db_query_checker", "sql_db_query", "query_knowledge_base"],
+        authorization={"mode": "allow"},
+        action_type="创建工单草稿",
+        action_target="workorder",
+        risk_level="requires_confirmation",
+        satisfied_evidence=["diagnosis_summary", "severity_or_status_level", "key_evidence", "recommended_action_policy"],
+    )
+    before_nodes = dict(decision.enabled_nodes)
+    before_tools = list(decision.runtime_tools)
+    shadow = {
+        "nodes": [{"node": node, "desired_state": "enabled"} for node, enabled in before_nodes.items() if enabled],
+        "tool_plan": {"authorized_runtime_tools": list(before_tools)},
+        "output_plan": {"expected_output": "workorder_decision", "required_disclosures": []},
+    }
+
+    gate = build_planner_gate(
+        decision=decision,
+        shadow_plan=shadow,
+        planning_diff={"overall_status": "aligned", "severity": "none", "counters": {}},
+        config_overrides={"enabled": True, "dry_run": False, "diagnosis_dry_run": True, "diagnosis_active": True},
+    )
+    apply_planner_gate_to_decision(decision, gate)
+
+    readiness = gate.safety_summary.get("workorder_action_readiness") or {}
+    assert gate.selected_execution_source == "legacy_policy"
+    assert readiness["dry_run_only"] is True
+    assert readiness["ready_for_active"] is False
     assert decision.enabled_nodes == before_nodes
     assert decision.runtime_tools == before_tools

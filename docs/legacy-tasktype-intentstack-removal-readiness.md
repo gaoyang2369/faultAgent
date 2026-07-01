@@ -1,79 +1,102 @@
 # Legacy TaskType / intent_stack Removal Readiness
 
-Phase 4.4R does not remove `TaskType`, `primary_task_type`, or `intent_stack`. It only records the dependency surface that must be retired before removal.
+Current status: `compatibility-only migration in progress`.
+
+Phase 5.1 does not remove `TaskType`, `primary_task_type`, `candidate_task_types`, or `intent_stack`. These fields are now deprecated compatibility fields, but they are still required by existing execution and public-output surfaces.
 
 ## Why They Cannot Be Removed Now
 
-`TaskType` / `primary_task_type` and `intent_stack` are still execution inputs, not compatibility-only outputs.
+`TaskType` / `primary_task_type` and `intent_stack` are still used by:
 
-They are still used by:
-
-- legacy workflow policy selection
-- evidence gap and follow-up planning
-- stage routing and workorder handling
-- planner diff comparison against legacy policy
-- planner gate fallback and diagnosis eligibility checks
+- legacy workflow policy selection and conditional node resolution
+- evidence gap and workorder follow-up planning
+- stage routing, planner snapshots, output rendering, and artifact typing
+- planning diff comparison, planner gate fallback, diagnosis readiness, and high-risk dry-run checks
 - test/eval expectations
-- SSE, trace metadata, and artifact-compatible payloads
+- SSE, trace metadata, frontend-compatible payloads, and artifact-compatible schemas
 
 Removing them now would change routing, evidence collection, workorder safety, and frontend/debug output at the same time.
 
-## Current Dependency Classes
+## Current Dependency Checks
 
 Run:
 
 ```bash
 PYTHONPATH=. python scripts/legacy_dependency_scan.py
+PYTHONPATH=. python scripts/legacy_deprecation_check.py
 ```
 
-The scan writes:
+The scans write:
 
 - `trash/run/legacy_dependency_scan.json`
 - `trash/run/legacy_dependency_scan.md`
+- `trash/run/legacy_deprecation_check.json`
+- `trash/run/legacy_deprecation_check.md`
 
-The scan groups dependencies into:
+`legacy_dependency_scan.py` records the full dependency surface. `legacy_deprecation_check.py` fails when a new non-allowlisted internal dependency appears outside compatibility paths.
 
-- TaskType readers and writers
-- `intent_stack` readers and writers
-- test/eval dependencies
-- frontend dependencies
-- artifact/schema dependencies
-- workflow and policy logic dependencies
+## Remaining Removal Blockers
 
-Expected current policy dependencies include:
+Deletion is blocked while these modules still read legacy fields:
 
 - `fault_diagnosis/single_agent/workflow/policies.py`
-- `fault_diagnosis/single_agent/workflow/evidence_gap.py`
-- `fault_diagnosis/single_agent/stages.py`
-- `fault_diagnosis/single_agent/planner.py`
-- `fault_diagnosis/single_agent/planning/*`
+- `fault_diagnosis/single_agent/workflow/router.py`
+- `fault_diagnosis/single_agent/planning/*` contracts and planner comparison outputs
+- `fault_diagnosis/single_agent/output/*` public compatibility outputs
+- artifact, frontend, and eval compatibility surfaces
 
-## Conditions Before Deletion
+## Deprecated-But-Retained Role
 
-Deletion is not safe until all of these are true:
+- `TaskType`: legacy primary workflow classifier; deprecated for new internal planning logic, retained for policy/frontend/eval/artifact compatibility.
+- `primary_task_type`: serialized compatibility projection of `TaskType`.
+- `candidate_task_types`: legacy alternate task-type compatibility projection.
+- `intent_stack`: legacy policy intent projection; source should be `GoalSet.intent_stack_projection + legacy candidates`.
 
-- workflow policy no longer reads `TaskType`, `primary_task_type`, or `intent_stack`
-- evals no longer assert legacy fields as core behavior
-- frontend progress rendering no longer depends on legacy task fields
-- artifact readers tolerate missing legacy task fields
-- planner-gated active coverage is broad enough for non-action task families
-- action/workorder remains guarded by explicit human confirmation
-- trace and SSE consumers have a compatibility window for older fields
+The low-risk projection and sync helpers live in `fault_diagnosis/single_agent/compat/legacy_intent.py`.
 
 ## Recommended Removal Path
 
-1. Deprecate
+1. Deprecation phase
 
-Mark `TaskType`, `primary_task_type`, and `intent_stack` as deprecated, but keep producing them in SSE, trace, eval snapshots, and artifacts.
+Mark legacy fields as deprecated, keep producing them, centralize low-risk compatibility projection, and block new dependency growth.
 
-2. Compatibility-only
+2. Compatibility-only phase
 
-Stop using them as execution inputs. Keep them as derived output fields for old clients and historical artifacts.
+Keep public fields for old clients and historical artifacts, but migrate internal execution inputs away from them.
 
-3. Remove internal dependency
+3. Removal phase
 
-Remove internal reads from workflow policy, planner diff, gate logic, and tests. Keep external artifact/SSE compatibility fields for a fixed migration window.
+Remove internal reads only after workflow policy, evidence-gap planning, stages, planner comparison/gate logic, evals, frontend, and artifact readers tolerate missing legacy fields.
 
-## Short-Term Rule
+## Phase 5.2 Compatibility-Only Migration Result
 
-Do not remove these fields from SSE or artifacts in the short term. The safe first move is to stop internal execution dependency, not to delete externally visible fields.
+Phase 5.2 reduced direct internal reads while keeping all public fields and execution behavior stable.
+
+Migrated:
+
+- workorder follow-up detection outside policy now prefers GoalSet/action-target semantics.
+- final-answer summary and high-risk safety helpers now use compat adapter helpers instead of scattered legacy reads.
+- plan, flow, evidence, artifact, and complete-payload compatibility fields are projected through `single_agent/compat/legacy_intent.py`.
+- planner readiness/gate helpers now centralize legacy fallback through the compat adapter.
+
+Removed:
+
+- repeated local compatibility route-field dictionaries
+- repeated direct legacy intent checks in migrated modules
+
+Not removed:
+
+- public `TaskType`, `primary_task_type`, `candidate_task_types`, or `intent_stack` fields
+- SSE complete, `/chat/plan`, artifact, trace, or eval compatibility outputs
+- workflow policy legacy execution reads
+
+Scan result:
+
+- `TaskType` read/write files: `43/41` -> `33/33`
+- `intent_stack` read/write files: `27/25` -> `20/20`
+- policy dependency files: `13` -> `7`
+- `disallowed_dependency_hits`: `0`
+
+## Next Phase
+
+Phase 5.3 should target workflow policy migration. It should move policy selection and conditional node resolution away from legacy task/intent fields while continuing to emit public compatibility fields until downstream consumers no longer require them.

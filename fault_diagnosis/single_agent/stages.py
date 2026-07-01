@@ -33,6 +33,7 @@ from ..security.sql_acl import apply_sql_acl
 from .artifacts import build_diagnosis_artifact_envelope
 from .context import ContextManager, load_conversation_diagnosis_state
 from .contracts import SingleAgentDecision
+from .compat import goal_labels_for_summary, is_legacy_task, route_is_action_request
 from .errors import SingleAgentExecutionError
 from .intent import (
     decide_capabilities,
@@ -319,8 +320,7 @@ class SingleAgentStagesMixin:
     ) -> AnalysisStepArtifact:
         decision = self._workflow_task_decision
         authorization = dict(getattr(decision, "authorization", {}) or {})
-        task_type = str(getattr(decision, "primary_task_type", "") or "")
-        if task_type == "permission_scope_query":
+        if is_legacy_task(decision, "permission_scope_query"):
             artifact = AnalysisStepArtifact(
                 success=True,
                 conclusion="已根据当前服务端身份整理可访问设备、数据窗口和能力边界。",
@@ -333,9 +333,9 @@ class SingleAgentStagesMixin:
             )
             self._record_artifact("analysis", artifact, stage="analysis")
             return artifact
-        if self.auth_context.role == "guest" and task_type != "knowledge_qa":
+        if self.auth_context.role == "guest" and not is_legacy_task(decision, "knowledge_qa"):
             is_degraded = authorization.get("mode") == "degrade"
-            recommendations = list(knowledge_artifact.snippets[:2]) if task_type == "alarm_triage" else []
+            recommendations = list(knowledge_artifact.snippets[:2]) if is_legacy_task(decision, "alarm_triage") else []
             if is_degraded:
                 recommendations.append("如需故障诊断、健康评估或诊断报告，请使用具备设备权限的工程师账号。")
             artifact = AnalysisStepArtifact(
@@ -774,29 +774,16 @@ class SingleAgentStagesMixin:
                 "【权限范围】当前身份只能查看 real_data_01 最近一小时数据和公开处理意见；"
                 "以下内容不是故障诊断、根因判断或健康评估。"
             )
-        elif self.auth_context.role == "guest" and decision.primary_task_type == "alarm_triage":
+        elif self.auth_context.role == "guest" and is_legacy_task(decision, "alarm_triage"):
             prefixes.append("【权限范围】当前身份仅提供公开故障码说明、处理意见和最近一小时数据现状。")
-        if decision.primary_task_type == "action_request":
+        if route_is_action_request(decision):
             prefixes.append(
                 "【动作审批】本次请求识别为写操作/控制操作意图；"
                 "Agent 不直接执行设备控制、配置修改、告警关闭或工单派发，"
                 "只能提供草稿、审批提示或人工确认建议。"
             )
-        if len(decision.intent_stack) > 1 or decision.flags.get("safe_union_workflow"):
-            goal_labels = {
-                "explain_alarm_code": "解释故障码",
-                "check_current_status": "核查当前状态",
-                "fault_impact": "评估影响范围",
-                "severity_assessment": "评估严重程度",
-                "resolution_recommendation": "给出处置建议",
-                "report_generation": "生成报告",
-                "action_request": "动作请求保护",
-                "fault_diagnosis": "故障诊断",
-            }
-            adopted_goals = [
-                goal_labels.get(intent, intent)
-                for intent in decision.intent_stack
-            ]
+        adopted_goals = goal_labels_for_summary(decision)
+        if len(adopted_goals) > 1 or decision.flags.get("safe_union_workflow"):
             prefixes.append(f"【子目标】本轮按安全并集处理：{'、'.join(adopted_goals)}。")
         blocked_subgoals = [
             item for item in decision.subgoals if item.get("status") == "blocked" and item.get("missing_slots")

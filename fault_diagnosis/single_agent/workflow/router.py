@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .contracts import GoalSet, TaskRoute, TaskType, WorkflowObjects, WorkflowSubgoal, WorkflowTimeWindow
+from ..compat import build_legacy_intent_stack, mark_goal_projection_mismatch
+from .contracts import TaskRoute, TaskType, WorkflowObjects, WorkflowSubgoal, WorkflowTimeWindow
 from .goals import build_goal_set
 from .task_family import resolve_task_family
 
@@ -124,13 +125,13 @@ def route_task(
             "legacy_intent_candidates": legacy_intent_candidates,
         },
     )
-    intent_stack = _dedupe([*goal_set.intent_stack_projection, *legacy_intent_candidates])
+    intent_stack = build_legacy_intent_stack(goal_set, legacy_intent_candidates)
     candidate_task_types = _candidate_task_types(task_type, intent_stack)
     flags = _flags_for_task(task_type, normalized, objects, requested_output, effective_report_from_previous_artifact)
     projection_mismatch = set(goal_set.intent_stack_projection) != set(legacy_intent_candidates)
     if projection_mismatch:
         flags["goal_projection_mismatch"] = True
-        goal_set = _with_projection_mismatch_summary(goal_set, legacy_intent_candidates)
+        goal_set = mark_goal_projection_mismatch(goal_set, legacy_intent_candidates)
     _apply_intent_flags(flags, intent_stack, objects)
     subgoals = _subgoals(task_type, objects, flags, missing_slots)
     action_type = _action_type(normalized) if task_type == TaskType.ACTION_REQUEST else None
@@ -181,16 +182,6 @@ def _resolved_context_payload(resolved_context: Any | None) -> dict[str, Any]:
     if hasattr(resolved_context, "model_dump"):
         return resolved_context.model_dump(exclude_none=True)
     return dict(resolved_context or {}) if isinstance(resolved_context, dict) else {}
-
-
-def _with_projection_mismatch_summary(goal_set: GoalSet, legacy_intents: list[str]) -> GoalSet:
-    data = goal_set.model_dump(exclude_none=True)
-    projected = ", ".join(goal_set.intent_stack_projection) or "none"
-    legacy = ", ".join(legacy_intents) or "none"
-    suffix = f"projection differs from legacy intents: projected=[{projected}], legacy=[{legacy}]"
-    summary = str(data.get("goal_summary") or "").strip()
-    data["goal_summary"] = f"{summary}；{suffix}" if summary else suffix
-    return GoalSet.model_validate(data)
 
 
 def _classify_task(

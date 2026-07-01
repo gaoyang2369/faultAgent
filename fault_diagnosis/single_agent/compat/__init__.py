@@ -1,0 +1,43 @@
+"""Compatibility helpers for deprecated single-agent legacy fields."""
+
+from .legacy_intent import (
+    build_task_payload_for_compat,
+    build_legacy_intent_stack,
+    ensure_legacy_intent,
+    explain_legacy_field_usage,
+    goal_labels_for_summary,
+    goal_types,
+    has_legacy_intent,
+    is_legacy_task,
+    legacy_intents,
+    legacy_task_value,
+    mark_goal_projection_mismatch,
+    project_plan_axis_fields_for_compat,
+    project_route_fields_for_compat,
+    project_task_type_for_compat,
+    route_is_action_or_workorder,
+    route_is_action_request,
+    route_requests_workorder_followup,
+    sync_goal_projection_for_legacy_route,
+)
+
+__all__ = [
+    "build_task_payload_for_compat",
+    "build_legacy_intent_stack",
+    "ensure_legacy_intent",
+    "explain_legacy_field_usage",
+    "goal_labels_for_summary",
+    "goal_types",
+    "has_legacy_intent",
+    "is_legacy_task",
+    "legacy_intents",
+    "legacy_task_value",
+    "mark_goal_projection_mismatch",
+    "project_plan_axis_fields_for_compat",
+    "project_route_fields_for_compat",
+    "project_task_type_for_compat",
+    "route_is_action_or_workorder",
+    "route_is_action_request",
+    "route_requests_workorder_followup",
+    "sync_goal_projection_for_legacy_route",
+]

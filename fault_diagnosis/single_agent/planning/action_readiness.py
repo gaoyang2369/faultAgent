@@ -6,6 +6,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from ..compat import goal_types as compat_goal_types
+from ..compat import legacy_intents, legacy_task_value
+
 WORKORDER_ACTION_READINESS_SCHEMA_VERSION = "workorder_action_readiness.v1"
 
 ActionType = Literal["workorder_decision", "workorder_draft", "device_action", "unknown"]
@@ -175,7 +178,7 @@ def summarize_workorder_action_readiness(value: Any) -> dict[str, Any]:
 
 
 def classify_action_type(decision: Any, shadow_plan: Any | None = None) -> ActionType:
-    primary = str(getattr(decision, "primary_task_type", "") or "")
+    primary = legacy_task_value(decision, default="")
     task_family = str(getattr(decision, "task_family", "") or "")
     action_text = " ".join(
         _strings(
@@ -185,12 +188,11 @@ def classify_action_type(decision: Any, shadow_plan: Any | None = None) -> Actio
                 getattr(decision, "action_type", "") or "",
                 getattr(decision, "action_target", "") or "",
                 getattr(decision, "user_goal", "") or "",
-                *list(getattr(decision, "intent_stack", []) or []),
+                *legacy_intents(decision),
             ]
         )
     )
-    goals = [_to_dict(goal) for goal in (_to_dict(getattr(decision, "goal_set", {}) or {}).get("goals") or getattr(decision, "goals", []) or [])]
-    goal_types = {str(goal.get("goal_type") or "") for goal in goals}
+    goal_types = set(compat_goal_types(decision))
     shadow = _to_dict(shadow_plan)
     expected_output = str(_to_dict(shadow.get("output_plan")).get("expected_output") or "")
     shadow_nodes = _shadow_enabled_nodes(shadow)

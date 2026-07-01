@@ -18,6 +18,7 @@ from ..diagnosis.contracts import (
     WorkOrderSuggestion,
 )
 from ..context import build_case_state_snapshot
+from .compat import legacy_task_value
 from .contracts import AgentTrace, SingleAgentDecision
 
 
@@ -102,6 +103,6 @@ def build_diagnosis_artifact_envelope(
 
 def _artifact_type_from_decision(decision: SingleAgentDecision) -> DiagnosisArtifactType:
     try:
-        return DiagnosisArtifactType(decision.primary_task_type)
+        return DiagnosisArtifactType(legacy_task_value(decision))
     except ValueError:
         return DiagnosisArtifactType.FAULT_DIAGNOSIS

@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from ..compat import legacy_intents, legacy_task_value
+
 DIAGNOSIS_READINESS_SCHEMA_VERSION = "diagnosis_readiness.v1"
 
 DiagnosisMode = Literal[
@@ -74,7 +76,7 @@ def build_diagnosis_readiness(
         + _strings(output_plan.get("required_disclosures"))
         + _strings(getattr(decision, "missing_or_stale_evidence", []) or [])
     )
-    mode = _diagnosis_mode(getattr(decision, "primary_task_type", ""))
+    mode = _diagnosis_mode(legacy_task_value(decision, default=""))
 
     inherited = _to_dict(context.get("inherited_slots"))
     stale = bool(context.get("stale_evidence"))
@@ -102,7 +104,7 @@ def build_diagnosis_readiness(
         objects.get("alarm_codes")
         or context.get("active_fault_codes")
         or inherited.get("fault_codes")
-        or set(_strings(getattr(decision, "intent_stack", []) or [])).intersection(
+        or set(legacy_intents(decision)).intersection(
             {"explain_alarm_code", "fault_diagnosis", "severity_assessment", "resolution_recommendation"}
         )
     )
@@ -228,7 +230,7 @@ def _needs_runtime(mode: str, decision: Any) -> bool:
     if mode in {"fault_diagnosis", "root_cause_analysis", "health_assessment"}:
         return True
     if mode == "alarm_triage":
-        intents = set(_strings(getattr(decision, "intent_stack", []) or []))
+        intents = set(legacy_intents(decision))
         return bool(intents.intersection({"check_current_status", "severity_assessment", "resolution_recommendation"}))
     return False
 

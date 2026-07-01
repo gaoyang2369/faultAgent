@@ -9,7 +9,12 @@ from pydantic import BaseModel, Field
 
 
 class TaskType(str, Enum):
-    """Top-level task types used to select the parent workflow."""
+    """Deprecated legacy primary workflow classifier.
+
+    Retained for workflow policy, frontend, eval, artifact, trace and SSE
+    compatibility. New internal planning logic should prefer GoalSet,
+    TaskFamily, ShadowPlanner, PlanningDiff and PlannerGate projections.
+    """
 
     STATUS_QUERY = "status_query"
     ALARM_TRIAGE = "alarm_triage"
@@ -117,13 +122,28 @@ class TaskFamilyResolution(BaseModel):
 class TaskRoute(BaseModel):
     """Structured output of the intent router."""
 
-    primary_task_type: TaskType = TaskType.FAULT_DIAGNOSIS
+    primary_task_type: TaskType = Field(
+        default=TaskType.FAULT_DIAGNOSIS,
+        description=(
+            "Deprecated compatibility field: legacy primary workflow classifier. "
+            "Retained for policy/frontend/eval/artifact compatibility."
+        ),
+    )
     task_family: TaskFamily = "diagnosis"
     task_family_reason: str = ""
     task_family_source: TaskFamilySource = "task_type_mapping"
     task_family_warnings: list[str] = Field(default_factory=list)
-    candidate_task_types: list[TaskType] = Field(default_factory=list)
-    intent_stack: list[str] = Field(default_factory=list)
+    candidate_task_types: list[TaskType] = Field(
+        default_factory=list,
+        description="Deprecated compatibility field: legacy alternate task-type projection.",
+    )
+    intent_stack: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Deprecated compatibility field: legacy policy intent projection built "
+            "from GoalSet projection plus legacy candidates."
+        ),
+    )
     goals: list[IntentGoal] = Field(default_factory=list)
     goal_set: dict[str, Any] = Field(default_factory=dict)
     goal_summary: str = ""

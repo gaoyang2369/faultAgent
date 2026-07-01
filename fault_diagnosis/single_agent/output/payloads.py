@@ -16,6 +16,7 @@ from ...diagnosis.contracts import (
 )
 from ...context import summarize_resolved_context
 from ...runtime.diagnosis_contract_adapter import build_diagnosis_contract_payload
+from ..compat import is_legacy_task, legacy_task_value, project_route_fields_for_compat
 from ..contracts import AgentTrace, SingleAgentDecision
 from ..reporting import extract_report_url
 from ..workflow import summarize_goal_set
@@ -64,13 +65,11 @@ def build_direct_complete_payload(
         "manual_confirmation": manual_confirmation,
         "authorization": decision.authorization,
         "workflow_route": {
-            "primary_task_type": decision.primary_task_type,
+            **project_route_fields_for_compat(decision),
             "task_family": decision.task_family,
             "task_family_reason": decision.task_family_reason,
             "task_family_source": decision.task_family_source,
             "task_family_warnings": decision.task_family_warnings,
-            "candidate_task_types": decision.candidate_task_types,
-            "intent_stack": decision.intent_stack,
             "goal_set": goal_set,
             "shadow_plan": shadow_plan,
             "planning_diff": planning_diff,
@@ -139,13 +138,11 @@ def build_report_handoff_complete_payload(
         "ui_payload": build_ui_payload(decision=decision, report_artifact=report_artifact),
         "todos": todos,
         "workflow_route": {
-            "primary_task_type": decision.primary_task_type,
+            **project_route_fields_for_compat(decision),
             "task_family": decision.task_family,
             "task_family_reason": decision.task_family_reason,
             "task_family_source": decision.task_family_source,
             "task_family_warnings": decision.task_family_warnings,
-            "candidate_task_types": decision.candidate_task_types,
-            "intent_stack": decision.intent_stack,
             "goal_set": goal_set,
             "shadow_plan": shadow_plan,
             "planning_diff": planning_diff,
@@ -253,13 +250,11 @@ def build_diagnosis_complete_payload(
             else rendered_answer
         ),
         "workflow_route": {
-            "primary_task_type": decision.primary_task_type,
+            **project_route_fields_for_compat(decision),
             "task_family": decision.task_family,
             "task_family_reason": decision.task_family_reason,
             "task_family_source": decision.task_family_source,
             "task_family_warnings": decision.task_family_warnings,
-            "candidate_task_types": decision.candidate_task_types,
-            "intent_stack": decision.intent_stack,
             "goal_set": goal_set,
             "shadow_plan": shadow_plan,
             "planning_diff": planning_diff,
@@ -311,15 +306,14 @@ def build_ui_payload(
 ) -> dict[str, Any]:
     """Return a small presentation hint that prevents the frontend from guessing."""
 
-    task_type = str(decision.primary_task_type or "")
     authorization = decision.authorization or {}
     auth_mode = str(authorization.get("mode") or "")
     data_state = str(getattr(sql_artifact, "data_state", "") or "")
     ui_type = "text_only"
     denied_reason_code = str(authorization.get("denied_reason_code") or "")
-    if task_type == "permission_scope_query":
+    if is_legacy_task(decision, "permission_scope_query"):
         ui_type = "permission_scope"
-    elif task_type == "report_generation" and (
+    elif is_legacy_task(decision, "report_generation") and (
         denied_reason_code == "report_permission_denied"
         or (
             auth_mode == "deny"
@@ -330,15 +324,15 @@ def build_ui_payload(
         ui_type = "report_blocked"
     elif auth_mode in {"deny", "clarify"}:
         ui_type = "access_denied"
-    elif task_type == "knowledge_qa":
+    elif is_legacy_task(decision, "knowledge_qa"):
         ui_type = "knowledge_card"
-    elif task_type == "report_generation":
+    elif is_legacy_task(decision, "report_generation"):
         ui_type = "report_status"
     elif data_state in {"out_of_scope", "blocked", "empty"} or auth_mode == "degrade":
         ui_type = "text_only"
-    elif task_type == "status_query":
+    elif is_legacy_task(decision, "status_query"):
         ui_type = "status_card"
-    elif task_type in {"alarm_triage", "fault_diagnosis", "root_cause_analysis", "health_assessment"}:
+    elif is_legacy_task(decision, "alarm_triage", "fault_diagnosis", "root_cause_analysis", "health_assessment"):
         ui_type = "diagnosis_card"
 
     objects = decision.objects or {}
@@ -346,7 +340,7 @@ def build_ui_payload(
     alarm_codes = [str(item).strip() for item in objects.get("alarm_codes", []) if str(item).strip()]
     return {
         "type": ui_type,
-        "task_type": task_type,
+        "task_type": legacy_task_value(decision),
         "data_state": data_state or None,
         "device_label": devices[0] if devices else None,
         "fault_code": alarm_codes[0] if alarm_codes else None,
