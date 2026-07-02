@@ -39,6 +39,10 @@ def _decision_payload(decision: SingleAgentDecision) -> dict[str, Any]:
     return payload
 
 
+def _policy_id(decision: SingleAgentDecision) -> str:
+    return str((decision.workflow_policy or {}).get("policy_id") or "")
+
+
 def _is_compat_task(decision: SingleAgentDecision, *values: str) -> bool:
     return project_task_type_for_compat(decision) in set(values)
 
@@ -67,6 +71,7 @@ def build_direct_complete_payload(
         "request_id": request_id,
         "runtime": RUNTIME_NAME,
         "task_family": decision.task_family,
+        "policy_id": _policy_id(decision),
         "final_content": final_answer,
         "report_filename": None,
         "report_url": None,
@@ -84,6 +89,7 @@ def build_direct_complete_payload(
         "workflow_route": {
             **_legacy_route_fields(decision),
             "task_family": decision.task_family,
+            "policy_id": _policy_id(decision),
             "task_family_reason": decision.task_family_reason,
             "task_family_source": decision.task_family_source,
             "task_family_warnings": decision.task_family_warnings,
@@ -133,6 +139,7 @@ def build_report_handoff_complete_payload(
         "request_id": request_id,
         "runtime": RUNTIME_NAME,
         "task_family": decision.task_family,
+        "policy_id": _policy_id(decision),
         "final_content": final_answer,
         "report_filename": report_artifact.report_filename,
         "report_url": extract_report_url(report_artifact.save_result),
@@ -152,6 +159,7 @@ def build_report_handoff_complete_payload(
         "workflow_route": {
             **_legacy_route_fields(decision),
             "task_family": decision.task_family,
+            "policy_id": _policy_id(decision),
             "task_family_reason": decision.task_family_reason,
             "task_family_source": decision.task_family_source,
             "task_family_warnings": decision.task_family_warnings,
@@ -220,6 +228,7 @@ def build_diagnosis_complete_payload(
         "request_id": request_id,
         "runtime": RUNTIME_NAME,
         "task_family": decision.task_family,
+        "policy_id": _policy_id(decision),
         "final_content": final_answer,
         "report_filename": report_artifact.report_filename,
         "report_url": extract_report_url(report_artifact.save_result),
@@ -259,6 +268,7 @@ def build_diagnosis_complete_payload(
         "workflow_route": {
             **_legacy_route_fields(decision),
             "task_family": decision.task_family,
+            "policy_id": _policy_id(decision),
             "task_family_reason": decision.task_family_reason,
             "task_family_source": decision.task_family_source,
             "task_family_warnings": decision.task_family_warnings,
