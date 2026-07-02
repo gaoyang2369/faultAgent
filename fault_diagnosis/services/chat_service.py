@@ -17,6 +17,7 @@ from ..auth.admin_auth import resolve_auth_context
 from ..runtime.dev_mode import get_dev_messages
 from ..common.logger import ensure_request_id, get_logger
 from ..repositories.history_index import get_history_index_repository
+from ..services.history_service import load_artifact_history_messages
 from ..auth.session_scope import resolve_request_scope
 from ..agent_runtime.stream_control import (
     build_stream_stop_payload,
@@ -748,12 +749,14 @@ class ChatService:
 
         checkpointer = getattr(request.app.state, "checkpointer", None)
         if not checkpointer:
-            return []
+            return load_artifact_history_messages(thread_id, logger=self._log)
         checkpoint = await checkpointer.aget({"configurable": {"thread_id": thread_id}})
         if not checkpoint or not checkpoint.get("channel_values"):
-            return []
+            return load_artifact_history_messages(thread_id, logger=self._log)
         sanitized = sanitize_chat_history_messages(checkpoint["channel_values"].get("messages", []))
-        return sanitized if isinstance(sanitized, list) else []
+        if isinstance(sanitized, list) and sanitized:
+            return sanitized
+        return load_artifact_history_messages(thread_id, logger=self._log)
 
     async def _overwrite_thread_history_state(
         self,
