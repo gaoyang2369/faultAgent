@@ -21,8 +21,9 @@ from ..common.paths import REPORTS_DIR
 from ..security.contracts import AuthContext
 from ..security.permissions import build_auth_context
 from ..security.policy_engine import authorize_workflow
-from ..single_agent.compat import is_legacy_task, project_task_type_for_compat
 from ..single_agent.output.payloads import build_ui_payload
+from ..single_agent.compat import build_legacy_intent_stack
+from ..single_agent.workflow.axes import requests_action_or_workorder, task_profile_for_compat
 from ..single_agent.workflow.policies import build_workflow_plan
 from ..single_agent.workflow.router import route_task
 
@@ -153,16 +154,29 @@ def build_dev_authorization(
 
     route = route_task(payload={}, message=message)
     plan = build_workflow_plan(route, needs_report=route.requested_output == "report")
+    compat_task = task_profile_for_compat(route)
+    compat_fields = {
+        "primary_task_type": compat_task,
+        "candidate_task_types": [compat_task],
+        "intent_stack": build_legacy_intent_stack(route.goal_set),
+    }
     decision = SimpleNamespace(
-        **project_task_type_for_compat(route),
+        **compat_fields,
+        task_family=route.task_family,
+        action_target=route.action_target,
+        action_type=route.action_type,
+        goal_set=route.goal_set,
+        requested_output=route.requested_output,
         objects=route.objects.model_dump(exclude_none=True),
+        workflow_policy=plan.policy.model_dump(exclude_none=True),
         enabled_nodes=plan.resolved_nodes,
         runtime_tools=plan.runtime_tools,
     )
     authorization = authorize_workflow(auth_context, decision).model_dump()
     decision.authorization = authorization
     decision_payload = {
-        **project_task_type_for_compat(route),
+        **compat_fields,
+        "task_family": route.task_family,
         "objects": route.objects.model_dump(exclude_none=True),
         "requested_output": route.requested_output,
         "risk_level": route.risk_level,
@@ -355,7 +369,7 @@ async def stream_dev_chat_events(
             "decision": "deny_direct_execution",
             "reason": "所有角色均不得直接执行设备控制动作。",
         }
-        if is_legacy_task(decision, "action_request")
+        if requests_action_or_workorder(decision)
         else {},
         "todos": todos,
         "event_count": len(final_content) + 2 + len(runtime_tools) * 2,

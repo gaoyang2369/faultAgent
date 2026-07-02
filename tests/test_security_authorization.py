@@ -68,7 +68,8 @@ def test_signed_user_cookie_is_session_bound_and_reloads_server_scope(tmp_path) 
 
 def test_guest_fault_diagnosis_is_denied() -> None:
     decision = SingleAgentDecision(
-        primary_task_type="fault_diagnosis",
+        task_family="diagnosis",
+        goal_set={"goals": [{"goal_type": "diagnose_fault"}]},
         enabled_nodes={"sql": True, "knowledge": True, "analysis": True, "report": True},
         runtime_tools=["sql_db_query", "query_knowledge_base", "save_report"],
     )
@@ -88,7 +89,9 @@ def test_guest_fault_diagnosis_is_denied() -> None:
 
 def test_guest_report_generation_is_denied_without_degraded_tools() -> None:
     decision = SingleAgentDecision(
-        primary_task_type="report_generation",
+        task_family="reporting",
+        requested_output="report",
+        goal_set={"goals": [{"goal_type": "generate_report"}]},
         enabled_nodes={"sql": True, "knowledge": True, "analysis": True, "report": True},
         runtime_tools=["sql_db_query", "query_knowledge_base", "save_report"],
     )
@@ -111,7 +114,8 @@ def test_engineer_cannot_authorize_unassigned_asset() -> None:
         table_scope=["real_data_01"],
     )
     decision = SingleAgentDecision(
-        primary_task_type="fault_diagnosis",
+        task_family="diagnosis",
+        goal_set={"goals": [{"goal_type": "diagnose_fault"}]},
         objects={"device_ids": ["J2号机"]},
     )
 

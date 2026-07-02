@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from ..compat import route_requests_workorder_followup
+from .axes import requests_action_or_workorder
 from ..context import ConversationDiagnosisState, DiagnosisCase
 from .contracts import TaskRoute
 
@@ -71,7 +71,7 @@ def analyze_evidence_gap(
     text = (route.user_goal or "").replace(" ", "")
     active_case = state.active_case if state is not None else None
     has_reference = _has_any(text, _CONTEXT_WORDS) or bool(route.context_resolution.get("references"))
-    asks_workorder = _has_any(text, _WORKORDER_DECISION_WORDS) or route_requests_workorder_followup(route)
+    asks_workorder = _has_any(text, _WORKORDER_DECISION_WORDS) or requests_action_or_workorder(route)
     asks_refresh = _has_any(text, _CURRENT_REFRESH_WORDS)
     if active_case is None:
         if asks_workorder:

@@ -83,7 +83,7 @@ elif case_name == "guest_diagnosis":
     assert report_url is None, report_url
 elif case_name == "engineer_allowed":
     assert authorization["mode"] == "allow", authorization
-    assert complete["decision"]["primary_task_type"] == "fault_diagnosis"
+    assert complete["decision"]["task_family"] == "diagnosis"
     assert "sql_db_query" in tools, tools
 elif case_name == "engineer_denied":
     assert authorization["allowed"] is False, authorization

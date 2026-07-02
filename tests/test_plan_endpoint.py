@@ -60,16 +60,14 @@ def test_plan_endpoint_uses_trusted_auth_not_user_identity(monkeypatch) -> None:
     assert "inherited_slots" in payload["resolved_context"]
     assert "primary_goal_id" in payload["goal_set"]
     assert isinstance(payload["goals"], list)
-    assert isinstance(payload["intent_stack_projection"], list)
     assert payload["task_family"] == "diagnosis"
     assert payload["workflow_route"]["task_family"] == "diagnosis"
-    assert payload["shadow_plan"]["planner_mode"] == "shadow"
-    assert "authorized_runtime_tools" in payload["shadow_plan"]
-    assert payload["planning_diff"]["migration_readiness"]["safe_to_migrate"] is False
-    assert "node_diffs" not in payload["planning_diff"]
-    assert payload["workflow_route"]["planning_diff"]["overall_status"] == payload["planning_diff"]["overall_status"]
-    assert payload["planner_gate"]["selected_execution_source"] == "legacy_policy"
-    assert payload["workflow_route"]["planner_gate"]["mode"] == payload["planner_gate"]["mode"]
+    assert payload["policy_id"]
+    assert "shadow_plan" not in payload
+    assert "planning_diff" not in payload
+    assert "planner_gate" not in payload
+    assert "readiness" in payload
+    assert "manual_confirmation" in payload
 
 
 def test_plan_endpoint_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> None:
@@ -139,17 +137,16 @@ def test_planner_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> None:
         auth_context=AuthContext(user_id="engineer-plan-test", role="engineer", asset_scope=["J1"], table_scope=["*"]),
     )
 
-    assert snapshot.schema_version == "agent_plan_snapshot.v1"
+    assert snapshot.schema_version == "agent_plan_snapshot.v2"
     assert snapshot.resolved_context["relation_to_previous"] == "new_case"
     assert "missing_context" in snapshot.resolved_context
     assert snapshot.goal_set["primary_goal_id"]
-    assert snapshot.intent_stack_projection
     assert snapshot.task_family == "runtime_status"
     assert snapshot.workflow_route["task_family"] == "runtime_status"
-    assert snapshot.shadow_plan["planner_mode"] == "shadow"
-    assert "sql" in snapshot.shadow_plan["enabled_node_names"]
-    assert snapshot.planning_diff["migration_readiness"]["safe_to_migrate"] is False
-    assert "node_diffs" not in snapshot.planning_diff
-    assert snapshot.planner_gate["selected_execution_source"] == "legacy_policy"
+    assert snapshot.policy_id == "status_query_v1"
+    assert snapshot.authorization["mode"] in {"allow", "degrade", "deny"}
+    assert "shadow_plan" not in snapshot.model_dump()
+    assert "planning_diff" not in snapshot.model_dump()
+    assert "planner_gate" not in snapshot.model_dump()
     assert calls == []
     assert list_thread_artifacts(thread_id) == []

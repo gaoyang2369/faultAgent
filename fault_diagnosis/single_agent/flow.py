@@ -11,7 +11,6 @@ from ..common.logger import get_logger
 from ..diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from ..security.audit import get_security_audit_logger
 from ..security.policy_engine import apply_authorization_to_decision, authorize_workflow
-from .compat import legacy_task_value, project_route_fields_for_compat, project_task_type_for_compat
 from .contracts import SingleAgentDecision
 from .evidence import build_evidence_bundle, build_output_guardrail_result, initialize_evidence_bundle
 from .intent import build_lightweight_conversation_reply
@@ -21,13 +20,12 @@ from .output.payloads import (
     build_report_handoff_complete_payload,
 )
 from .planning import (
-    attach_shadow_plan_summary,
-    apply_planner_gate_to_decision,
-    build_planning_diff,
-    build_planner_gate,
-    build_shadow_plan_for_decision,
-    summarize_planning_diff,
-    summarize_planner_gate,
+    build_diagnosis_readiness,
+    build_manual_confirmation_requirement,
+    build_workorder_action_readiness,
+    summarize_diagnosis_readiness,
+    summarize_manual_confirmation_requirement,
+    summarize_workorder_action_readiness,
 )
 from .workflow.nodes import (
     build_audit_log_result,
@@ -41,6 +39,19 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
 _log = get_logger("single_agent.flow")
+
+
+def _attach_goal_native_readiness(decision: SingleAgentDecision) -> SingleAgentDecision:
+    diagnosis = build_diagnosis_readiness(decision=decision)
+    workorder = build_workorder_action_readiness(decision=decision)
+    manual = build_manual_confirmation_requirement(
+        decision=decision,
+        workorder_action_readiness=workorder,
+    )
+    decision.diagnosis_readiness = summarize_diagnosis_readiness(diagnosis)
+    decision.workorder_action_readiness = summarize_workorder_action_readiness(workorder)
+    decision.manual_confirmation = summarize_manual_confirmation_requirement(manual)
+    return decision
 
 
 class SingleAgentFlowMixin:
@@ -100,21 +111,7 @@ class SingleAgentFlowMixin:
                     task_family_source="direct_response",
                     reason="轻量问候直接回答",
                 )
-                direct_shadow_plan = build_shadow_plan_for_decision(
-                    message=self.message,
-                    payload={},
-                    auth_summary=self.auth_context.audit_summary(),
-                    decision=decision,
-                )
-                attach_shadow_plan_summary(decision, direct_shadow_plan)
-                direct_planning_diff = build_planning_diff({}, direct_shadow_plan, decision=decision)
-                decision.planning_diff_summary = summarize_planning_diff(direct_planning_diff)
-                direct_planner_gate = build_planner_gate(
-                    decision=decision,
-                    shadow_plan=direct_shadow_plan,
-                    planning_diff=direct_planning_diff,
-                )
-                decision.planner_gate_summary = summarize_planner_gate(direct_planner_gate)
+                decision = _attach_goal_native_readiness(decision)
                 self.trace.add_event(
                     "decision",
                     stage="final_answer",
@@ -139,9 +136,11 @@ class SingleAgentFlowMixin:
                         "token_count": token_count,
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
-                        "shadow_plan": decision.shadow_plan_summary,
-                        "planning_diff": decision.planning_diff_summary,
-                        "planner_gate": decision.planner_gate_summary,
+                        "readiness": {
+                            "diagnosis": decision.diagnosis_readiness,
+                            "workorder_action": decision.workorder_action_readiness,
+                        },
+                        "manual_confirmation": decision.manual_confirmation,
                         "direct_answer": True,
                     },
                 )
@@ -181,27 +180,16 @@ class SingleAgentFlowMixin:
             stage_started = self._start_stage("access_authorization", "校验身份、任务权限和资源范围")
             self.authorization_decision = authorize_workflow(self.auth_context, decision)
             decision = apply_authorization_to_decision(decision, self.authorization_decision)
-            request_payload = getattr(request, "model_dump", lambda **_: {})()
-            shadow_plan = build_shadow_plan_for_decision(
-                message=self.message,
-                payload=request_payload,
-                auth_summary=self.auth_context.audit_summary(),
-                decision=decision,
-            )
-            attach_shadow_plan_summary(decision, shadow_plan)
-            planning_diff = build_planning_diff({}, shadow_plan, decision=decision)
-            planning_diff_summary = summarize_planning_diff(planning_diff)
-            decision.planning_diff_summary = planning_diff_summary
-            planner_gate = build_planner_gate(decision=decision, shadow_plan=shadow_plan, planning_diff=planning_diff)
-            planner_gate_summary = summarize_planner_gate(planner_gate)
-            decision.planner_gate_summary = planner_gate_summary
-            decision = apply_planner_gate_to_decision(decision, planner_gate)
+            decision = _attach_goal_native_readiness(decision)
             get_security_audit_logger().record(
                 event_type="workflow_authorization",
                 auth=self.auth_context,
                 decision=self.authorization_decision,
                 trace_id=self.trace_id,
-                resource={"task_type": legacy_task_value(decision)},
+                resource={
+                    "task_family": decision.task_family,
+                    "policy_id": decision.workflow_policy.get("policy_id"),
+                },
             )
             self._record_artifact(
                 "authorization",
@@ -234,9 +222,11 @@ class SingleAgentFlowMixin:
                         "token_count": token_count,
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
-                        "shadow_plan": decision.shadow_plan_summary,
-                        "planning_diff": decision.planning_diff_summary,
-                        "planner_gate": decision.planner_gate_summary,
+                        "readiness": {
+                            "diagnosis": decision.diagnosis_readiness,
+                            "workorder_action": decision.workorder_action_readiness,
+                        },
+                        "manual_confirmation": decision.manual_confirmation,
                     },
                 )
                 yield encode_sse_event(
@@ -259,7 +249,6 @@ class SingleAgentFlowMixin:
             self._record_artifact(
                 "workflow_route",
                 {
-                    **project_route_fields_for_compat(decision),
                     "task_family": decision.task_family,
                     "task_family_reason": decision.task_family_reason,
                     "task_family_source": decision.task_family_source,
@@ -267,9 +256,11 @@ class SingleAgentFlowMixin:
                     "goals": decision.goals,
                     "goal_set": decision.goal_set,
                     "goal_summary": (decision.goal_set or {}).get("goal_summary", ""),
-                    "shadow_plan": shadow_plan.model_dump(exclude_none=True),
-                    "planning_diff": planning_diff_summary,
-                    "planner_gate": planner_gate.model_dump(exclude_none=True),
+                    "readiness": {
+                        "diagnosis": decision.diagnosis_readiness,
+                        "workorder_action": decision.workorder_action_readiness,
+                    },
+                    "manual_confirmation": decision.manual_confirmation,
                     "resolved_context": decision.resolved_context,
                     "context_resolution": decision.context_resolution,
                     "active_case_id": decision.active_case_id,
@@ -300,7 +291,7 @@ class SingleAgentFlowMixin:
                 "select_workflow_policy",
                 stage_started,
                 message=(
-                    f"{decision.workflow_policy.get('policy_id', legacy_task_value(decision))}："
+                    f"{decision.workflow_policy.get('policy_id', decision.task_family)}："
                     f"启用节点 {', '.join(name for name, enabled in decision.enabled_nodes.items() if enabled) or '无工具节点'}"
                 ),
             )
@@ -500,8 +491,11 @@ class SingleAgentFlowMixin:
                         "resolution_recommendation": {},
                         "audit_log": audit_log_result,
                         "referenced_artifact": referenced_envelope.model_dump(exclude_none=True),
-                        "planning_diff": decision.planning_diff_summary,
-                        "planner_gate": decision.planner_gate_summary,
+                        "readiness": {
+                            "diagnosis": decision.diagnosis_readiness,
+                            "workorder_action": decision.workorder_action_readiness,
+                        },
+                        "manual_confirmation": decision.manual_confirmation,
                     },
                 )
                 self._finish_stage("save_artifact", stage_started, message="工单续问产物与证据链已保存")
@@ -525,12 +519,13 @@ class SingleAgentFlowMixin:
                         "token_count": token_count,
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
-                        "shadow_plan": decision.shadow_plan_summary,
-                        "planning_diff": decision.planning_diff_summary,
-                        "planner_gate": decision.planner_gate_summary,
+                        "readiness": {
+                            "diagnosis": decision.diagnosis_readiness,
+                            "workorder_action": decision.workorder_action_readiness,
+                        },
+                        "manual_confirmation": decision.manual_confirmation,
                         "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
                         "workflow_policy_id": decision.workflow_policy.get("policy_id"),
-                        **project_task_type_for_compat(decision),
                     },
                 )
                 complete_payload = build_diagnosis_complete_payload(
@@ -599,9 +594,11 @@ class SingleAgentFlowMixin:
                         "token_count": token_count + 1,
                         "decision": decision.model_dump(),
                         "task_family": decision.task_family,
-                        "shadow_plan": decision.shadow_plan_summary,
-                        "planning_diff": decision.planning_diff_summary,
-                        "planner_gate": decision.planner_gate_summary,
+                        "readiness": {
+                            "diagnosis": decision.diagnosis_readiness,
+                            "workorder_action": decision.workorder_action_readiness,
+                        },
+                        "manual_confirmation": decision.manual_confirmation,
                         "report_filename": report_artifact.report_filename,
                     },
                 )
@@ -933,8 +930,11 @@ class SingleAgentFlowMixin:
                     "risk_check": risk_check_result,
                     "resolution_recommendation": resolution_recommendation,
                     "audit_log": audit_log_result,
-                    "planning_diff": decision.planning_diff_summary,
-                    "planner_gate": decision.planner_gate_summary,
+                    "readiness": {
+                        "diagnosis": decision.diagnosis_readiness,
+                        "workorder_action": decision.workorder_action_readiness,
+                    },
+                    "manual_confirmation": decision.manual_confirmation,
                 },
             )
             self._finish_stage("save_artifact", stage_started, message="诊断产物与证据链已保存")
@@ -961,13 +961,14 @@ class SingleAgentFlowMixin:
                     "token_count": token_count,
                     "decision": decision.model_dump(),
                     "task_family": decision.task_family,
-                    "shadow_plan": decision.shadow_plan_summary,
-                    "planning_diff": decision.planning_diff_summary,
-                    "planner_gate": decision.planner_gate_summary,
+                    "readiness": {
+                        "diagnosis": decision.diagnosis_readiness,
+                        "workorder_action": decision.workorder_action_readiness,
+                    },
+                    "manual_confirmation": decision.manual_confirmation,
                     "report_filename": report_artifact.report_filename,
                     "evidence_bundle_id": self.evidence_bundle.bundle_id if self.evidence_bundle else None,
                     "workflow_policy_id": decision.workflow_policy.get("policy_id"),
-                    **project_task_type_for_compat(decision),
                 },
             )
 

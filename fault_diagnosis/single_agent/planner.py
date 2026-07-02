@@ -1,4 +1,4 @@
-"""Side-effect-free workflow planning for agent regression evaluation."""
+"""Side-effect-free goal-native workflow planning."""
 
 from __future__ import annotations
 
@@ -6,27 +6,24 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..diagnosis.steps import build_request_from_payload
 from ..context import summarize_resolved_context
+from ..diagnosis.steps import build_request_from_payload
 from ..security.contracts import AuthContext
 from ..security.policy_engine import apply_authorization_to_decision, authorize_workflow
-from .compat import project_plan_axis_fields_for_compat, project_route_fields_for_compat
 from .context import ContextManager
-from .intent import fallback_understanding_payload, decide_capabilities
+from .intent import decide_capabilities, fallback_understanding_payload
 from .planning import (
-    attach_shadow_plan_summary,
-    apply_planner_gate_to_decision,
-    build_planning_diff,
-    build_planner_gate,
-    build_shadow_plan_for_decision,
-    summarize_planning_diff,
-    summarize_planner_gate,
-    summarize_shadow_plan,
+    build_diagnosis_readiness,
+    build_manual_confirmation_requirement,
+    build_workorder_action_readiness,
+    summarize_diagnosis_readiness,
+    summarize_manual_confirmation_requirement,
+    summarize_workorder_action_readiness,
 )
 from .workflow import summarize_goal_set
 
 
-PLAN_SNAPSHOT_SCHEMA_VERSION = "agent_plan_snapshot.v1"
+PLAN_SNAPSHOT_SCHEMA_VERSION = "agent_plan_snapshot.v2"
 
 
 class PlanSnapshot(BaseModel):
@@ -37,22 +34,19 @@ class PlanSnapshot(BaseModel):
     goal_set: dict[str, Any] = Field(default_factory=dict)
     task_family: str = "diagnosis"
     task_family_reason: str = ""
-    task_family_source: str = "task_type_mapping"
-    shadow_plan: dict[str, Any] = Field(default_factory=dict)
-    planning_diff: dict[str, Any] = Field(default_factory=dict)
-    planner_gate: dict[str, Any] = Field(default_factory=dict)
-    diagnosis_readiness: dict[str, Any] = Field(default_factory=dict)
-    workorder_action_readiness: dict[str, Any] = Field(default_factory=dict)
-    manual_confirmation: dict[str, Any] = Field(default_factory=dict)
-    goals: list[dict[str, Any]] = Field(default_factory=list)
-    intent_stack_projection: list[str] = Field(default_factory=list)
-    intent_axes: dict[str, Any] = Field(default_factory=dict)
-    workflow_route: dict[str, Any] = Field(default_factory=dict)
+    task_family_source: str = "goal_hint_fallback"
+    policy_id: str = ""
     workflow_policy: dict[str, Any] = Field(default_factory=dict)
     enabled_nodes: dict[str, bool] = Field(default_factory=dict)
     skipped_nodes: dict[str, bool] = Field(default_factory=dict)
     planned_tools: list[str] = Field(default_factory=list)
+    runtime_tools: list[str] = Field(default_factory=list)
     forbidden_tools: list[str] = Field(default_factory=list)
+    requested_output: str = "answer"
+    readiness: dict[str, Any] = Field(default_factory=dict)
+    manual_confirmation: dict[str, Any] = Field(default_factory=dict)
+    goals: list[dict[str, Any]] = Field(default_factory=list)
+    workflow_route: dict[str, Any] = Field(default_factory=dict)
     missing_slots: list[str] = Field(default_factory=list)
     evidence_gaps: dict[str, Any] = Field(default_factory=dict)
     confidence: float = 0.0
@@ -73,7 +67,7 @@ def build_plan_snapshot(
     user_identity: str,
     auth_context: AuthContext,
 ) -> PlanSnapshot:
-    """Build a deterministic plan snapshot without tool calls or artifact writes."""
+    """Build a deterministic goal-native plan snapshot without side effects."""
 
     normalized_message = (message or "").strip()
     context_manager = ContextManager()
@@ -106,40 +100,27 @@ def build_plan_snapshot(
     )
     authorization = authorize_workflow(auth_context, decision)
     decision = apply_authorization_to_decision(decision, authorization)
+    diagnosis = summarize_diagnosis_readiness(build_diagnosis_readiness(decision=decision))
+    workorder = summarize_workorder_action_readiness(build_workorder_action_readiness(decision=decision))
+    manual = summarize_manual_confirmation_requirement(
+        build_manual_confirmation_requirement(
+            decision=decision,
+            workorder_action_readiness=workorder,
+        )
+    )
+    decision.diagnosis_readiness = diagnosis
+    decision.workorder_action_readiness = workorder
+    decision.manual_confirmation = manual
 
-    skip_reasons = _skip_reasons(decision, authorization.model_dump())
+    auth_payload = authorization.model_dump()
+    skip_reasons = _skip_reasons(decision, auth_payload)
     node_reasons = _node_reasons(decision, skip_reasons)
-    referenced_artifact = _referenced_artifact_payload(decision)
-    blocked_reason = _blocked_reason(decision, authorization.model_dump())
-
     resolved_context_summary = summarize_resolved_context(decision.resolved_context)
     resolved_context_summary["thread_id"] = thread_id
     goal_set_summary = summarize_goal_set(decision.goal_set)
-    shadow_plan = build_shadow_plan_for_decision(
-        message=normalized_message,
-        payload=payload,
-        auth_summary=auth_context.audit_summary(),
-        decision=decision,
-    )
-    attach_shadow_plan_summary(decision, shadow_plan)
-    shadow_plan_summary = summarize_shadow_plan(shadow_plan)
-    planning_diff = build_planning_diff({}, shadow_plan, decision=decision)
-    planning_diff_summary = summarize_planning_diff(planning_diff)
-    decision.planning_diff_summary = planning_diff_summary
-    planner_gate = build_planner_gate(decision=decision, shadow_plan=shadow_plan, planning_diff=planning_diff)
-    planner_gate_summary = summarize_planner_gate(planner_gate)
-    diagnosis_readiness = dict(planner_gate_summary.get("diagnosis_readiness") or {})
-    workorder_action_readiness = dict(planner_gate_summary.get("workorder_action_readiness") or {})
-    manual_confirmation = dict(planner_gate_summary.get("manual_confirmation") or {})
-    decision.planner_gate_summary = planner_gate_summary
-    decision = apply_planner_gate_to_decision(decision, planner_gate)
-    legacy_axis_fields = project_plan_axis_fields_for_compat(decision)
-    legacy_route_fields = project_route_fields_for_compat(decision)
-
     enabled_nodes = {key: bool(value) for key, value in (decision.enabled_nodes or {}).items() if value}
     skipped_nodes = {key: False for key, value in (decision.enabled_nodes or {}).items() if not value}
-    skip_reasons = _skip_reasons(decision, authorization.model_dump())
-    node_reasons = _node_reasons(decision, skip_reasons)
+    route_payload = _workflow_route_payload(decision, goal_set_summary)
 
     return PlanSnapshot(
         resolved_context=resolved_context_summary,
@@ -147,57 +128,18 @@ def build_plan_snapshot(
         task_family=decision.task_family,
         task_family_reason=decision.task_family_reason,
         task_family_source=decision.task_family_source,
-        shadow_plan=shadow_plan_summary,
-        planning_diff=planning_diff_summary,
-        planner_gate=planner_gate_summary,
-        diagnosis_readiness=diagnosis_readiness,
-        workorder_action_readiness=workorder_action_readiness,
-        manual_confirmation=manual_confirmation,
-        goals=_compact_goals(decision.goals),
-        intent_stack_projection=list(goal_set_summary.get("intent_stack_projection") or []),
-        intent_axes={
-            **legacy_axis_fields,
-            "task_family": decision.task_family,
-            "intent_stack_projection": list(goal_set_summary.get("intent_stack_projection") or []),
-            "continuation_type": decision.relation_to_previous,
-            "object_binding": decision.objects,
-            "time_window": decision.time_window,
-            "risk_level": decision.risk_level,
-            "requested_output": decision.requested_output,
-            "action_type": decision.action_type,
-            "shadow_plan": shadow_plan_summary,
-            "planning_diff": planning_diff_summary,
-            "planner_gate": planner_gate_summary,
-            "diagnosis_readiness": diagnosis_readiness,
-            "workorder_action_readiness": workorder_action_readiness,
-            "manual_confirmation": manual_confirmation,
-        },
-        workflow_route={
-            **legacy_route_fields,
-            "task_family": decision.task_family,
-            "task_family_reason": decision.task_family_reason,
-            "task_family_source": decision.task_family_source,
-            "goal_set": goal_set_summary,
-            "relation_to_previous": decision.relation_to_previous,
-            "plan_mode": decision.plan_mode,
-            "evidence_mode": decision.evidence_mode,
-            "action_target": decision.action_target,
-            "objects": decision.objects,
-            "time_window": decision.time_window,
-            "subgoals": decision.subgoals,
-            "flags": decision.flags,
-            "shadow_plan": shadow_plan_summary,
-            "planning_diff": planning_diff_summary,
-            "planner_gate": planner_gate_summary,
-            "diagnosis_readiness": diagnosis_readiness,
-            "workorder_action_readiness": workorder_action_readiness,
-            "manual_confirmation": manual_confirmation,
-        },
+        policy_id=str((decision.workflow_policy or {}).get("policy_id") or ""),
         workflow_policy=dict(decision.workflow_policy or {}),
         enabled_nodes=enabled_nodes,
         skipped_nodes=skipped_nodes,
         planned_tools=list(decision.runtime_tools or []),
+        runtime_tools=list(decision.runtime_tools or []),
         forbidden_tools=list((decision.workflow_policy or {}).get("forbidden_tools") or []),
+        requested_output=decision.requested_output,
+        readiness={"diagnosis": diagnosis, "workorder_action": workorder},
+        manual_confirmation=manual,
+        goals=_compact_goals(decision.goals),
+        workflow_route=route_payload,
         missing_slots=list(decision.missing_slots or []),
         evidence_gaps={
             "required_evidence": decision.required_evidence,
@@ -210,12 +152,34 @@ def build_plan_snapshot(
         skip_reasons=skip_reasons,
         plan_mode=decision.plan_mode,
         context_relation=decision.relation_to_previous,
-        referenced_artifact=referenced_artifact,
+        referenced_artifact=_referenced_artifact_payload(decision),
         node_reasons=node_reasons,
         planned_tool_arguments_preview=_planned_tool_arguments_preview(decision),
-        blocked_reason=blocked_reason,
-        authorization=authorization.model_dump(),
+        blocked_reason=_blocked_reason(decision, auth_payload),
+        authorization=auth_payload,
     )
+
+
+def _workflow_route_payload(decision: Any, goal_set_summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "task_family": decision.task_family,
+        "task_family_reason": decision.task_family_reason,
+        "task_family_source": decision.task_family_source,
+        "goal_set": goal_set_summary,
+        "relation_to_previous": decision.relation_to_previous,
+        "plan_mode": decision.plan_mode,
+        "evidence_mode": decision.evidence_mode,
+        "action_target": decision.action_target,
+        "objects": decision.objects,
+        "time_window": decision.time_window,
+        "subgoals": decision.subgoals,
+        "flags": decision.flags,
+        "readiness": {
+            "diagnosis": decision.diagnosis_readiness,
+            "workorder_action": decision.workorder_action_readiness,
+        },
+        "manual_confirmation": decision.manual_confirmation,
+    }
 
 
 def _referenced_artifact_payload(decision: Any) -> dict[str, Any]:
@@ -235,20 +199,19 @@ def _compact_goals(goals: Any) -> list[dict[str, Any]]:
     compact: list[dict[str, Any]] = []
     for item in goals:
         data = item.model_dump(exclude_none=True) if hasattr(item, "model_dump") else dict(item or {}) if isinstance(item, dict) else {}
-        if not data:
-            continue
-        compact.append(
-            {
-                "goal_id": data.get("goal_id"),
-                "goal_type": data.get("goal_type"),
-                "status": data.get("status"),
-                "depends_on": list(data.get("depends_on") or []),
-                "missing_slots": list(data.get("missing_slots") or []),
-                "context_refs": list(data.get("context_refs") or []),
-                "expected_output": data.get("expected_output"),
-                "risk_level": data.get("risk_level"),
-            }
-        )
+        if data:
+            compact.append(
+                {
+                    "goal_id": data.get("goal_id"),
+                    "goal_type": data.get("goal_type"),
+                    "status": data.get("status"),
+                    "depends_on": list(data.get("depends_on") or []),
+                    "missing_slots": list(data.get("missing_slots") or []),
+                    "context_refs": list(data.get("context_refs") or []),
+                    "expected_output": data.get("expected_output"),
+                    "risk_level": data.get("risk_level"),
+                }
+            )
     return compact
 
 
@@ -277,7 +240,7 @@ def _node_reasons(decision: Any, skip_reasons: dict[str, str]) -> dict[str, str]
     reasons = dict(skip_reasons)
     for node, enabled in dict(getattr(decision, "enabled_nodes", {}) or {}).items():
         if enabled:
-            reasons[node] = "enabled_by_workflow_policy_or_intent"
+            reasons[node] = "enabled_by_goal_native_policy"
     return reasons
 
 

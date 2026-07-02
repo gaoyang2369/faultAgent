@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fault_diagnosis.single_agent.compat import legacy_task_value
+from fault_diagnosis.single_agent.workflow.axes import goal_types, requests_report, task_profile_for_compat
 
 from .contracts import AuthContext, AuthorizationDecision
 from .assets import asset_is_in_scope
@@ -35,7 +35,7 @@ def _requested_assets(decision: Any) -> list[str]:
 
 
 def authorize_workflow(auth: AuthContext, decision: Any) -> AuthorizationDecision:
-    task_type = legacy_task_value(decision, default="status_query")
+    task_type = _authorization_task(decision)
     permission = WORKFLOW_PERMISSION_BY_TASK.get(task_type)
     resource_scope = effective_resource_scope(auth)
     data_scope = resource_scope.model_dump()
@@ -173,3 +173,15 @@ def apply_authorization_to_decision(decision: Any, authorization: AuthorizationD
         decision.enabled_nodes = {}
         decision.runtime_tools = []
     return decision
+
+
+def _authorization_task(decision: Any) -> str:
+    policy_id = str((getattr(decision, "workflow_policy", {}) or {}).get("policy_id") or "")
+    if policy_id.endswith("_v1"):
+        return policy_id[:-3]
+    goals = set(goal_types(decision))
+    if requests_report(decision):
+        return "report_generation"
+    if "answer_meta_question" in goals:
+        return "permission_scope_query"
+    return task_profile_for_compat(decision)

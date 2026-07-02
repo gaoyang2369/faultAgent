@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-from ..compat import (
-    build_task_payload_for_compat,
-    goal_types,
-    legacy_task_value,
-    route_is_action_request,
-    route_requests_workorder_followup,
-)
-from .contracts import NodeSetting, TaskRoute, TaskType, WorkflowPlan, WorkflowPolicy
+from .axes import goal_types
+from .contracts import NodeSetting, TaskRoute, WorkflowPlan, WorkflowPolicy
 
 _SQL_TOOLS = ["sql_db_query_checker", "sql_db_query"]
 _KNOWLEDGE_TOOLS = ["query_knowledge_base"]
@@ -19,7 +13,11 @@ _REPORT_TOOLS = ["save_report"]
 def _policy(
     *,
     policy_id: str,
-    task_type: TaskType,
+    task_family: str,
+    goal_types: list[str],
+    risk_level: str = "read_only",
+    action_target: str | None = None,
+    requested_output: str = "answer",
     workflow_id: str,
     required_slots: list[str],
     conditional_required_slots: dict[str, list[str]] | None,
@@ -31,7 +29,11 @@ def _policy(
 ) -> WorkflowPolicy:
     return WorkflowPolicy(
         policy_id=policy_id,
-        task_type=task_type,
+        task_family=task_family,
+        goal_types=goal_types,
+        risk_level=risk_level,
+        action_target=action_target,
+        requested_output=requested_output,
         workflow_id=workflow_id,
         required_slots=required_slots,
         conditional_required_slots=conditional_required_slots or {},
@@ -59,10 +61,11 @@ def _policy(
     )
 
 
-POLICIES: dict[TaskType, WorkflowPolicy] = {
-    TaskType.STATUS_QUERY: _policy(
+POLICIES_BY_ID: dict[str, WorkflowPolicy] = {
+    "status_query_v1": _policy(
         policy_id="status_query_v1",
-        task_type=TaskType.STATUS_QUERY,
+        task_family="runtime_status",
+        goal_types=["check_runtime_status", "refresh_current_status"],
         workflow_id="wf_status_query_v1",
         required_slots=["asset_context"],
         conditional_required_slots={"workorder_decision": ["current_abnormal_status"]},
@@ -87,9 +90,10 @@ POLICIES: dict[TaskType, WorkflowPolicy] = {
             "no_workorder_dispatch_without_human_confirmation",
         ],
     ),
-    TaskType.ALARM_TRIAGE: _policy(
+    "alarm_triage_v1": _policy(
         policy_id="alarm_triage_v1",
-        task_type=TaskType.ALARM_TRIAGE,
+        task_family="diagnosis",
+        goal_types=["explain_fault_code", "check_runtime_status", "assess_severity", "recommend_resolution"],
         workflow_id="wf_alarm_triage_v1",
         required_slots=["alarm_code_or_name"],
         conditional_required_slots={
@@ -119,9 +123,10 @@ POLICIES: dict[TaskType, WorkflowPolicy] = {
             "cite_evidence_ids",
         ],
     ),
-    TaskType.FAULT_DIAGNOSIS: _policy(
+    "fault_diagnosis_v1": _policy(
         policy_id="fault_diagnosis_v1",
-        task_type=TaskType.FAULT_DIAGNOSIS,
+        task_family="diagnosis",
+        goal_types=["diagnose_fault", "recommend_resolution", "decide_workorder"],
         workflow_id="wf_fault_diagnosis_v1",
         required_slots=["asset_context", "symptom_or_alarm"],
         conditional_required_slots={},
@@ -147,9 +152,10 @@ POLICIES: dict[TaskType, WorkflowPolicy] = {
             "no_control_action_without_approval",
         ],
     ),
-    TaskType.ROOT_CAUSE_ANALYSIS: _policy(
+    "root_cause_analysis_v1": _policy(
         policy_id="root_cause_analysis_v1",
-        task_type=TaskType.ROOT_CAUSE_ANALYSIS,
+        task_family="diagnosis",
+        goal_types=["diagnose_fault", "assess_severity", "recommend_resolution", "generate_report"],
         workflow_id="wf_root_cause_analysis_v1",
         required_slots=["event_or_asset_context", "time_window"],
         conditional_required_slots={"workorder_decision": ["open_risk"]},
@@ -175,9 +181,10 @@ POLICIES: dict[TaskType, WorkflowPolicy] = {
             "show_unknowns",
         ],
     ),
-    TaskType.HEALTH_ASSESSMENT: _policy(
+    "health_assessment_v1": _policy(
         policy_id="health_assessment_v1",
-        task_type=TaskType.HEALTH_ASSESSMENT,
+        task_family="diagnosis",
+        goal_types=["assess_severity", "recommend_resolution"],
         workflow_id="wf_health_assessment_v1",
         required_slots=["asset_or_group_context"],
         conditional_required_slots={"workorder_decision": ["high_risk_or_degradation"]},
@@ -202,9 +209,10 @@ POLICIES: dict[TaskType, WorkflowPolicy] = {
             "show_data_sufficiency",
         ],
     ),
-    TaskType.KNOWLEDGE_QA: _policy(
+    "knowledge_qa_v1": _policy(
         policy_id="knowledge_qa_v1",
-        task_type=TaskType.KNOWLEDGE_QA,
+        task_family="knowledge_lookup",
+        goal_types=["explain_fault_code", "recommend_resolution"],
         workflow_id="wf_knowledge_qa_v1",
         required_slots=["topic_or_alarm_or_operation"],
         conditional_required_slots={"sql": ["device_id_when_device_specific"]},
@@ -229,9 +237,11 @@ POLICIES: dict[TaskType, WorkflowPolicy] = {
             "no_workorder_dispatch_without_human_confirmation",
         ],
     ),
-    TaskType.REPORT_GENERATION: _policy(
+    "report_generation_v1": _policy(
         policy_id="report_generation_v1",
-        task_type=TaskType.REPORT_GENERATION,
+        task_family="reporting",
+        goal_types=["generate_report"],
+        requested_output="report",
         workflow_id="wf_report_generation_v1",
         required_slots=["report_type_or_existing_evidence"],
         conditional_required_slots={},
@@ -256,9 +266,11 @@ POLICIES: dict[TaskType, WorkflowPolicy] = {
             "show_report_window",
         ],
     ),
-    TaskType.ACTION_REQUEST: _policy(
+    "action_request_v1": _policy(
         policy_id="action_request_v1",
-        task_type=TaskType.ACTION_REQUEST,
+        task_family="action_or_workorder",
+        goal_types=["decide_workorder", "create_workorder_draft", "dispatch_workorder"],
+        risk_level="requires_confirmation",
         workflow_id="wf_action_request_v1",
         required_slots=["action_type"],
         conditional_required_slots={"execute_if_allowed": ["permission", "approval", "safe_state"]},
@@ -288,9 +300,10 @@ POLICIES: dict[TaskType, WorkflowPolicy] = {
             "audit_write_intent",
         ],
     ),
-    TaskType.PERMISSION_SCOPE_QUERY: _policy(
+    "permission_scope_query_v1": _policy(
         policy_id="permission_scope_query_v1",
-        task_type=TaskType.PERMISSION_SCOPE_QUERY,
+        task_family="meta",
+        goal_types=["answer_meta_question", "clarify_missing_context"],
         workflow_id="wf_permission_scope_query_v1",
         required_slots=[],
         conditional_required_slots={},
@@ -315,41 +328,21 @@ POLICIES: dict[TaskType, WorkflowPolicy] = {
 }
 
 
-def get_policy(task_type: TaskType | str) -> WorkflowPolicy:
-    """Deprecated fallback policy lookup for legacy task classifiers."""
-
-    if isinstance(task_type, TaskType):
-        normalized = task_type
-    else:
-        try:
-            normalized = TaskType(str(task_type))
-        except ValueError:
-            normalized = TaskType.FAULT_DIAGNOSIS
-    return POLICIES[normalized]
-
-
 def select_policy_from_intent_axes(route: TaskRoute) -> WorkflowPolicy:
     """Select policy from task family, GoalSet, context and readiness axes.
 
-    The legacy classifier remains as a compatibility fallback. When the new
-    axes disagree with the legacy-selected policy, keep legacy execution.
+    Deprecated task fields are not execution inputs in Phase 5.5.
     """
 
-    axis_task = _task_type_from_axes(route)
-    if axis_task is None:
-        return get_policy(legacy_task_value(route))
-    axis_policy = POLICIES[axis_task]
-    legacy_policy = get_policy(legacy_task_value(route))
-    if axis_policy.policy_id != legacy_policy.policy_id:
-        return legacy_policy
-    return axis_policy
+    policy_id = _policy_id_from_axes(route)
+    return POLICIES_BY_ID.get(policy_id, POLICIES_BY_ID["fault_diagnosis_v1"])
 
 
 def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> WorkflowPlan:
     """Resolve policy nodes and runtime tool allowlist for a route."""
 
     policy = select_policy_from_intent_axes(route)
-    plan_mode_nodes = _nodes_for_plan_mode(route.plan_mode)
+    plan_mode_nodes = _nodes_for_plan_mode(route)
     if plan_mode_nodes is not None:
         return WorkflowPlan(
             route=route,
@@ -363,7 +356,6 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
                     for item in route.subgoals
                     if item.status == "blocked"
                 ],
-                **build_task_payload_for_compat(route),
                 "plan_mode": route.plan_mode,
                 "evidence_mode": route.evidence_mode,
             },
@@ -392,19 +384,18 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
                 for item in route.subgoals
                 if item.status == "blocked"
             ],
-            **build_task_payload_for_compat(route),
             "plan_mode": route.plan_mode,
             "evidence_mode": route.evidence_mode,
         },
     )
 
 
-def _nodes_for_plan_mode(plan_mode: str) -> dict[str, bool] | None:
-    if plan_mode == "workorder_decision_from_artifact":
+def _nodes_for_plan_mode(route: TaskRoute) -> dict[str, bool] | None:
+    if route.plan_mode == "workorder_decision_from_artifact":
         return {
             "permission_check": True,
             "risk_check": True,
-            "sql": False,
+            "sql": bool(route.should_refresh_runtime_data or route.flags.get("need_sql")),
             "knowledge": False,
             "analysis": False,
             "resolution_recommendation": False,
@@ -414,7 +405,7 @@ def _nodes_for_plan_mode(plan_mode: str) -> dict[str, bool] | None:
             "output_guardrail": True,
             "audit_log": True,
         }
-    if plan_mode == "status_refresh_then_workorder":
+    if route.plan_mode == "status_refresh_then_workorder":
         return {
             "permission_check": True,
             "risk_check": True,
@@ -431,31 +422,51 @@ def _nodes_for_plan_mode(plan_mode: str) -> dict[str, bool] | None:
     return None
 
 
-def _task_type_from_axes(route: TaskRoute) -> TaskType | None:
+def _policy_id_from_axes(route: TaskRoute) -> str:
     goals = set(goal_types(route))
     task_family = str(route.task_family or "")
     relation = str((route.resolved_context or {}).get("relation_to_previous") or route.relation_to_previous or "")
     if "answer_meta_question" in goals or task_family == "meta":
-        return TaskType.PERMISSION_SCOPE_QUERY
+        return "permission_scope_query_v1"
     if "generate_report" in goals or route.requested_output == "report" or relation == "report_handoff":
-        return TaskType.REPORT_GENERATION
+        return "report_generation_v1"
     if task_family == "action_or_workorder" or route.action_type:
-        return TaskType.ACTION_REQUEST
+        return "action_request_v1"
+    if route.time_window.default_strategy in {"event_window_required", "event_window"} and _looks_like_root_cause_goal(route.user_goal):
+        return "root_cause_analysis_v1"
     if task_family == "runtime_status" or goals.intersection({"check_runtime_status", "refresh_current_status"}):
+        if task_family == "diagnosis" and _looks_like_alarm_triage_goal(route.user_goal):
+            return "alarm_triage_v1"
         if not goals.difference({"check_runtime_status", "refresh_current_status"}):
-            return TaskType.STATUS_QUERY
+            return "status_query_v1"
     if task_family == "knowledge_lookup":
-        return TaskType.KNOWLEDGE_QA
+        return "knowledge_qa_v1"
     if task_family == "diagnosis":
-        if "diagnose_fault" in goals:
-            return TaskType.FAULT_DIAGNOSIS
+        if _looks_like_alarm_triage_goal(route.user_goal) or "alarm_code" in set(route.missing_slots):
+            return "alarm_triage_v1"
         if goals.intersection({"explain_fault_code", "recommend_resolution"}) and goals.intersection(
             {"check_runtime_status", "refresh_current_status", "assess_severity"}
         ):
-            return TaskType.ALARM_TRIAGE
+            return "alarm_triage_v1"
+        if "diagnose_fault" in goals:
+            return "fault_diagnosis_v1"
         if goals == {"assess_severity"}:
-            return TaskType.HEALTH_ASSESSMENT
-    return None
+            return "health_assessment_v1"
+        return "fault_diagnosis_v1"
+    return "fault_diagnosis_v1"
+
+
+def _looks_like_alarm_triage_goal(text: str) -> bool:
+    compact = str(text or "").replace(" ", "")
+    return bool(
+        ("报警" in compact or "告警" in compact or "故障码" in compact)
+        and any(word in compact for word in ("意思", "含义", "解释", "还在报警", "现在"))
+    )
+
+
+def _looks_like_root_cause_goal(text: str) -> bool:
+    compact = str(text or "").replace(" ", "").upper()
+    return "根因" in compact or "RCA" in compact
 
 
 def resolve_nodes_from_goals(route: TaskRoute) -> set[str]:
@@ -473,7 +484,7 @@ def resolve_nodes_from_goals(route: TaskRoute) -> set[str]:
         nodes.update({"knowledge", "analysis", "resolution_recommendation"})
     if "generate_report" in goals or route.requested_output == "report":
         nodes.add("report")
-    if route_is_action_request(route):
+    if str(route.task_family or "") == "action_or_workorder" or bool(route.action_type):
         nodes.update(
             {
                 "permission_check",
@@ -485,7 +496,10 @@ def resolve_nodes_from_goals(route: TaskRoute) -> set[str]:
                 "audit_log",
             }
         )
-    if route_requests_workorder_followup(route) and (route.flags.get("need_workorder_decision") or route.action_target == "workorder"):
+    if (
+        goals.intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"})
+        or route.action_target == "workorder"
+    ) and (route.flags.get("need_workorder_decision") or route.action_target == "workorder"):
         nodes.update({"permission_check", "risk_check", "workorder_decision", "audit_log"})
     return nodes
 
@@ -514,7 +528,8 @@ def _resolve_node(
         return bool(
             flags.get("need_sql")
             or route.has_device_context()
-            or route_is_action_request(route)
+            or str(route.task_family or "") == "action_or_workorder"
+            or bool(route.action_type)
         )
     if node_name == "knowledge":
         goals = set(goal_types(route))

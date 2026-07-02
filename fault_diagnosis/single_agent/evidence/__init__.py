@@ -17,7 +17,6 @@ from ...diagnosis.contracts import (
     WorkOrderSuggestion,
 )
 from ...diagnosis.analysis.contracts import StructuredAnalysisArtifact
-from ..compat import build_task_payload_for_compat
 from ..contracts import SingleAgentDecision
 from .claims import build_claims
 from .knowledge import build_knowledge_evidence_items
@@ -41,7 +40,8 @@ def initialize_evidence_bundle(
     workflow_id = str(workflow_policy.get("workflow_id") or WORKFLOW_ID)
     workflow_version = str(workflow_policy.get("version") or WORKFLOW_VERSION)
     task = {
-        **build_task_payload_for_compat(decision, include_task_type_alias=True),
+        "task_family": decision.task_family,
+        "goal_set": decision.goal_set,
         "context_resolution": decision.context_resolution,
         "active_case_id": decision.active_case_id,
         "relation_to_previous": decision.relation_to_previous,

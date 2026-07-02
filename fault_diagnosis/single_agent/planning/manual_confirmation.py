@@ -6,8 +6,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ..compat import legacy_intents
-
 from .action_readiness import classify_action_type
 
 MANUAL_CONFIRMATION_SCHEMA_VERSION = "manual_confirmation_requirement.v1"
@@ -107,7 +105,7 @@ def _confirmation_type(decision: Any, action_type: str) -> ConfirmationType:
                 getattr(decision, "action_type", "") or "",
                 getattr(decision, "action_target", "") or "",
                 getattr(decision, "user_goal", "") or "",
-                *legacy_intents(decision),
+                str(getattr(decision, "goal_summary", "") or ""),
             ]
         )
     )

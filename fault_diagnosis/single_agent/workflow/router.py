@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..compat import build_legacy_intent_stack, mark_goal_projection_mismatch
-from .contracts import TaskRoute, TaskType, WorkflowObjects, WorkflowSubgoal, WorkflowTimeWindow
+from .axes import goal_types
+from .contracts import TaskRoute, WorkflowObjects, WorkflowSubgoal, WorkflowTimeWindow
 from .goals import build_goal_set
 from .task_family import resolve_task_family
 
@@ -100,13 +100,13 @@ def route_task(
         resolved_context_payload.get("relation_to_previous") == "report_handoff"
     )
     objects = _extract_objects(payload, normalized)
-    task_type, confidence = _classify_task(normalized, objects, effective_report_from_previous_artifact)
-    requested_output = _requested_output(task_type, normalized)
-    time_window = _time_window(task_type, payload, normalized)
-    missing_slots = _missing_slots(task_type, objects, time_window, normalized)
-    risk_level = _risk_level(task_type, normalized)
-    legacy_intent_candidates = _intent_stack(
-        task_type,
+    task_key, confidence = _classify_task(normalized, objects, effective_report_from_previous_artifact)
+    requested_output = _requested_output(task_key, normalized)
+    time_window = _time_window(task_key, payload, normalized)
+    missing_slots = _missing_slots(task_key, objects, time_window, normalized)
+    risk_level = _risk_level(task_key, normalized)
+    legacy_candidates = _legacy_goal_hints(
+        task_key,
         normalized,
         objects,
         requested_output,
@@ -117,40 +117,35 @@ def route_task(
         payload=payload,
         resolved_context=resolved_context_payload,
         route_hint={
-            "task_type": task_type,
+            "task_type": task_key,
             "requested_output": requested_output,
             "objects": objects,
             "missing_slots": missing_slots,
             "risk_level": risk_level,
-            "legacy_intent_candidates": legacy_intent_candidates,
+            "legacy_candidates": legacy_candidates,
         },
     )
-    intent_stack = build_legacy_intent_stack(goal_set, legacy_intent_candidates)
-    candidate_task_types = _candidate_task_types(task_type, intent_stack)
-    flags = _flags_for_task(task_type, normalized, objects, requested_output, effective_report_from_previous_artifact)
-    projection_mismatch = set(goal_set.intent_stack_projection) != set(legacy_intent_candidates)
-    if projection_mismatch:
-        flags["goal_projection_mismatch"] = True
-        goal_set = mark_goal_projection_mismatch(goal_set, legacy_intent_candidates)
-    _apply_intent_flags(flags, intent_stack, objects)
-    subgoals = _subgoals(task_type, objects, flags, missing_slots)
-    action_type = _action_type(normalized) if task_type == TaskType.ACTION_REQUEST else None
+    current_goal_types = goal_types(goal_set)
+    flags = _flags_for_task(task_key, normalized, objects, requested_output, effective_report_from_previous_artifact)
+    _apply_goal_flags(flags, current_goal_types, objects)
+    if bool(resolved_context_payload.get("should_refresh_runtime_data")):
+        flags["need_sql"] = True
+    subgoals = _subgoals(current_goal_types, objects, flags, missing_slots)
+    action_type = _action_type(normalized) if task_key == "action_request" else None
+    action_target = _action_target_from_goals(current_goal_types, action_type)
     task_family = resolve_task_family(
-        task_type=task_type,
         requested_output=requested_output,
         goals=list(goal_set.goals),
         resolved_context=resolved_context_payload,
-        compat_intents=intent_stack,
+        action_target=action_target,
+        action_type=action_type,
     )
 
     return TaskRoute(
-        primary_task_type=task_type,
         task_family=task_family.task_family,
         task_family_reason=task_family.reason,
         task_family_source=task_family.source,
         task_family_warnings=task_family.warnings,
-        candidate_task_types=candidate_task_types,
-        intent_stack=intent_stack,
         goals=list(goal_set.goals),
         goal_set=goal_set.model_dump(exclude_none=True),
         goal_summary=goal_set.goal_summary,
@@ -162,9 +157,9 @@ def route_task(
         referenced_case_id=resolved_context_payload.get("referenced_case_id")
         or resolved_context_payload.get("active_case_id"),
         should_refresh_runtime_data=bool(resolved_context_payload.get("should_refresh_runtime_data")),
-        action_target=_action_target(intent_stack),
+        action_target=action_target,
         route_confidence=confidence,
-        user_goal=str(payload.get("analysis_goal") or normalized or task_type.value),
+        user_goal=str(payload.get("analysis_goal") or normalized or task_key),
         objects=objects,
         time_window=time_window,
         subgoals=subgoals,
@@ -188,40 +183,40 @@ def _classify_task(
     text: str,
     objects: WorkflowObjects,
     report_from_previous_artifact: bool,
-) -> tuple[TaskType, float]:
+) -> tuple[str, float]:
     compact = text.replace(" ", "").lower()
     if report_from_previous_artifact:
-        return TaskType.REPORT_GENERATION, 0.95
+        return "report_generation", 0.95
     if _has_any(compact, _PERMISSION_SCOPE_KEYWORDS):
-        return TaskType.PERMISSION_SCOPE_QUERY, 0.9
+        return "permission_scope_query", 0.9
     if _has_any(compact, _ACTION_KEYWORDS):
-        return TaskType.ACTION_REQUEST, 0.92
+        return "action_request", 0.92
     if _has_any(compact, _REPORT_KEYWORDS):
-        return TaskType.REPORT_GENERATION, 0.9
+        return "report_generation", 0.9
     if _has_any(compact, _RCA_KEYWORDS):
-        return TaskType.ROOT_CAUSE_ANALYSIS, 0.9
+        return "root_cause_analysis", 0.9
     if _has_any(compact, _HEALTH_KEYWORDS):
-        return TaskType.HEALTH_ASSESSMENT, 0.86
+        return "health_assessment", 0.86
     has_alarm = bool(objects.alarm_codes) or _has_any(compact, _ALARM_KEYWORDS)
     if _has_any(compact, _WORKORDER_DECISION_KEYWORDS):
-        return TaskType.FAULT_DIAGNOSIS, 0.72
+        return "fault_diagnosis", 0.72
     if has_alarm and _has_any(compact, _TRIAGE_KEYWORDS):
-        return TaskType.ALARM_TRIAGE, 0.88
+        return "alarm_triage", 0.88
     if _has_any(compact, _SEVERITY_KEYWORDS):
-        return TaskType.HEALTH_ASSESSMENT, 0.74
+        return "health_assessment", 0.74
     if _has_any(compact, _KNOWLEDGE_KEYWORDS) and not _has_any(compact, _CURRENT_STATUS_KEYWORDS):
-        return TaskType.KNOWLEDGE_QA, 0.84
+        return "knowledge_qa", 0.84
     if has_alarm and not objects.device_ids:
-        return TaskType.KNOWLEDGE_QA, 0.8
+        return "knowledge_qa", 0.8
     if _has_any(compact, _FAULT_DIAGNOSIS_KEYWORDS):
-        return TaskType.FAULT_DIAGNOSIS, 0.82
+        return "fault_diagnosis", 0.82
     if _has_any(compact, _STATUS_KEYWORDS):
-        return TaskType.STATUS_QUERY, 0.78
-    return TaskType.STATUS_QUERY, 0.58
+        return "status_query", 0.78
+    return "status_query", 0.58
 
 
-def _intent_stack(
-    task_type: TaskType,
+def _legacy_goal_hints(
+    task_key: str,
     text: str,
     objects: WorkflowObjects,
     requested_output: str,
@@ -232,7 +227,7 @@ def _intent_stack(
         return ["report_generation"]
     intents: list[str] = []
     has_alarm = bool(objects.alarm_codes) or _has_any(compact, _ALARM_KEYWORDS)
-    if task_type == TaskType.ACTION_REQUEST:
+    if task_key == "action_request":
         intents.append("action_request")
     if _has_any(compact, _DISPATCH_WORKORDER_KEYWORDS):
         intents.append("dispatch_workorder")
@@ -242,11 +237,11 @@ def _intent_stack(
         intents.append("workorder_decision")
     if requested_output == "report" or report_from_previous_artifact:
         intents.append("report_generation")
-    if task_type == TaskType.PERMISSION_SCOPE_QUERY:
+    if task_key == "permission_scope_query":
         intents.append("permission_scope_query")
     if has_alarm and (_has_any(compact, _KNOWLEDGE_KEYWORDS + _ALARM_KEYWORDS) or objects.alarm_codes):
         intents.append("explain_alarm_code")
-    if _has_any(compact, _CURRENT_STATUS_KEYWORDS) or task_type == TaskType.STATUS_QUERY:
+    if _has_any(compact, _CURRENT_STATUS_KEYWORDS) or task_key == "status_query":
         intents.append("check_current_status")
     if _has_any(compact, ("影响", "范围", "后果")):
         intents.append("fault_impact")
@@ -255,7 +250,7 @@ def _intent_stack(
     if _has_any(compact, _RESOLUTION_KEYWORDS):
         intents.append("resolution_recommendation")
     if (
-        task_type in {TaskType.FAULT_DIAGNOSIS, TaskType.ROOT_CAUSE_ANALYSIS}
+        task_key in {"fault_diagnosis", "root_cause_analysis"}
         or _has_any(compact, _FAULT_DIAGNOSIS_KEYWORDS)
     ):
         intents.append("fault_diagnosis")
@@ -263,70 +258,33 @@ def _intent_stack(
         intents.append("check_current_status")
     return _dedupe(intents)
 
-
-def _candidate_task_types(primary: TaskType, intent_stack: list[str]) -> list[TaskType]:
-    candidates = [primary]
-    intent_map: dict[str, list[TaskType]] = {
-        "explain_alarm_code": [TaskType.KNOWLEDGE_QA, TaskType.ALARM_TRIAGE],
-        "check_current_status": [TaskType.STATUS_QUERY],
-        "fault_impact": [TaskType.FAULT_DIAGNOSIS, TaskType.HEALTH_ASSESSMENT],
-        "severity_assessment": [TaskType.HEALTH_ASSESSMENT, TaskType.ALARM_TRIAGE],
-        "resolution_recommendation": [TaskType.KNOWLEDGE_QA, TaskType.FAULT_DIAGNOSIS],
-        "report_generation": [TaskType.REPORT_GENERATION],
-        "action_request": [TaskType.ACTION_REQUEST],
-        "workorder_decision": [TaskType.FAULT_DIAGNOSIS],
-        "create_workorder_draft": [TaskType.ACTION_REQUEST],
-        "dispatch_workorder": [TaskType.ACTION_REQUEST],
-        "fault_diagnosis": [TaskType.FAULT_DIAGNOSIS],
-        "permission_scope_query": [TaskType.PERMISSION_SCOPE_QUERY],
-    }
-    for intent in intent_stack:
-        candidates.extend(intent_map.get(intent, []))
-    return list(dict.fromkeys(candidates))
-
-
-def _apply_intent_flags(flags: dict[str, bool], intent_stack: list[str], objects: WorkflowObjects) -> None:
-    intents = set(intent_stack)
-    if "explain_alarm_code" in intents:
+def _apply_goal_flags(flags: dict[str, bool], goals: list[str], objects: WorkflowObjects) -> None:
+    goal_set = set(goals)
+    if "explain_fault_code" in goal_set:
         flags["need_knowledge"] = True
-    if "check_current_status" in intents and objects.device_ids:
+    if goal_set.intersection({"check_runtime_status", "refresh_current_status"}) and objects.device_ids:
         flags["need_sql"] = True
-    if intents.intersection({"fault_impact", "severity_assessment"}):
+    if "assess_severity" in goal_set:
         flags["need_analysis"] = True
         flags["need_knowledge"] = True
         if objects.device_ids:
             flags["need_sql"] = True
-    if "resolution_recommendation" in intents:
+    if "recommend_resolution" in goal_set:
         flags["need_knowledge"] = True
         flags["need_analysis"] = True
         flags["need_resolution"] = True
-    if "report_generation" in intents:
+    if "generate_report" in goal_set:
         flags["need_report"] = True
-    if "workorder_decision" in intents:
+    if "decide_workorder" in goal_set:
         flags["need_workorder_decision"] = True
-    if "create_workorder_draft" in intents:
+    if goal_set.intersection({"create_workorder_draft", "dispatch_workorder"}):
         flags.update(
             need_workorder_decision=True,
             need_permission_check=True,
             need_risk_check=True,
             may_involve_write_action=True,
         )
-    if "dispatch_workorder" in intents:
-        flags.update(
-            need_workorder_decision=True,
-            need_permission_check=True,
-            need_risk_check=True,
-            may_involve_write_action=True,
-        )
-    if "action_request" in intents:
-        flags.update(
-            need_sql=True,
-            need_knowledge=True,
-            need_analysis=True,
-            need_resolution=True,
-            may_involve_write_action=True,
-        )
-    if "permission_scope_query" in intents:
+    if "answer_meta_question" in goal_set:
         flags.update(
             need_sql=False,
             need_knowledge=False,
@@ -335,7 +293,7 @@ def _apply_intent_flags(flags: dict[str, bool], intent_stack: list[str], objects
             need_workorder_decision=False,
             need_report=False,
         )
-    if len(intents) > 1:
+    if len(goal_set) > 1:
         flags["safe_union_workflow"] = True
 
 
@@ -374,33 +332,33 @@ def _extract_objects(payload: dict[str, Any], text: str) -> WorkflowObjects:
     )
 
 
-def _time_window(task_type: TaskType, payload: dict[str, Any], text: str) -> WorkflowTimeWindow:
+def _time_window(task_key: str, payload: dict[str, Any], text: str) -> WorkflowTimeWindow:
     time_hint = str(payload.get("time_range_hint") or "").strip()
     if time_hint:
         return WorkflowTimeWindow(is_inferred=False, default_strategy=time_hint)
     if any(keyword in text for keyword in ("昨天", "上周", "过去", "最近", "历史")):
         strategy = "last_2h"
-        if task_type == TaskType.HEALTH_ASSESSMENT:
+        if task_key == "health_assessment":
             strategy = "last_7d"
-        elif task_type == TaskType.ROOT_CAUSE_ANALYSIS:
+        elif task_key == "root_cause_analysis":
             strategy = "event_window"
         return WorkflowTimeWindow(is_inferred=True, default_strategy=strategy)
     defaults = {
-        TaskType.STATUS_QUERY: "current_status",
-        TaskType.ALARM_TRIAGE: "current_status",
-        TaskType.FAULT_DIAGNOSIS: "last_2h",
-        TaskType.ROOT_CAUSE_ANALYSIS: "event_window_required",
-        TaskType.HEALTH_ASSESSMENT: "last_7d",
-        TaskType.KNOWLEDGE_QA: "static_reference",
-        TaskType.REPORT_GENERATION: "existing_evidence_or_current",
-        TaskType.ACTION_REQUEST: "current_status",
-        TaskType.PERMISSION_SCOPE_QUERY: "none",
+        "status_query": "current_status",
+        "alarm_triage": "current_status",
+        "fault_diagnosis": "last_2h",
+        "root_cause_analysis": "event_window_required",
+        "health_assessment": "last_7d",
+        "knowledge_qa": "static_reference",
+        "report_generation": "existing_evidence_or_current",
+        "action_request": "current_status",
+        "permission_scope_query": "none",
     }
-    return WorkflowTimeWindow(is_inferred=True, default_strategy=defaults[task_type])
+    return WorkflowTimeWindow(is_inferred=True, default_strategy=defaults.get(task_key, "current_status"))
 
 
 def _flags_for_task(
-    task_type: TaskType,
+    task_key: str,
     text: str,
     objects: WorkflowObjects,
     requested_output: str,
@@ -416,29 +374,29 @@ def _flags_for_task(
         "need_resolution": asks_resolution,
         "need_workorder_decision": asks_workorder,
         "need_report": requested_output == "report",
-        "may_involve_write_action": task_type == TaskType.ACTION_REQUEST,
+        "may_involve_write_action": task_key == "action_request",
     }
-    if task_type == TaskType.STATUS_QUERY:
+    if task_key == "status_query":
         flags.update(need_sql=True, need_knowledge=False, need_workorder_decision=asks_workorder)
-    elif task_type == TaskType.ALARM_TRIAGE:
+    elif task_key == "alarm_triage":
         flags.update(
             need_sql=asks_current or bool(objects.device_ids),
             need_knowledge=True,
             need_resolution=True,
             need_workorder_decision=True,
         )
-    elif task_type in {TaskType.FAULT_DIAGNOSIS, TaskType.ROOT_CAUSE_ANALYSIS}:
+    elif task_key in {"fault_diagnosis", "root_cause_analysis"}:
         flags.update(need_sql=True, need_knowledge=True, need_resolution=True, need_workorder_decision=True)
-    elif task_type == TaskType.HEALTH_ASSESSMENT:
+    elif task_key == "health_assessment":
         flags.update(need_sql=True, need_knowledge=asks_resolution, need_resolution=True, need_workorder_decision=True)
-    elif task_type == TaskType.KNOWLEDGE_QA:
+    elif task_key == "knowledge_qa":
         flags.update(
             need_sql=bool(objects.device_ids) and asks_current,
             need_knowledge=True,
             need_resolution=asks_resolution,
             need_workorder_decision=False,
         )
-    elif task_type == TaskType.REPORT_GENERATION:
+    elif task_key == "report_generation":
         flags.update(
             need_sql=not report_from_previous_artifact
             and (
@@ -449,7 +407,7 @@ def _flags_for_task(
             need_report=True,
             need_workorder_decision=False,
         )
-    elif task_type == TaskType.ACTION_REQUEST:
+    elif task_key == "action_request":
         is_workorder_only = _has_any(text, _CREATE_WORKORDER_DRAFT_KEYWORDS + _DISPATCH_WORKORDER_KEYWORDS)
         flags.update(
             need_sql=not is_workorder_only,
@@ -457,68 +415,45 @@ def _flags_for_task(
             need_resolution=True,
             need_workorder_decision=asks_workorder,
         )
-    elif task_type == TaskType.PERMISSION_SCOPE_QUERY:
+    elif task_key == "permission_scope_query":
         flags.update(need_sql=False, need_knowledge=False, need_analysis=True, need_workorder_decision=False, need_report=False)
     return flags
 
 
 def _subgoals(
-    task_type: TaskType,
+    goals: list[str],
     objects: WorkflowObjects,
     flags: dict[str, bool],
     missing_slots: list[str],
 ) -> list[WorkflowSubgoal]:
-    builders = {
-        TaskType.STATUS_QUERY: [
-            ("check_current_status", True, []),
-            ("summarize_recent_alarms", False, []),
-            ("workorder_decision", False, ["current_abnormal_status"] if flags.get("need_workorder_decision") else []),
-        ],
-        TaskType.ALARM_TRIAGE: [
-            ("explain_alarm_code", True, [] if objects.alarm_codes else ["alarm_code"]),
-            ("check_current_alarm_status", True, [] if objects.device_ids else ["device_id"]),
-            ("check_current_fault_status", True, [] if objects.device_ids else ["device_id"]),
-            ("recommend_resolution_steps", True, []),
-            ("workorder_decision", False, [] if objects.device_ids else ["device_id", "current_alarm_status"]),
-        ],
-        TaskType.FAULT_DIAGNOSIS: [
-            ("collect_asset_context", True, [] if objects.device_ids else ["device_id_or_system"]),
-            ("diagnose_fault", True, []),
-            ("recommend_resolution_steps", True, []),
-            ("workorder_decision", False, [] if objects.device_ids else ["device_id"]),
-        ],
-        TaskType.ROOT_CAUSE_ANALYSIS: [
-            ("build_event_timeline", True, ["time_window"] if "time_window" in missing_slots else []),
-            ("identify_direct_and_root_causes", True, []),
-            ("recommend_prevention_actions", True, []),
-            ("generate_rca_report", False, []),
-        ],
-        TaskType.HEALTH_ASSESSMENT: [
-            ("assess_health_score", True, [] if objects.device_ids else ["device_id_or_group"]),
-            ("detect_degradation_trend", True, []),
-            ("recommend_preventive_actions", True, []),
-            ("workorder_decision", False, [] if objects.device_ids else ["device_id_or_group"]),
-        ],
-        TaskType.KNOWLEDGE_QA: [
-            ("retrieve_manual_or_sop", True, []),
-            ("explain_applicability", True, []),
-            ("recommend_resolution_steps", False, [] if flags.get("need_resolution") else ["resolution_not_requested"]),
-        ],
-        TaskType.REPORT_GENERATION: [
+    goal_set = set(goals)
+    builders: list[tuple[str, bool, list[str]]] = []
+    if "answer_meta_question" in goal_set:
+        builders.append(("summarize_permission_scope", True, []))
+    if "generate_report" in goal_set:
+        builders.extend([
             ("load_or_initialize_evidence_bundle", True, []),
             ("organize_report_content", True, []),
             ("generate_report", True, []),
-        ],
-        TaskType.ACTION_REQUEST: [
-            ("identify_action_type", True, []),
+        ])
+    if goal_set.intersection({"check_runtime_status", "refresh_current_status"}):
+        builders.append(("check_current_status", True, [] if objects.device_ids else ["device_id"]))
+    if "explain_fault_code" in goal_set:
+        builders.append(("explain_alarm_code", True, [] if objects.alarm_codes else ["alarm_code"]))
+    if "diagnose_fault" in goal_set:
+        builders.append(("diagnose_fault", True, [] if objects.device_ids else ["device_id_or_system"]))
+    if "assess_severity" in goal_set:
+        builders.append(("assess_severity", True, [] if "device_id_or_system" not in missing_slots else ["device_id_or_system"]))
+    if "recommend_resolution" in goal_set:
+        builders.append(("recommend_resolution_steps", True, []))
+    if goal_set.intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"}):
+        builders.extend([
             ("permission_check", True, []),
             ("risk_check", True, []),
-            ("action_decision", True, ["human_confirmation"]),
-        ],
-        TaskType.PERMISSION_SCOPE_QUERY: [
-            ("summarize_permission_scope", True, []),
-        ],
-    }[task_type]
+            ("workorder_decision", True, [] if objects.device_ids else ["device_id"]),
+        ])
+    if not builders:
+        builders.append(("check_current_status", True, [] if objects.device_ids else ["device_id"]))
     return [
         WorkflowSubgoal(
             id=f"sg_{index:03d}",
@@ -532,37 +467,37 @@ def _subgoals(
 
 
 def _missing_slots(
-    task_type: TaskType,
+    task_key: str,
     objects: WorkflowObjects,
     time_window: WorkflowTimeWindow,
     text: str,
 ) -> list[str]:
     missing: list[str] = []
-    if task_type in {TaskType.STATUS_QUERY, TaskType.FAULT_DIAGNOSIS, TaskType.HEALTH_ASSESSMENT} and not (
+    if task_key in {"status_query", "fault_diagnosis", "health_assessment"} and not (
         objects.device_ids or objects.system or objects.location
     ):
         missing.append("device_id_or_system")
-    if task_type == TaskType.ALARM_TRIAGE and not objects.alarm_codes:
+    if task_key == "alarm_triage" and not objects.alarm_codes:
         missing.append("alarm_code")
-    if task_type == TaskType.ROOT_CAUSE_ANALYSIS and time_window.default_strategy == "event_window_required":
+    if task_key == "root_cause_analysis" and time_window.default_strategy == "event_window_required":
         missing.append("time_window")
-    if task_type == TaskType.ACTION_REQUEST and not _action_type(text):
+    if task_key == "action_request" and not _action_type(text):
         missing.append("action_type")
     return missing
 
 
-def _requested_output(task_type: TaskType, text: str) -> str:
-    if task_type == TaskType.REPORT_GENERATION or _has_any(text, _REPORT_KEYWORDS):
+def _requested_output(task_key: str, text: str) -> str:
+    if task_key == "report_generation" or _has_any(text, _REPORT_KEYWORDS):
         return "report"
-    if task_type == TaskType.ACTION_REQUEST:
+    if task_key == "action_request":
         return "action_confirmation"
-    if task_type == TaskType.PERMISSION_SCOPE_QUERY:
+    if task_key == "permission_scope_query":
         return "permission_scope"
     return "answer"
 
 
-def _risk_level(task_type: TaskType, text: str) -> str:
-    if task_type != TaskType.ACTION_REQUEST:
+def _risk_level(task_key: str, text: str) -> str:
+    if task_key != "action_request":
         return "read_only"
     if _has_any(text, ("重启", "停机", "修改", "改成", "关闭告警", "屏蔽告警", "下发", "派发")):
         return "high_risk"
@@ -586,10 +521,11 @@ def _action_type(text: str) -> str | None:
     return "other_write_action" if _has_any(compact, _ACTION_KEYWORDS) else None
 
 
-def _action_target(intent_stack: list[str]) -> str | None:
-    if any(intent in intent_stack for intent in ("workorder_decision", "create_workorder_draft", "dispatch_workorder")):
+def _action_target_from_goals(goals: list[str], action_type: str | None) -> str | None:
+    goal_set = set(goals)
+    if goal_set.intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"}):
         return "workorder"
-    if "action_request" in intent_stack:
+    if action_type:
         return "device_or_configuration"
     return None
 

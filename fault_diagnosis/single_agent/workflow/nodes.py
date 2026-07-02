@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from ..contracts import SingleAgentDecision
-from ..compat import legacy_task_value, route_is_action_request
 from ...diagnosis.contracts import AnalysisStepArtifact
+from .axes import goal_types, requests_action_or_workorder
 
 
 def workflow_node_enabled(decision: SingleAgentDecision, node_name: str) -> bool:
@@ -39,7 +39,7 @@ def build_risk_check_result(decision: SingleAgentDecision) -> dict[str, Any]:
     return {
         "node": "risk_check",
         "risk_level": risk_level,
-        "requires_human_confirmation": high_risk or route_is_action_request(decision),
+        "requires_human_confirmation": high_risk or requests_action_or_workorder(decision),
         "decision": "deny_direct_execution" if high_risk else "require_confirmation",
         "reason": (
             "该请求涉及高风险写操作，必须转人工确认或审批。"
@@ -59,7 +59,8 @@ def build_resolution_recommendation_result(
 
     return {
         "node": "resolution_recommendation",
-        "task_type": legacy_task_value(decision),
+        "task_family": decision.task_family,
+        "goal_types": goal_types(decision),
         "recommendations": _clean_items(analysis_artifact.recommendations),
         "verification_items": _clean_items(analysis_artifact.verification_items),
         "risk_notice": analysis_artifact.risk_notice,
@@ -81,7 +82,8 @@ def build_audit_log_result(
 
     return {
         "node": "audit_log",
-        "task_type": legacy_task_value(decision),
+        "task_family": decision.task_family,
+        "goal_types": goal_types(decision),
         "action_type": decision.action_type,
         "risk_level": decision.risk_level,
         "permission_decision": permission_check.get("decision"),

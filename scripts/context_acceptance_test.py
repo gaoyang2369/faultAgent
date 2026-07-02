@@ -138,8 +138,8 @@ def scenario_report_then_workorder(client: TestClient) -> None:
     assert_true(context["stale_evidence"] is True, "A must mark stale evidence")
     assert_true(snapshot["evidence_gaps"]["should_refresh_runtime_data"] is True, "A stale workorder must refresh runtime data")
     assert_true(snapshot["task_family"] in {"diagnosis", "action_or_workorder"}, "A must expose stable task_family")
-    assert_true(snapshot["shadow_plan"]["planner_mode"] == "shadow", "A must expose shadow planner summary")
-    assert_true(snapshot["shadow_plan"]["refresh_required"] is True, "A shadow plan must require refresh")
+    assert_true(snapshot["policy_id"], "A must expose policy_id")
+    assert_true("sql_db_query" in snapshot["runtime_tools"], "A stale workorder must plan SQL refresh")
     assert_true("decide_workorder" in snapshot["goal_set"]["goal_types"], "A must include workorder goal")
     assert_true("refresh_current_status" in snapshot["goal_set"]["goal_types"], "A stale workorder must include refresh goal")
     assert_true("J2" not in json.dumps(context, ensure_ascii=False), "A must not bind unrelated J2")
@@ -155,7 +155,7 @@ def scenario_status_then_report(client: TestClient) -> None:
     assert_true(bool(context["referenced_artifact_id"]), "B must reference previous artifact")
     assert_true(snapshot["evidence_gaps"]["evidence_mode"] in {"reuse_previous_artifact", "reuse_and_refresh_status"}, "B must reuse evidence")
     assert_true(snapshot["task_family"] == "reporting", "B must expose reporting task_family")
-    assert_true(snapshot["shadow_plan"]["expected_output"] == "report", "B shadow plan must expect report")
+    assert_true(snapshot["requested_output"] == "report", "B must expect report output")
     assert_true(snapshot["enabled_nodes"].get("report") is True, "B must enable report node")
     assert_true("generate_report" in snapshot["goal_set"]["goal_types"], "B must include report goal")
 
@@ -170,7 +170,7 @@ def scenario_explicit_device_switch(client: TestClient) -> None:
     assert_true(not context.get("referenced_artifact_id"), "C must not inherit J1 artifact")
     assert_true(context["inherited_slots"].get("device") != "J1", "C must not inherit J1")
     assert_true(snapshot["task_family"] == "runtime_status", "C must expose runtime_status task_family")
-    assert_true("sql" in snapshot["shadow_plan"]["enabled_node_names"], "C shadow plan must include SQL")
+    assert_true(snapshot["enabled_nodes"].get("sql") is True, "C must enable SQL")
     assert_true("check_runtime_status" in snapshot["goal_set"]["goal_types"], "C must include current status goal")
 
 

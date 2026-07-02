@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, Field
-
-from ..workflow.contracts import TaskType
 
 
 MissingEvidencePolicy = Literal[
@@ -15,6 +14,20 @@ MissingEvidencePolicy = Literal[
     "answer_with_known_limits",
 ]
 OutputTone = Literal["brief", "diagnostic", "formal_report", "safety_boundary"]
+
+
+class TaskType(str, Enum):
+    """Deprecated task labels retained only for output-template compatibility."""
+
+    STATUS_QUERY = "status_query"
+    ALARM_TRIAGE = "alarm_triage"
+    FAULT_DIAGNOSIS = "fault_diagnosis"
+    ROOT_CAUSE_ANALYSIS = "root_cause_analysis"
+    HEALTH_ASSESSMENT = "health_assessment"
+    KNOWLEDGE_QA = "knowledge_qa"
+    REPORT_GENERATION = "report_generation"
+    ACTION_REQUEST = "action_request"
+    PERMISSION_SCOPE_QUERY = "permission_scope_query"
 
 
 class OutputSectionContract(BaseModel):

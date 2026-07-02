@@ -2,29 +2,9 @@
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-
-
-class TaskType(str, Enum):
-    """Deprecated legacy primary workflow classifier.
-
-    Retained for workflow policy, frontend, eval, artifact, trace and SSE
-    compatibility. New internal planning logic should prefer GoalSet,
-    TaskFamily, ShadowPlanner, PlanningDiff and PlannerGate projections.
-    """
-
-    STATUS_QUERY = "status_query"
-    ALARM_TRIAGE = "alarm_triage"
-    FAULT_DIAGNOSIS = "fault_diagnosis"
-    ROOT_CAUSE_ANALYSIS = "root_cause_analysis"
-    HEALTH_ASSESSMENT = "health_assessment"
-    KNOWLEDGE_QA = "knowledge_qa"
-    REPORT_GENERATION = "report_generation"
-    ACTION_REQUEST = "action_request"
-    PERMISSION_SCOPE_QUERY = "permission_scope_query"
 
 
 TaskFamily = Literal[
@@ -99,51 +79,33 @@ class IntentGoal(BaseModel):
 
 
 class GoalSet(BaseModel):
-    """Structured goal set projected to the legacy intent stack for compatibility."""
+    """Structured goal set projected to legacy fields only at output boundaries."""
 
     schema_version: str = GOAL_SET_SCHEMA_VERSION
     primary_goal_id: str | None = None
     goals: list[IntentGoal] = Field(default_factory=list)
     execution_order: list[str] = Field(default_factory=list)
     blocked_goals: list[str] = Field(default_factory=list)
-    intent_stack_projection: list[str] = Field(default_factory=list)
+    legacy_intent_projection: list[str] = Field(default_factory=list)
     goal_summary: str = ""
 
 
 class TaskFamilyResolution(BaseModel):
-    """Coarse task-family mapping used only for observation and migration."""
+    """Coarse task-family mapping used by goal-native policy selection."""
 
     task_family: TaskFamily = "diagnosis"
     reason: str = ""
-    source: TaskFamilySource = "task_type_mapping"
+    source: TaskFamilySource = "goal_hint_fallback"
     warnings: list[str] = Field(default_factory=list)
 
 
 class TaskRoute(BaseModel):
     """Structured output of the intent router."""
 
-    primary_task_type: TaskType = Field(
-        default=TaskType.FAULT_DIAGNOSIS,
-        description=(
-            "Deprecated compatibility field: legacy primary workflow classifier. "
-            "Retained for policy/frontend/eval/artifact compatibility."
-        ),
-    )
     task_family: TaskFamily = "diagnosis"
     task_family_reason: str = ""
-    task_family_source: TaskFamilySource = "task_type_mapping"
+    task_family_source: TaskFamilySource = "goal_hint_fallback"
     task_family_warnings: list[str] = Field(default_factory=list)
-    candidate_task_types: list[TaskType] = Field(
-        default_factory=list,
-        description="Deprecated compatibility field: legacy alternate task-type projection.",
-    )
-    intent_stack: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Deprecated compatibility field: legacy policy intent projection built "
-            "from GoalSet projection plus legacy candidates."
-        ),
-    )
     goals: list[IntentGoal] = Field(default_factory=list)
     goal_set: dict[str, Any] = Field(default_factory=dict)
     goal_summary: str = ""
@@ -180,7 +142,11 @@ class WorkflowPolicy(BaseModel):
     """Policy selected for a parent workflow."""
 
     policy_id: str
-    task_type: TaskType
+    task_family: TaskFamily
+    goal_types: list[str] = Field(default_factory=list)
+    risk_level: str = "read_only"
+    action_target: str | None = None
+    requested_output: str = "answer"
     workflow_id: str
     required_slots: list[str] = Field(default_factory=list)
     conditional_required_slots: dict[str, list[str]] = Field(default_factory=dict)

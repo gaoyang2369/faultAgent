@@ -70,9 +70,14 @@ def _artifact(thread_id: str = THREAD_ID) -> DiagnosisArtifactEnvelope:
         artifacts={"report_url": "/reports/report.html"},
     )
     decision = SingleAgentDecision(
-        primary_task_type="report_generation",
+        task_family="reporting",
+        requested_output="report",
         objects={"device_ids": ["G120电机1"], "alarm_codes": ["A07089"]},
         context_resolution={"active_asset": "G120电机1", "active_fault_codes": ["A07089"]},
+        goal_set={
+            "goal_types": ["generate_report"],
+            "legacy_intent_projection": ["report_generation"],
+        },
     )
     operation_report_payload = {
         "asset": "G120电机1",

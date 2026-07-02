@@ -1,16 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from fault_diagnosis.diagnosis.contracts import DiagnosisRequest
-from fault_diagnosis.single_agent.contracts import AgentTrace, SingleAgentDecision
+from fault_diagnosis.single_agent.context import ConversationDiagnosisState, DiagnosisCase, apply_context_resolution
 from fault_diagnosis.single_agent.intent import decide_capabilities, fallback_understanding_payload
-from fault_diagnosis.single_agent.output.payloads import build_direct_complete_payload
-from fault_diagnosis.single_agent.planning import apply_planner_gate_to_decision, build_planner_gate
-from fault_diagnosis.single_agent.workflow import TaskRoute, TaskType, build_workflow_plan, route_task
-
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def _request(message: str, payload: dict) -> DiagnosisRequest:
@@ -27,235 +19,76 @@ def _request(message: str, payload: dict) -> DiagnosisRequest:
     )
 
 
-def _decision(message: str):
+def _state(
+    *,
+    asset: str | None = None,
+    fault_codes: list[str] | None = None,
+    evidence_bundle_id: str | None = None,
+) -> ConversationDiagnosisState:
+    case = DiagnosisCase(
+        case_id=evidence_bundle_id or "case.test",
+        thread_id="thread.test",
+        active_asset=asset,
+        active_fault_codes=fault_codes or [],
+        last_evidence_bundle_id=evidence_bundle_id,
+    )
+    return ConversationDiagnosisState(thread_id="thread.test", active_case_id=case.case_id, cases=[case])
+
+
+def _decision(message: str, state: ConversationDiagnosisState | None = None, *, report_from_previous_artifact: bool = False):
     payload = fallback_understanding_payload(message, "维修员")
+    if state is not None:
+        apply_context_resolution(payload=payload, message=message, state=state)
     return decide_capabilities(
         payload=payload,
         request=_request(message, payload),
         message=message,
-        report_from_previous_artifact=False,
+        report_from_previous_artifact=report_from_previous_artifact,
+        conversation_state=state,
     )
 
 
-def test_legacy_task_type_and_intent_stack_key_intents_are_retained() -> None:
-    cases = [
-        ("J1 当前运行状态怎么样", "status_query", ["check_current_status"]),
-        ("A07089 是什么意思", "knowledge_qa", ["explain_alarm_code"]),
-        ("J1 的 A07089 现在还在报警吗，怎么处理", "alarm_triage", ["explain_alarm_code", "check_current_status", "resolution_recommendation"]),
-        ("诊断 J1 A07089 的原因", "fault_diagnosis", ["explain_alarm_code", "fault_diagnosis"]),
-        ("生成 J1 的运行报告", "report_generation", ["report_generation"]),
-        ("帮我重启 J1", "action_request", ["action_request"]),
-    ]
-
-    for message, task_type, required_intents in cases:
-        decision = _decision(message)
-        assert decision.primary_task_type == task_type
-        for intent in required_intents:
-            assert intent in decision.intent_stack
+def _goal_types(decision) -> set[str]:
+    return {goal["goal_type"] for goal in decision.goals}
 
 
-def test_task_family_changes_do_not_change_enabled_nodes_or_runtime_tools() -> None:
-    payload = fallback_understanding_payload("J1 的 A07089 现在还在报警吗，怎么处理", "维修员")
-    route = route_task(payload=payload, message="J1 的 A07089 现在还在报警吗，怎么处理")
-    baseline = build_workflow_plan(route)
-    route_with_different_family = TaskRoute.model_validate(
-        {
-            **route.model_dump(),
-            "task_family": "meta",
-            "task_family_reason": "test-only mutation",
-            "task_family_source": "unknown_fallback",
-            "task_family_warnings": ["test_only"],
-        }
-    )
-    mutated = build_workflow_plan(route_with_different_family)
-
-    assert route.primary_task_type == TaskType.ALARM_TRIAGE
-    assert route_with_different_family.primary_task_type == route.primary_task_type
-    assert route_with_different_family.intent_stack == route.intent_stack
-    assert mutated.resolved_nodes == baseline.resolved_nodes
-    assert mutated.runtime_tools == baseline.runtime_tools
-    assert mutated.policy.policy_id == baseline.policy.policy_id
-
-
-def test_build_workflow_plan_does_not_read_task_family() -> None:
-    route = TaskRoute(
-        primary_task_type=TaskType.STATUS_QUERY,
-        intent_stack=["check_current_status"],
-        task_family="runtime_status",
-        objects={"device_ids": ["J1"]},
-        flags={"need_sql": True},
-    )
-    baseline = build_workflow_plan(route)
-    route.task_family = "action_or_workorder"
-    route.task_family_reason = "test-only mutation"
-    changed = build_workflow_plan(route)
-
-    assert changed.resolved_nodes == baseline.resolved_nodes
-    assert changed.runtime_tools == baseline.runtime_tools
-
-
-def test_build_workflow_plan_does_not_read_shadow_plan() -> None:
-    route = TaskRoute(
-        primary_task_type=TaskType.FAULT_DIAGNOSIS,
-        intent_stack=["fault_diagnosis"],
-        objects={"device_ids": ["J1"], "alarm_codes": ["A07089"]},
-        flags={"need_sql": True, "need_knowledge": True},
-    )
-    baseline = build_workflow_plan(route)
-    route.goal_set["shadow_plan"] = {"enabled_node_names": ["report"], "authorized_runtime_tools": ["save_report"]}
-    changed = build_workflow_plan(route)
-
-    assert changed.resolved_nodes == baseline.resolved_nodes
-    assert changed.runtime_tools == baseline.runtime_tools
-
-
-def test_execution_tools_do_not_reference_task_family_as_runtime_input() -> None:
-    paths = [
-        ROOT / "fault_diagnosis/single_agent/workflow/evidence_gap.py",
-        ROOT / "fault_diagnosis/single_agent/stages.py",
-        ROOT / "fault_diagnosis/single_agent/sql_safety.py",
-        ROOT / "fault_diagnosis/single_agent/workorder_suggestions.py",
-    ]
-    tool_paths = sorted((ROOT / "fault_diagnosis/tools").glob("**/*.py"))
-    for path in [*paths, *tool_paths]:
-        assert "task_family" not in path.read_text(encoding="utf-8"), str(path)
-
-
-def test_execution_policy_runner_and_tools_do_not_reference_shadow_plan() -> None:
-    paths = [
-        ROOT / "fault_diagnosis/single_agent/workflow/policies.py",
-        ROOT / "fault_diagnosis/single_agent/workflow/evidence_gap.py",
-        ROOT / "fault_diagnosis/single_agent/stages.py",
-    ]
-    tool_paths = sorted((ROOT / "fault_diagnosis/tools").glob("**/*.py"))
-    for path in [*paths, *tool_paths]:
-        assert "shadow_plan" not in path.read_text(encoding="utf-8"), str(path)
-    runner_text = (ROOT / "fault_diagnosis/single_agent/runner.py").read_text(encoding="utf-8")
-    tool_call_section = runner_text[runner_text.index("    def _start_tool_call"):]
-    assert "shadow_plan" not in tool_call_section
-
-
-def test_execution_policy_runner_and_tools_do_not_reference_planning_diff() -> None:
-    paths = [
-        ROOT / "fault_diagnosis/single_agent/workflow/policies.py",
-        ROOT / "fault_diagnosis/single_agent/workflow/evidence_gap.py",
-        ROOT / "fault_diagnosis/single_agent/stages.py",
-    ]
-    tool_paths = sorted((ROOT / "fault_diagnosis/tools").glob("**/*.py"))
-    for path in [*paths, *tool_paths]:
-        assert "planning_diff" not in path.read_text(encoding="utf-8"), str(path)
-    runner_text = (ROOT / "fault_diagnosis/single_agent/runner.py").read_text(encoding="utf-8")
-    tool_call_section = runner_text[runner_text.index("    def _start_tool_call"):]
-    assert "planning_diff" not in tool_call_section
-
-
-def test_execution_policy_stages_and_tools_do_not_reference_planner_gate() -> None:
-    paths = [
-        ROOT / "fault_diagnosis/single_agent/workflow/policies.py",
-        ROOT / "fault_diagnosis/single_agent/workflow/evidence_gap.py",
-        ROOT / "fault_diagnosis/single_agent/stages.py",
-    ]
-    tool_paths = sorted((ROOT / "fault_diagnosis/tools").glob("**/*.py"))
-    for path in [*paths, *tool_paths]:
-        assert "planner_gate" not in path.read_text(encoding="utf-8"), str(path)
-    runner_text = (ROOT / "fault_diagnosis/single_agent/runner.py").read_text(encoding="utf-8")
-    tool_call_section = runner_text[runner_text.index("    def _start_tool_call"):]
-    assert "planner_gate" not in tool_call_section
-
-
-def test_diagnosis_dry_run_planner_gate_does_not_change_execution_projection() -> None:
-    decision = _decision("诊断 J1 A07089 的原因")
-    decision.authorization = {"mode": "allow"}
-    before_nodes = dict(decision.enabled_nodes)
-    before_tools = list(decision.runtime_tools)
-    shadow = {
-        "nodes": [{"node": node, "desired_state": "enabled"} for node, enabled in before_nodes.items() if enabled],
-        "tool_plan": {"authorized_runtime_tools": list(before_tools)},
-        "evidence_plan": {"required_evidence": ["runtime_data", "knowledge_source", "diagnosis_basis"]},
-        "output_plan": {"expected_output": "answer", "required_disclosures": []},
-    }
-
-    gate = build_planner_gate(
-        decision=decision,
-        shadow_plan=shadow,
-        planning_diff={"overall_status": "aligned", "severity": "none", "counters": {}},
-        config_overrides={"enabled": True, "dry_run": False, "diagnosis_dry_run": True, "diagnosis_active": False},
-    )
-    apply_planner_gate_to_decision(decision, gate)
-
-    assert decision.task_family == "diagnosis"
-    assert gate.selected_execution_source == "legacy_policy"
-    assert decision.enabled_nodes == before_nodes
-    assert decision.runtime_tools == before_tools
-
-
-def test_public_complete_payload_still_outputs_legacy_task_fields() -> None:
-    decision = _decision("J1 的 A07089 现在还在报警吗，怎么处理")
-    payload = build_direct_complete_payload(
-        thread_id="thread.legacy",
-        trace_id="trace.legacy",
-        request_id="request.legacy",
-        final_answer="ok",
-        decision=decision,
-        trace=AgentTrace(
-            trace_id="trace.legacy",
-            request_id="request.legacy",
-            thread_id="thread.legacy",
-            user_identity="tester",
-            user_message="test",
-        ),
-        event_count=0,
+def test_report_handoff_uses_previous_evidence_bundle_context() -> None:
+    decision = _decision(
+        "基于刚才结果生成报告",
+        _state(asset="J1", fault_codes=["A07089"], evidence_bundle_id="eb_trace"),
+        report_from_previous_artifact=True,
     )
 
-    assert payload["decision"]["primary_task_type"] == "alarm_triage"
-    assert "candidate_task_types" in payload["decision"]
-    assert "intent_stack" in payload["decision"]
-    assert payload["workflow_route"]["primary_task_type"] == "alarm_triage"
-    assert payload["workflow_route"]["intent_stack"] == decision.intent_stack
+    assert decision.task_family == "reporting"
+    assert decision.report_from_previous_artifact is True
+    assert decision.context_resolution["last_evidence_bundle_id"] == "eb_trace"
+    assert decision.active_case_id == "eb_trace"
+    assert "generate_report" in _goal_types(decision)
 
 
-def test_high_risk_action_or_workorder_gate_remains_dry_run_only() -> None:
-    decision = SingleAgentDecision(
-        primary_task_type="action_request",
-        task_family="action_or_workorder",
-        intent_stack=["action_request", "create_workorder_draft"],
-        goal_set={"goals": [{"goal_type": "decide_workorder", "risk_level": "requires_confirmation"}]},
-        enabled_nodes={
-            "permission_check": True,
-            "risk_check": True,
-            "sql": True,
-            "knowledge": True,
-            "analysis": True,
-            "workorder_decision": True,
-            "output_guardrail": True,
-            "audit_log": True,
-        },
-        runtime_tools=["sql_db_query_checker", "sql_db_query", "query_knowledge_base"],
-        authorization={"mode": "allow"},
-        action_type="创建工单草稿",
-        action_target="workorder",
-        risk_level="requires_confirmation",
-        satisfied_evidence=["diagnosis_summary", "severity_or_status_level", "key_evidence", "recommended_action_policy"],
-    )
-    before_nodes = dict(decision.enabled_nodes)
-    before_tools = list(decision.runtime_tools)
-    shadow = {
-        "nodes": [{"node": node, "desired_state": "enabled"} for node, enabled in before_nodes.items() if enabled],
-        "tool_plan": {"authorized_runtime_tools": list(before_tools)},
-        "output_plan": {"expected_output": "workorder_decision", "required_disclosures": []},
-    }
+def test_switch_to_j2_overrides_previous_active_asset() -> None:
+    decision = _decision("换 J2 看一下", _state(asset="J1"))
 
-    gate = build_planner_gate(
-        decision=decision,
-        shadow_plan=shadow,
-        planning_diff={"overall_status": "aligned", "severity": "none", "counters": {}},
-        config_overrides={"enabled": True, "dry_run": False, "diagnosis_dry_run": True, "diagnosis_active": True},
-    )
-    apply_planner_gate_to_decision(decision, gate)
+    assert decision.objects["device_ids"] == ["J2"]
+    assert decision.context_resolution["source"] == "current_message"
+    assert decision.context_resolution["used_active_asset"] is False
+    assert "check_runtime_status" in _goal_types(decision)
 
-    readiness = gate.safety_summary.get("workorder_action_readiness") or {}
-    assert gate.selected_execution_source == "legacy_policy"
-    assert readiness["dry_run_only"] is True
-    assert readiness["ready_for_active"] is False
-    assert decision.enabled_nodes == before_nodes
-    assert decision.runtime_tools == before_tools
+
+def test_permission_question_does_not_reuse_previous_active_asset() -> None:
+    state = _state(asset="G120电机2", fault_codes=["A07089"])
+    payload = fallback_understanding_payload("我这个身份可以访问到哪些设备呀？", "游客")
+    resolution = apply_context_resolution(payload=payload, message="我这个身份可以访问到哪些设备呀？", state=state)
+
+    assert payload["equipment_hint"] is None
+    assert payload["fault_code_hint"] is None
+    assert resolution["used_active_asset"] is False
+    assert resolution["active_asset"] is None
+
+
+def test_restart_request_is_guarded_action_family() -> None:
+    decision = _decision("帮我重启设备")
+
+    assert decision.task_family == "action_or_workorder"
+    assert decision.risk_level == "high_risk"
+    assert "device_control.write" in decision.workflow_policy["forbidden_tools"]

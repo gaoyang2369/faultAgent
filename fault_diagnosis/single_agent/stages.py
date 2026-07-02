@@ -33,7 +33,6 @@ from ..security.sql_acl import apply_sql_acl
 from .artifacts import build_diagnosis_artifact_envelope
 from .context import ContextManager, load_conversation_diagnosis_state
 from .contracts import SingleAgentDecision
-from .compat import goal_labels_for_summary, is_legacy_task, route_is_action_request
 from .errors import SingleAgentExecutionError
 from .intent import (
     decide_capabilities,
@@ -43,6 +42,7 @@ from .intent import (
     should_use_rule_based_understanding,
 )
 from .final_answer import build_templated_final_answer
+from .workflow.axes import goal_labels_for_summary, requests_action_or_workorder, task_profile_for_compat
 from .prompts import (
     build_single_agent_analysis_prompt,
     build_single_agent_understanding_prompt,
@@ -320,7 +320,7 @@ class SingleAgentStagesMixin:
     ) -> AnalysisStepArtifact:
         decision = self._workflow_task_decision
         authorization = dict(getattr(decision, "authorization", {}) or {})
-        if is_legacy_task(decision, "permission_scope_query"):
+        if task_profile_for_compat(decision) == "permission_scope_query":
             artifact = AnalysisStepArtifact(
                 success=True,
                 conclusion="已根据当前服务端身份整理可访问设备、数据窗口和能力边界。",
@@ -333,9 +333,9 @@ class SingleAgentStagesMixin:
             )
             self._record_artifact("analysis", artifact, stage="analysis")
             return artifact
-        if self.auth_context.role == "guest" and not is_legacy_task(decision, "knowledge_qa"):
+        if self.auth_context.role == "guest" and task_profile_for_compat(decision) != "knowledge_qa":
             is_degraded = authorization.get("mode") == "degrade"
-            recommendations = list(knowledge_artifact.snippets[:2]) if is_legacy_task(decision, "alarm_triage") else []
+            recommendations = list(knowledge_artifact.snippets[:2]) if task_profile_for_compat(decision) == "alarm_triage" else []
             if is_degraded:
                 recommendations.append("如需故障诊断、健康评估或诊断报告，请使用具备设备权限的工程师账号。")
             artifact = AnalysisStepArtifact(
@@ -774,9 +774,9 @@ class SingleAgentStagesMixin:
                 "【权限范围】当前身份只能查看 real_data_01 最近一小时数据和公开处理意见；"
                 "以下内容不是故障诊断、根因判断或健康评估。"
             )
-        elif self.auth_context.role == "guest" and is_legacy_task(decision, "alarm_triage"):
+        elif self.auth_context.role == "guest" and task_profile_for_compat(decision) == "alarm_triage":
             prefixes.append("【权限范围】当前身份仅提供公开故障码说明、处理意见和最近一小时数据现状。")
-        if route_is_action_request(decision):
+        if requests_action_or_workorder(decision):
             prefixes.append(
                 "【动作审批】本次请求识别为写操作/控制操作意图；"
                 "Agent 不直接执行设备控制、配置修改、告警关闭或工单派发，"

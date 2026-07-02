@@ -16,12 +16,31 @@ from ...diagnosis.contracts import (
 )
 from ...context import summarize_resolved_context
 from ...runtime.diagnosis_contract_adapter import build_diagnosis_contract_payload
-from ..compat import is_legacy_task, legacy_task_value, project_route_fields_for_compat
+from ..compat import build_legacy_intent_stack, project_task_type_for_compat
 from ..contracts import AgentTrace, SingleAgentDecision
 from ..reporting import extract_report_url
 from ..workflow import summarize_goal_set
 
 RUNTIME_NAME = "restricted_single_agent"
+
+
+def _legacy_route_fields(decision: SingleAgentDecision) -> dict[str, Any]:
+    primary = project_task_type_for_compat(decision)
+    return {
+        "primary_task_type": primary,
+        "candidate_task_types": [primary],
+        "intent_stack": build_legacy_intent_stack(decision.goal_set),
+    }
+
+
+def _decision_payload(decision: SingleAgentDecision) -> dict[str, Any]:
+    payload = decision.model_dump()
+    payload.update(_legacy_route_fields(decision))
+    return payload
+
+
+def _is_compat_task(decision: SingleAgentDecision, *values: str) -> bool:
+    return project_task_type_for_compat(decision) in set(values)
 
 
 def build_direct_complete_payload(
@@ -38,12 +57,9 @@ def build_direct_complete_payload(
 
     resolved_context = summarize_resolved_context(decision.resolved_context)
     goal_set = summarize_goal_set(decision.goal_set)
-    shadow_plan = dict(decision.shadow_plan_summary or {})
-    planning_diff = dict(decision.planning_diff_summary or {})
-    planner_gate = dict(decision.planner_gate_summary or {})
-    diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
-    workorder_action_readiness = dict(planner_gate.get("workorder_action_readiness") or {})
-    manual_confirmation = dict(planner_gate.get("manual_confirmation") or {})
+    diagnosis_readiness = dict(decision.diagnosis_readiness or {})
+    workorder_action_readiness = dict(decision.workorder_action_readiness or {})
+    manual_confirmation = dict(decision.manual_confirmation or {})
     return {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -54,26 +70,24 @@ def build_direct_complete_payload(
         "final_content": final_answer,
         "report_filename": None,
         "report_url": None,
-        "decision": decision.model_dump(),
+        "decision": _decision_payload(decision),
         "resolved_context": resolved_context,
         "goal_set": goal_set,
-        "shadow_plan": shadow_plan,
-        "planning_diff": planning_diff,
-        "planner_gate": planner_gate,
+        "readiness": {
+            "diagnosis": diagnosis_readiness,
+            "workorder_action": workorder_action_readiness,
+        },
         "diagnosis_readiness": diagnosis_readiness,
         "workorder_action_readiness": workorder_action_readiness,
         "manual_confirmation": manual_confirmation,
         "authorization": decision.authorization,
         "workflow_route": {
-            **project_route_fields_for_compat(decision),
+            **_legacy_route_fields(decision),
             "task_family": decision.task_family,
             "task_family_reason": decision.task_family_reason,
             "task_family_source": decision.task_family_source,
             "task_family_warnings": decision.task_family_warnings,
             "goal_set": goal_set,
-            "shadow_plan": shadow_plan,
-            "planning_diff": planning_diff,
-            "planner_gate": planner_gate,
             "diagnosis_readiness": diagnosis_readiness,
             "workorder_action_readiness": workorder_action_readiness,
             "manual_confirmation": manual_confirmation,
@@ -109,12 +123,9 @@ def build_report_handoff_complete_payload(
 
     resolved_context = summarize_resolved_context(decision.resolved_context)
     goal_set = summarize_goal_set(decision.goal_set)
-    shadow_plan = dict(decision.shadow_plan_summary or {})
-    planning_diff = dict(decision.planning_diff_summary or {})
-    planner_gate = dict(decision.planner_gate_summary or {})
-    diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
-    workorder_action_readiness = dict(planner_gate.get("workorder_action_readiness") or {})
-    manual_confirmation = dict(planner_gate.get("manual_confirmation") or {})
+    diagnosis_readiness = dict(decision.diagnosis_readiness or {})
+    workorder_action_readiness = dict(decision.workorder_action_readiness or {})
+    manual_confirmation = dict(decision.manual_confirmation or {})
     return {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -125,12 +136,13 @@ def build_report_handoff_complete_payload(
         "final_content": final_answer,
         "report_filename": report_artifact.report_filename,
         "report_url": extract_report_url(report_artifact.save_result),
-        "decision": decision.model_dump(),
+        "decision": _decision_payload(decision),
         "resolved_context": resolved_context,
         "goal_set": goal_set,
-        "shadow_plan": shadow_plan,
-        "planning_diff": planning_diff,
-        "planner_gate": planner_gate,
+        "readiness": {
+            "diagnosis": diagnosis_readiness,
+            "workorder_action": workorder_action_readiness,
+        },
         "diagnosis_readiness": diagnosis_readiness,
         "workorder_action_readiness": workorder_action_readiness,
         "manual_confirmation": manual_confirmation,
@@ -138,15 +150,12 @@ def build_report_handoff_complete_payload(
         "ui_payload": build_ui_payload(decision=decision, report_artifact=report_artifact),
         "todos": todos,
         "workflow_route": {
-            **project_route_fields_for_compat(decision),
+            **_legacy_route_fields(decision),
             "task_family": decision.task_family,
             "task_family_reason": decision.task_family_reason,
             "task_family_source": decision.task_family_source,
             "task_family_warnings": decision.task_family_warnings,
             "goal_set": goal_set,
-            "shadow_plan": shadow_plan,
-            "planning_diff": planning_diff,
-            "planner_gate": planner_gate,
             "diagnosis_readiness": diagnosis_readiness,
             "workorder_action_readiness": workorder_action_readiness,
             "manual_confirmation": manual_confirmation,
@@ -201,12 +210,9 @@ def build_diagnosis_complete_payload(
 
     resolved_context = summarize_resolved_context(decision.resolved_context)
     goal_set = summarize_goal_set(decision.goal_set)
-    shadow_plan = dict(decision.shadow_plan_summary or {})
-    planning_diff = dict(decision.planning_diff_summary or {})
-    planner_gate = dict(decision.planner_gate_summary or {})
-    diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
-    workorder_action_readiness = dict(planner_gate.get("workorder_action_readiness") or {})
-    manual_confirmation = dict(planner_gate.get("manual_confirmation") or {})
+    diagnosis_readiness = dict(decision.diagnosis_readiness or {})
+    workorder_action_readiness = dict(decision.workorder_action_readiness or {})
+    manual_confirmation = dict(decision.manual_confirmation or {})
     complete_payload = {
         "type": "chat_complete",
         "thread_id": thread_id,
@@ -217,12 +223,13 @@ def build_diagnosis_complete_payload(
         "final_content": final_answer,
         "report_filename": report_artifact.report_filename,
         "report_url": extract_report_url(report_artifact.save_result),
-        "decision": decision.model_dump(),
+        "decision": _decision_payload(decision),
         "resolved_context": resolved_context,
         "goal_set": goal_set,
-        "shadow_plan": shadow_plan,
-        "planning_diff": planning_diff,
-        "planner_gate": planner_gate,
+        "readiness": {
+            "diagnosis": diagnosis_readiness,
+            "workorder_action": workorder_action_readiness,
+        },
         "diagnosis_readiness": diagnosis_readiness,
         "workorder_action_readiness": workorder_action_readiness,
         "manual_confirmation": manual_confirmation,
@@ -250,15 +257,12 @@ def build_diagnosis_complete_payload(
             else rendered_answer
         ),
         "workflow_route": {
-            **project_route_fields_for_compat(decision),
+            **_legacy_route_fields(decision),
             "task_family": decision.task_family,
             "task_family_reason": decision.task_family_reason,
             "task_family_source": decision.task_family_source,
             "task_family_warnings": decision.task_family_warnings,
             "goal_set": goal_set,
-            "shadow_plan": shadow_plan,
-            "planning_diff": planning_diff,
-            "planner_gate": planner_gate,
             "diagnosis_readiness": diagnosis_readiness,
             "workorder_action_readiness": workorder_action_readiness,
             "manual_confirmation": manual_confirmation,
@@ -311,28 +315,27 @@ def build_ui_payload(
     data_state = str(getattr(sql_artifact, "data_state", "") or "")
     ui_type = "text_only"
     denied_reason_code = str(authorization.get("denied_reason_code") or "")
-    if is_legacy_task(decision, "permission_scope_query"):
+    report_denied = denied_reason_code == "report_permission_denied" or (
+        not denied_reason_code
+        and auth_mode == "deny"
+        and isinstance(authorization.get("denied_nodes"), dict)
+        and authorization["denied_nodes"].get("report") == "missing_report_permission"
+    )
+    if _is_compat_task(decision, "permission_scope_query"):
         ui_type = "permission_scope"
-    elif is_legacy_task(decision, "report_generation") and (
-        denied_reason_code == "report_permission_denied"
-        or (
-            auth_mode == "deny"
-            and isinstance(authorization.get("denied_nodes"), dict)
-            and authorization["denied_nodes"].get("report") == "missing_report_permission"
-        )
-    ):
+    elif report_denied:
         ui_type = "report_blocked"
     elif auth_mode in {"deny", "clarify"}:
         ui_type = "access_denied"
-    elif is_legacy_task(decision, "knowledge_qa"):
+    elif _is_compat_task(decision, "knowledge_qa"):
         ui_type = "knowledge_card"
-    elif is_legacy_task(decision, "report_generation"):
+    elif _is_compat_task(decision, "report_generation"):
         ui_type = "report_status"
     elif data_state in {"out_of_scope", "blocked", "empty"} or auth_mode == "degrade":
         ui_type = "text_only"
-    elif is_legacy_task(decision, "status_query"):
+    elif _is_compat_task(decision, "status_query"):
         ui_type = "status_card"
-    elif is_legacy_task(decision, "alarm_triage", "fault_diagnosis", "root_cause_analysis", "health_assessment"):
+    elif _is_compat_task(decision, "alarm_triage", "fault_diagnosis", "root_cause_analysis", "health_assessment"):
         ui_type = "diagnosis_card"
 
     objects = decision.objects or {}
@@ -340,7 +343,7 @@ def build_ui_payload(
     alarm_codes = [str(item).strip() for item in objects.get("alarm_codes", []) if str(item).strip()]
     return {
         "type": ui_type,
-        "task_type": legacy_task_value(decision),
+        "task_type": project_task_type_for_compat(decision),
         "data_state": data_state or None,
         "device_label": devices[0] if devices else None,
         "fault_code": alarm_codes[0] if alarm_codes else None,

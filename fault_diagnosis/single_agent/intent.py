@@ -6,17 +6,9 @@ import re
 from typing import Any
 
 from ..diagnosis.contracts import DiagnosisRequest
-from .compat import (
-    ensure_legacy_intent,
-    has_legacy_intent,
-    is_legacy_task,
-    legacy_intents,
-    legacy_task_value,
-    project_route_fields_for_compat,
-    sync_goal_projection_for_legacy_route,
-)
 from .context import ConversationDiagnosisState
 from .contracts import SingleAgentDecision
+from .workflow.axes import goal_types, requests_report
 from .workflow import analyze_evidence_gap, build_workflow_plan, route_task
 
 _FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{3,5})(?![A-Z0-9])", re.IGNORECASE)
@@ -263,13 +255,11 @@ def decide_capabilities(
     if needs_report:
         route.flags["need_report"] = True
     _apply_plan_mode_flags(route)
-    sync_goal_projection_for_legacy_route(route)
 
     plan = build_workflow_plan(route, needs_report=needs_report)
     needs_sql = plan.resolved_nodes.get("sql", False)
     needs_knowledge = plan.resolved_nodes.get("knowledge", False)
     needs_report = plan.resolved_nodes.get("report", False)
-    route_fields = project_route_fields_for_compat(route)
 
     if report_from_previous_artifact:
         return SingleAgentDecision(
@@ -277,7 +267,6 @@ def decide_capabilities(
             needs_knowledge=needs_knowledge,
             needs_report=True,
             report_from_previous_artifact=True,
-            **route_fields,
             task_family=route.task_family,
             task_family_reason=route.task_family_reason,
             task_family_source=route.task_family_source,
@@ -317,22 +306,18 @@ def decide_capabilities(
         )
 
     reason_parts = [
-        f"任务类型 {legacy_task_value(route)}",
+        f"任务族 {route.task_family}",
         "需要 SQL" if needs_sql else "跳过 SQL",
         "需要知识库" if needs_knowledge else "跳过知识库",
         "需要报告" if needs_report else "跳过报告",
     ]
     if plan.metadata.get("blocked_subgoals"):
         reason_parts.append("存在可继续但需披露的 blocked subgoal")
-    route_intents = legacy_intents(route)
-    if route_intents:
-        reason_parts.append(f"意图栈 {', '.join(route_intents)}")
     return SingleAgentDecision(
         needs_sql=needs_sql,
         needs_knowledge=needs_knowledge,
         needs_report=needs_report,
         report_from_previous_artifact=False,
-        **route_fields,
         task_family=route.task_family,
         task_family_reason=route.task_family_reason,
         task_family_source=route.task_family_source,
@@ -385,14 +370,13 @@ def _apply_evidence_gap_to_route(route: Any, gap_plan: Any) -> None:
     if gap_plan.reason:
         route.flags["evidence_gap_reason"] = True
     if gap_plan.plan_mode in {"workorder_decision_from_artifact", "status_refresh_then_workorder", "new_diagnosis_then_workorder"}:
-        ensure_legacy_intent(route, "workorder_decision")
         route.action_target = "workorder"
 
 
 def _apply_plan_mode_flags(route: Any) -> None:
     if route.plan_mode == "workorder_decision_from_artifact":
         route.flags.update(
-            need_sql=False,
+            need_sql=bool(route.should_refresh_runtime_data),
             need_knowledge=False,
             need_analysis=False,
             need_resolution=False,
@@ -401,6 +385,7 @@ def _apply_plan_mode_flags(route: Any) -> None:
             need_permission_check=True,
             need_risk_check=True,
         )
+        route.requested_output = "action_confirmation"
     elif route.plan_mode == "status_refresh_then_workorder":
         route.flags.update(
             need_sql=True,
@@ -413,6 +398,7 @@ def _apply_plan_mode_flags(route: Any) -> None:
             need_risk_check=True,
             lightweight_analysis=True,
         )
+        route.requested_output = "action_confirmation"
     elif route.plan_mode == "new_diagnosis_then_workorder":
         route.flags["need_workorder_decision"] = True
 
@@ -424,7 +410,7 @@ def _backfill_resolved_context_from_legacy(route: Any) -> None:
     if not context:
         return
     relation = route.relation_to_previous
-    if is_legacy_task(route, "report_generation") and (
+    if requests_report(route) and (
         context.get("last_evidence_bundle_id") or context.get("last_report_url")
     ):
         relation = "report_handoff"
@@ -493,10 +479,9 @@ def _apply_resolved_context_to_route(route: Any, resolved_context: Any) -> None:
             "freshness",
             "recommended_action_policy",
         ]
-        ensure_legacy_intent(route, "workorder_decision")
         route.action_target = "workorder"
     elif relation == "refresh_current_status":
-        route.plan_mode = "status_refresh_then_workorder" if has_legacy_intent(route, "workorder_decision") else "refresh_current_status"
+        route.plan_mode = "status_refresh_then_workorder" if "decide_workorder" in set(goal_types(route)) else "refresh_current_status"
         route.evidence_mode = "reuse_and_refresh_status"
         route.missing_or_stale_evidence = list(
             dict.fromkeys([*route.missing_or_stale_evidence, "latest_realtime_status"])
@@ -505,7 +490,6 @@ def _apply_resolved_context_to_route(route: Any, resolved_context: Any) -> None:
     elif relation == "report_handoff":
         route.plan_mode = "report_from_artifact"
         route.evidence_mode = "reuse_previous_artifact"
-        ensure_legacy_intent(route, "report_generation")
     elif relation == "continuation":
         route.plan_mode = "explain_from_artifact" if route.referenced_artifact_id else "normal"
     elif relation == "ambiguous":

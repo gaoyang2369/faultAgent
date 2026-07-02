@@ -184,36 +184,6 @@ SESSION_COOKIE_PATH = os.getenv("SESSION_COOKIE_PATH", "/").strip() or "/"
 LOCAL_DEV_MODE = _env_bool("LOCAL_DEV_MODE", False)
 ENABLE_PLAN_ENDPOINT = _env_bool("ENABLE_PLAN_ENDPOINT", False)
 ENABLE_DEV_AUTH = _env_bool("ENABLE_DEV_AUTH", False)
-ENABLE_PLANNER_GATED_EXECUTION = _env_bool("ENABLE_PLANNER_GATED_EXECUTION", False)
-PLANNER_GATED_TASK_FAMILIES = [
-    item.strip()
-    for item in os.getenv("PLANNER_GATED_TASK_FAMILIES", "knowledge_lookup,runtime_status,reporting").split(",")
-    if item.strip()
-]
-PLANNER_GATED_DRY_RUN = _env_bool("PLANNER_GATED_DRY_RUN", True)
-PLANNER_GATE_DIAGNOSIS_DRY_RUN = _env_bool("PLANNER_GATE_DIAGNOSIS_DRY_RUN", True)
-PLANNER_GATE_ENABLE_DIAGNOSIS_ACTIVE = _env_bool("PLANNER_GATE_ENABLE_DIAGNOSIS_ACTIVE", False)
-PLANNER_GATE_DIAGNOSIS_ACTIVE_MODES = [
-    item.strip()
-    for item in os.getenv("PLANNER_GATE_DIAGNOSIS_ACTIVE_MODES", "alarm_triage,fault_diagnosis").split(",")
-    if item.strip()
-]
-PLANNER_GATE_DIAGNOSIS_ACTIVE_REQUIRE_READINESS = (
-    os.getenv("PLANNER_GATE_DIAGNOSIS_ACTIVE_REQUIRE_READINESS", "candidate_for_limited_active").strip()
-    or "candidate_for_limited_active"
-)
-PLANNER_GATE_DIAGNOSIS_ACTIVE_MAX_DIFF_SEVERITY = (
-    os.getenv("PLANNER_GATE_DIAGNOSIS_ACTIVE_MAX_DIFF_SEVERITY", "warning").strip().lower()
-    or "warning"
-)
-PLANNER_GATE_DIAGNOSIS_ACTIVE_ALLOW_RCA = _env_bool("PLANNER_GATE_DIAGNOSIS_ACTIVE_ALLOW_RCA", False)
-PLANNER_GATE_DIAGNOSIS_ACTIVE_ALLOW_HEALTH = _env_bool("PLANNER_GATE_DIAGNOSIS_ACTIVE_ALLOW_HEALTH", False)
-PLANNER_GATED_REQUIRE_DIFF_STATUS = [
-    item.strip()
-    for item in os.getenv("PLANNER_GATED_REQUIRE_DIFF_STATUS", "aligned,acceptable_diff").split(",")
-    if item.strip()
-]
-PLANNER_GATED_MAX_DIFF_SEVERITY = os.getenv("PLANNER_GATED_MAX_DIFF_SEVERITY", "warning").strip().lower() or "warning"
 # The explicit opt-in must never turn the development identity endpoint on in production.
 DEV_AUTH_ENABLED = not IS_PRODUCTION and (LOCAL_DEV_MODE or ENABLE_DEV_AUTH)
 IS_LOCAL_RUNTIME = LOCAL_DEV_MODE or APP_ENV in {"dev", "development", "local", "test"}

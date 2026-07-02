@@ -151,7 +151,7 @@ def test_context_binder_result_reference() -> None:
 def test_router_workorder_followup() -> None:
     decision = _decision("从结果来看貌似有故障呀？是不是要生成工单？")
 
-    assert "workorder_decision" in decision.intent_stack
+    assert any(goal["goal_type"] == "decide_workorder" for goal in decision.goals)
     assert decision.action_target == "workorder"
     assert decision.plan_mode == "workorder_decision_from_artifact"
     assert decision.evidence_mode == "reuse_previous_artifact"
@@ -241,7 +241,11 @@ def test_guardrail_blocks_reset_completion_claim() -> None:
     result = build_output_guardrail_result(
         "已复位设备并完成处理。",
         None,
-        SingleAgentDecision(primary_task_type="action_request"),
+        SingleAgentDecision(
+            task_family="action_or_workorder",
+            action_target="workorder",
+            goal_set={"goals": [{"goal_type": "decide_workorder"}]},
+        ),
     )
 
     assert "unsafe_action_execution_claim" in result["warnings"]

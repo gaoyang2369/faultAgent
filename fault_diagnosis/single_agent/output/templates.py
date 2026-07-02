@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from ..workflow.contracts import TaskType
-from .contracts import OutputContract, OutputSectionContract
+from .contracts import OutputContract, OutputSectionContract, TaskType
 
 
 STATUS_QUERY_CONTRACT = OutputContract(

@@ -6,7 +6,6 @@ from .contracts import (
     TaskRoute,
     TaskFamily,
     TaskFamilyResolution,
-    TaskType,
     WorkflowObjects,
     WorkflowPlan,
     WorkflowPolicy,
@@ -14,7 +13,7 @@ from .contracts import (
     WorkflowTimeWindow,
 )
 from .goals import build_goal_set, summarize_goal_set
-from .policies import build_workflow_plan, get_policy
+from .policies import build_workflow_plan, select_policy_from_intent_axes
 from .router import route_task
 from .task_family import PUBLIC_TASK_FAMILIES, resolve_task_family
 from .evidence_gap import EvidenceGapPlan, analyze_evidence_gap
@@ -24,7 +23,6 @@ __all__ = [
     "TaskRoute",
     "TaskFamily",
     "TaskFamilyResolution",
-    "TaskType",
     "IntentGoal",
     "GoalSet",
     "WorkflowObjects",
@@ -37,7 +35,7 @@ __all__ = [
     "build_workflow_plan",
     "EvidenceGapPlan",
     "analyze_evidence_gap",
-    "get_policy",
+    "select_policy_from_intent_axes",
     "route_task",
     "PUBLIC_TASK_FAMILIES",
     "resolve_task_family",

@@ -178,3 +178,38 @@ Remaining blockers before true removal:
 - public contracts, output templates/contracts, planning/gate contracts, tests/evals, and artifact compatibility still require legacy fields.
 
 Next phase: Phase 5.5 can prepare public compatibility stabilization and removal criteria. It should not remove fields yet; it should prove consumers can tolerate compatibility-only fields becoming optional or separately versioned.
+
+## Phase 5.5 Remove Legacy Execution Fallbacks Result
+
+Phase 5.5 removed the remaining legacy execution fallback from workflow policy selection.
+
+Removed execution fallback:
+
+- `workflow/policies.py` no longer imports or reads `TaskType`, `primary_task_type`, `candidate_task_types`, or `intent_stack`.
+- `select_policy_from_intent_axes(route)` no longer performs legacy parity checks or legacy policy fallback.
+- policy selection now uses only `task_family`, GoalSet goal types, requested output, resolved context, and action/workorder fields.
+- workorder node resolution no longer calls legacy intent compatibility helpers; it uses GoalSet workorder goals and `action_target`.
+
+Still retained as public compatibility output:
+
+- `TaskType`
+- `primary_task_type`
+- `candidate_task_types`
+- `intent_stack`
+- `/chat/plan`, SSE complete payloads, artifacts, traces, eval snapshots, and frontend-compatible route payloads
+
+Compatibility-only status:
+
+- `policy_dependency_files`: `0`
+- Internal `TaskType` read/write files: `10/3` -> `1/1`
+- Internal `intent_stack` read/write files: `5/2` -> `1/1`
+- Remaining internal read/write file: `workflow/router.py`, where the fields are generated as public compatibility projection.
+- Full compatibility references remain in public contracts, output schemas, tests/evals, and artifact-compatible surfaces.
+
+Removal is still blocked for public schema:
+
+- `workflow/router.py` still generates compatibility projections.
+- public contracts and historical artifacts still expose legacy fields.
+- output/eval/frontend-compatible surfaces still assert or display legacy fields.
+
+Next phase: Phase 5.6 can open the public schema deprecation window. It should define versioned payload behavior, optional-field tolerance, frontend/eval migration criteria, and artifact backward-compatibility rules before any public field removal.

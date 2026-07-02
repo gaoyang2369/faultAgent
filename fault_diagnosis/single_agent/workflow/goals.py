@@ -61,7 +61,7 @@ def build_goal_set(
     inherited_slots = context.get("inherited_slots") if isinstance(context.get("inherited_slots"), dict) else {}
     current_payload_device = str(payload.get("equipment_hint") or "").strip()
     context_refs = [referenced_artifact_id] if referenced_artifact_id and not _explicit_new_device_without_inheritance(current_payload_device, inherited_slots) else []
-    legacy_intents = [str(item) for item in route_hint.get("legacy_intent_candidates") or [] if str(item)]
+    legacy_candidates = [str(item) for item in route_hint.get("legacy_candidates") or [] if str(item)]
     requested_output = str(route_hint.get("requested_output") or "answer")
     task_type = _task_type_value(route_hint.get("task_type"))
     objects = route_hint.get("objects")
@@ -79,7 +79,7 @@ def build_goal_set(
     if relation == "report_handoff" or requested_output == "report" or _has_any(compact, _REPORT_WORDS):
         specs.append(_goal_spec("generate_report", text, source=_source_for_relation(relation), expected_output="report", context_refs=context_refs, reason="用户要求生成或导出报告。"))
 
-    if relation == "action_followup" and (_has_any(compact, _WORKORDER_WORDS) or "workorder_decision" in legacy_intents):
+    if relation == "action_followup" and (_has_any(compact, _WORKORDER_WORDS) or "workorder_decision" in legacy_candidates):
         if stale:
             specs.append(_goal_spec("refresh_current_status", text, source="inferred_from_context", required_slots=["device"], required_evidence=["latest_realtime_status"], context_refs=context_refs, reason="上一轮证据已滞后，工单判断前需要刷新当前状态。"))
             specs.append(_goal_spec("decide_workorder", text, source="inferred_from_context", expected_output="workorder_decision", risk_level="requires_confirmation", required_evidence=["diagnosis_summary", "severity_or_status_level", "latest_realtime_status"], context_refs=context_refs, reason="基于上一轮结果判断是否生成待确认工单草稿，不能直接派发。"))
@@ -94,17 +94,17 @@ def build_goal_set(
 
     if _has_any(compact, _PERMISSION_WORDS) or task_type == "permission_scope_query":
         specs.append(_goal_spec("answer_meta_question", text, expected_output="answer", reason="用户询问身份或权限范围。"))
-    if has_fault_code and (_has_any(compact, _FAULT_CODE_WORDS) or "explain_alarm_code" in legacy_intents):
+    if has_fault_code and (_has_any(compact, _FAULT_CODE_WORDS) or "explain_alarm_code" in legacy_candidates):
         specs.append(_goal_spec("explain_fault_code", text, required_slots=["fault_code"], required_evidence=["manual_or_fault_code_reference"], reason="用户需要解释故障码。"))
-    if _has_any(compact, _STATUS_WORDS) or "check_current_status" in legacy_intents:
+    if _has_any(compact, _STATUS_WORDS) or "check_current_status" in legacy_candidates:
         specs.append(_goal_spec("check_runtime_status", text, required_slots=["device"], missing_slots=[] if has_device else ["device"], status="ready" if has_device else "blocked", required_evidence=["latest_realtime_status"], reason="用户需要查询当前运行状态。"))
-    if (_has_any(compact, _DIAGNOSIS_WORDS) or "fault_diagnosis" in legacy_intents) and not _only_fault_code_explanation(compact):
+    if (_has_any(compact, _DIAGNOSIS_WORDS) or "fault_diagnosis" in legacy_candidates) and not _only_fault_code_explanation(compact):
         specs.append(_goal_spec("diagnose_fault", text, required_slots=["device"], missing_slots=[] if has_device else ["device"], status="ready" if has_device or has_fault_code else "blocked", required_evidence=["runtime_status", "fault_code_or_symptom"], reason="用户需要判断是否存在故障或形成诊断。"))
-    if _has_any(compact, _SEVERITY_WORDS) or "severity_assessment" in legacy_intents:
+    if _has_any(compact, _SEVERITY_WORDS) or "severity_assessment" in legacy_candidates:
         specs.append(_goal_spec("assess_severity", text, required_evidence=["diagnosis_summary", "severity_or_status_level"], reason="用户需要评估严重性。"))
-    if _has_any(compact, _RESOLUTION_WORDS) or "resolution_recommendation" in legacy_intents:
+    if _has_any(compact, _RESOLUTION_WORDS) or "resolution_recommendation" in legacy_candidates:
         specs.append(_goal_spec("recommend_resolution", text, required_evidence=["diagnosis_summary", "manual_or_policy_reference"], reason="用户需要处置建议。"))
-    if _has_any(compact, _WORKORDER_WORDS) or "workorder_decision" in legacy_intents:
+    if _has_any(compact, _WORKORDER_WORDS) or "workorder_decision" in legacy_candidates:
         status, missing, reason = _followup_status(missing_context, inherited_slots, relation)
         specs.append(_goal_spec("decide_workorder", text, status=status, expected_output="workorder_decision", risk_level="requires_confirmation", missing_slots=missing, required_evidence=["diagnosis_summary", "severity_or_status_level", "recommended_action_policy"], context_refs=context_refs if status != "blocked" else [], reason=reason))
 
@@ -132,7 +132,7 @@ def summarize_goal_set(value: Any) -> dict[str, Any]:
         "goal_types": [str(goal.get("goal_type")) for goal in goals if goal.get("goal_type")],
         "execution_order": list(data.get("execution_order") or []),
         "blocked_goals": list(data.get("blocked_goals") or []),
-        "intent_stack_projection": list(data.get("intent_stack_projection") or []),
+        "legacy_intent_projection": list(data.get("legacy_intent_projection") or []),
         "goal_summary": str(data.get("goal_summary") or ""),
     }
 
@@ -188,7 +188,7 @@ def _finalize_goal_set(specs: list[dict[str, Any]], *, route_hint: dict[str, Any
         goals=goals,
         execution_order=execution_order,
         blocked_goals=blocked_goals,
-        intent_stack_projection=projection,
+        legacy_intent_projection=projection,
         goal_summary=summary,
     )
 

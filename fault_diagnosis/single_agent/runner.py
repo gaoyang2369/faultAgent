@@ -231,24 +231,15 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             goal_set = getattr(self._workflow_task_decision, "goal_set", {}) or {}
             if goal_set:
                 trace_metadata.setdefault("goal_set", summarize_goal_set(goal_set))
-            shadow_plan = getattr(self._workflow_task_decision, "shadow_plan_summary", {}) or {}
-            if shadow_plan:
-                trace_metadata.setdefault("shadow_plan", shadow_plan)
-            planning_diff = getattr(self._workflow_task_decision, "planning_diff_summary", {}) or {}
-            if planning_diff:
-                trace_metadata.setdefault("planning_diff", planning_diff)
-            planner_gate = getattr(self._workflow_task_decision, "planner_gate_summary", {}) or {}
-            if planner_gate:
-                trace_metadata.setdefault("planner_gate", planner_gate)
-                diagnosis_readiness = dict(planner_gate.get("diagnosis_readiness") or {})
-                if diagnosis_readiness:
-                    trace_metadata.setdefault("diagnosis_readiness", diagnosis_readiness)
-                workorder_action_readiness = dict(planner_gate.get("workorder_action_readiness") or {})
-                if workorder_action_readiness:
-                    trace_metadata.setdefault("workorder_action_readiness", workorder_action_readiness)
-                manual_confirmation = dict(planner_gate.get("manual_confirmation") or {})
-                if manual_confirmation:
-                    trace_metadata.setdefault("manual_confirmation", manual_confirmation)
+            diagnosis_readiness = getattr(self._workflow_task_decision, "diagnosis_readiness", {}) or {}
+            if diagnosis_readiness:
+                trace_metadata.setdefault("diagnosis_readiness", diagnosis_readiness)
+            workorder_action_readiness = getattr(self._workflow_task_decision, "workorder_action_readiness", {}) or {}
+            if workorder_action_readiness:
+                trace_metadata.setdefault("workorder_action_readiness", workorder_action_readiness)
+            manual_confirmation = getattr(self._workflow_task_decision, "manual_confirmation", {}) or {}
+            if manual_confirmation:
+                trace_metadata.setdefault("manual_confirmation", manual_confirmation)
         if self.evidence_bundle is not None:
             trace_metadata.setdefault("evidence_bundle_id", getattr(self.evidence_bundle, "bundle_id", None))
             trace_metadata.setdefault("evidence_count", len(getattr(self.evidence_bundle, "evidence_items", []) or []))

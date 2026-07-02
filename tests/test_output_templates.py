@@ -21,6 +21,43 @@ from fault_diagnosis.single_agent.output.renderers import render_final_answer
 from fault_diagnosis.tools.report_tools import _build_report_html
 
 
+def _decision_for(task: str, **extra) -> SingleAgentDecision:
+    profiles = {
+        "fault_diagnosis": {
+            "task_family": "diagnosis",
+            "goal_set": {"goals": [{"goal_type": "diagnose_fault"}]},
+        },
+        "alarm_triage": {
+            "task_family": "diagnosis",
+            "goal_set": {"goals": [{"goal_type": "explain_fault_code"}, {"goal_type": "check_runtime_status"}]},
+        },
+        "action_request": {
+            "task_family": "action_or_workorder",
+            "action_target": "workorder",
+            "goal_set": {"goals": [{"goal_type": "decide_workorder"}]},
+        },
+        "report_generation": {
+            "task_family": "reporting",
+            "requested_output": "report",
+            "goal_set": {"goals": [{"goal_type": "generate_report"}]},
+        },
+        "permission_scope_query": {
+            "task_family": "meta",
+            "goal_set": {"goals": [{"goal_type": "answer_meta_question"}]},
+        },
+        "status_query": {
+            "task_family": "runtime_status",
+            "goal_set": {"goals": [{"goal_type": "check_runtime_status"}]},
+        },
+        "knowledge_qa": {
+            "task_family": "knowledge_lookup",
+            "goal_set": {"goals": [{"goal_type": "explain_fault_code"}]},
+        },
+    }
+    data = {**profiles[task], **extra}
+    return SingleAgentDecision(**data)
+
+
 def _evidence_bundle() -> EvidenceBundle:
     items = [
         EvidenceItem(
@@ -123,7 +160,7 @@ def _workorder() -> WorkOrderSuggestion:
 
 def test_fault_diagnosis_template_contains_required_sections_and_evidence() -> None:
     rendered = render_final_answer(
-        decision=SingleAgentDecision(primary_task_type="fault_diagnosis"),
+        decision=_decision_for("fault_diagnosis"),
         evidence_bundle=_evidence_bundle(),
         analysis_artifact=_analysis(),
         workorder_suggestion=_workorder(),
@@ -140,7 +177,7 @@ def test_fault_diagnosis_template_contains_required_sections_and_evidence() -> N
 
 def test_alarm_triage_template_answers_current_alarm_status() -> None:
     rendered = render_final_answer(
-        decision=SingleAgentDecision(primary_task_type="alarm_triage"),
+        decision=_decision_for("alarm_triage"),
         evidence_bundle=_evidence_bundle(),
         analysis_artifact=_analysis(),
         knowledge_artifact=KnowledgeStepArtifact(
@@ -163,7 +200,7 @@ def test_alarm_triage_template_answers_current_alarm_status() -> None:
 
 def test_action_request_template_keeps_safety_boundary() -> None:
     rendered = render_final_answer(
-        decision=SingleAgentDecision(primary_task_type="action_request", action_type="重启设备"),
+        decision=_decision_for("action_request", action_type="重启设备"),
         evidence_bundle=None,
         analysis_artifact=_analysis(),
     )
@@ -171,13 +208,13 @@ def test_action_request_template_keeps_safety_boundary() -> None:
     assert "我不能直接执行" in rendered.content
     assert "已重启" not in rendered.content
     assert "已派发工单" not in rendered.content
-    guardrail = build_output_guardrail_result(rendered.content, None, SingleAgentDecision(primary_task_type="action_request"), rendered)
+    guardrail = build_output_guardrail_result(rendered.content, None, _decision_for("action_request"), rendered)
     assert guardrail["passed"] is True
 
 
 def test_report_generation_template_returns_summary_and_link_only() -> None:
     rendered = render_final_answer(
-        decision=SingleAgentDecision(primary_task_type="report_generation"),
+        decision=_decision_for("report_generation"),
         evidence_bundle=_evidence_bundle(),
         analysis_artifact=_analysis(),
         report_artifact=ReportStepArtifact(
@@ -198,8 +235,8 @@ def test_report_generation_template_returns_summary_and_link_only() -> None:
 
 def test_degraded_report_generation_does_not_claim_report_created() -> None:
     rendered = render_final_answer(
-        decision=SingleAgentDecision(
-            primary_task_type="report_generation",
+        decision=_decision_for(
+            "report_generation",
             authorization={
                 "mode": "degrade",
                 "denied_nodes": {"report": "missing_report_permission"},
@@ -220,8 +257,8 @@ def test_degraded_report_generation_does_not_claim_report_created() -> None:
 
 
 def test_permission_scope_template_lists_guest_asset_and_no_card_ui() -> None:
-    decision = SingleAgentDecision(
-        primary_task_type="permission_scope_query",
+    decision = _decision_for(
+        "permission_scope_query",
         authorization={
             "mode": "allow",
             "data_scope": {
@@ -257,7 +294,7 @@ def test_permission_scope_template_lists_guest_asset_and_no_card_ui() -> None:
 
 
 def test_empty_status_result_does_not_claim_normal() -> None:
-    decision = SingleAgentDecision(primary_task_type="status_query")
+    decision = _decision_for("status_query")
     sql_artifact = SqlStepArtifact(
         success=True,
         summary="查询设备最新状态",
@@ -283,7 +320,7 @@ def test_empty_status_result_does_not_claim_normal() -> None:
 
 
 def test_knowledge_qa_uses_knowledge_card_and_cleans_metadata() -> None:
-    decision = SingleAgentDecision(primary_task_type="knowledge_qa")
+    decision = _decision_for("knowledge_qa")
     rendered = render_final_answer(
         decision=decision,
         evidence_bundle=None,
