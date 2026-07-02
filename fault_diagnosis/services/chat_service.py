@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Any
@@ -14,8 +13,14 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
 from ..auth.admin_auth import resolve_auth_context
+from ..context.conversation_context import ConversationContextAssembler
 from ..runtime.dev_mode import get_dev_messages
 from ..common.logger import ensure_request_id, get_logger
+from ..repositories.conversation_store import (
+    ConversationRepository,
+    get_conversation_repository,
+    messages_to_history_payload,
+)
 from ..repositories.history_index import get_history_index_repository
 from ..services.history_service import load_artifact_history_messages
 from ..auth.session_scope import resolve_request_scope
@@ -27,6 +32,7 @@ from ..agent_runtime.stream_control import (
 )
 from ..agent_runtime.streaming import token_stream_events as default_token_stream_events
 from ..single_agent.planner import build_plan_snapshot
+from .conversation_persistence import ConversationPersistenceService, parse_sse_payloads
 from ..common.utils import (
     sanitize_chat_history_messages,
     summarize_identifier_for_log,
@@ -64,6 +70,8 @@ class AgentInvocationContext:
     legacy_bindings: dict[str, str]
     updated_legacy_bindings: dict[str, str]
     minted_new_thread: bool
+    conversation_context: dict[str, Any] | None = None
+    user_message_id: str | None = None
 
 
 def summarize_session_id(session_id: str | None) -> str:
@@ -72,23 +80,6 @@ def summarize_session_id(session_id: str | None) -> str:
 
 def summarize_thread_id(thread_id: str | None) -> str:
     return summarize_identifier_for_log(thread_id, keep=10)
-
-
-def parse_sse_payloads(chunk: str) -> list[dict[str, Any]]:
-    payloads: list[dict[str, Any]] = []
-    for block in chunk.split("\n\n"):
-        data_lines = [
-            line[len("data:"):].strip()
-            for line in block.splitlines()
-            if line.startswith("data:")
-        ]
-        if not data_lines:
-            continue
-        try:
-            payloads.append(json.loads("\n".join(data_lines)))
-        except json.JSONDecodeError:
-            continue
-    return payloads
 
 
 def build_visual_action_from_stream_event(event: dict[str, Any]) -> dict[str, Any] | None:
@@ -217,9 +208,45 @@ class ChatService:
                     "metadata": context.metadata,
                 },
             )
+            if context.conversation_context:
+                enriched.setdefault(
+                    "conversation_context",
+                    {
+                        "version": context.conversation_context.get("version"),
+                        "stats": context.conversation_context.get("stats"),
+                        "artifact_refs": context.conversation_context.get("artifact_refs", []),
+                    },
+                )
             return enriched
 
         return enrich
+
+    def _conversation_repository(self, app) -> ConversationRepository:
+        return getattr(app.state, "conversation_repository", None) or get_conversation_repository()
+
+    def _conversation_persistence(self, app) -> ConversationPersistenceService:
+        return ConversationPersistenceService(
+            repository=self._conversation_repository(app),
+            logger=self._log,
+        )
+
+    def _build_read_only_conversation_context(self, app, context: AgentInvocationContext) -> dict[str, Any] | None:
+        try:
+            return ConversationContextAssembler(
+                conversation_repository=self._conversation_repository(app)
+            ).build(
+                thread_id=context.thread_id,
+                current_user_message=context.message,
+                auth_context=context.auth_context,
+            )
+        except Exception as exc:
+            self._log.warning(
+                "构造只读对话上下文失败",
+                thread_id=summarize_thread_id(context.thread_id),
+                request_id=context.request_id,
+                error=str(exc),
+            )
+            return None
 
     async def prepare_agent_invocation_context(
         self,
@@ -350,6 +377,7 @@ class ChatService:
             thread_id=context.thread_id,
             user_identity=context.trusted_user_identity,
             auth_context=context.auth_context,
+            conversation_context=self._build_read_only_conversation_context(request.app, context),
         )
         payload = snapshot.model_dump(exclude_none=True)
         payload["thread_id"] = context.thread_id
@@ -422,20 +450,25 @@ class ChatService:
                 thread_id=context.thread_id,
                 session_id=context.session_id,
             )
+            self._conversation_persistence(request.app).prepare_turn(context)
 
             response = StreamingResponse(
-                self.stream_events(
-                    request.app,
-                    context.message,
-                    context.thread_id,
-                    context.trusted_user_identity,
-                    request_id=context.request_id,
-                    stream_id=context.stream_id,
-                    cancel_handle=cancel_handle,
-                    history_messages=context.history_messages,
-                    replace_history=False,
-                    auth_context=context.auth_context,
-                    complete_payload_enricher=self._build_complete_payload_enricher(context),
+                self._conversation_persistence(request.app).stream_events_with_persistence(
+                    context,
+                    self.stream_events(
+                        request.app,
+                        context.message,
+                        context.thread_id,
+                        context.trusted_user_identity,
+                        request_id=context.request_id,
+                        stream_id=context.stream_id,
+                        cancel_handle=cancel_handle,
+                        history_messages=context.history_messages,
+                        replace_history=False,
+                        auth_context=context.auth_context,
+                        conversation_context=context.conversation_context,
+                        complete_payload_enricher=self._build_complete_payload_enricher(context),
+                    ),
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -511,6 +544,23 @@ class ChatService:
             )
             if getattr(request.app.state, "dev_mode", False):
                 await self._overwrite_thread_history_state(request, resolved_thread_id, kept_messages)
+            else:
+                try:
+                    stored_kept_messages = self._conversation_repository(request.app).supersede_from_user_turn(
+                        thread_id=resolved_thread_id,
+                        user_turn_index=user_turn_index,
+                    )
+                    kept_payload = messages_to_history_payload(stored_kept_messages)
+                    sanitized_kept = sanitize_chat_history_messages(kept_payload)
+                    if isinstance(sanitized_kept, list):
+                        kept_messages = sanitized_kept
+                except Exception as exc:
+                    self._log.warning(
+                        "标记编辑后的旧对话消息失败，将继续使用内存截断历史",
+                        thread_id=summarize_thread_id(resolved_thread_id),
+                        user_turn_index=user_turn_index,
+                        error=str(exc),
+                    )
 
             if user_turn_index < max(total_user_turns - 1, 0):
                 self._clear_stale_thread_artifact(resolved_thread_id)
@@ -544,19 +594,56 @@ class ChatService:
                 thread_id=resolved_thread_id,
                 session_id=session_id,
             )
+            edit_context = AgentInvocationContext(
+                message=normalized_message,
+                thread_id=resolved_thread_id,
+                session_id=session_id,
+                auth_context=auth_context,
+                history_messages=kept_messages,
+                metadata={
+                    "channel": "text_edit",
+                    "session_id": session_id,
+                    "thread_id": resolved_thread_id,
+                    "request_id": request_id,
+                    "stream_id": stream_id,
+                    "user_identity": trusted_user_identity,
+                    "requested_user_identity": requested_user_identity,
+                    "user_turn_index": user_turn_index,
+                },
+                channel="text_edit",
+                stream_id=stream_id,
+                request_id=request_id,
+                requested_thread_id=thread_id,
+                requested_user_identity=requested_user_identity,
+                trusted_user_identity=trusted_user_identity,
+                session_manager=session_manager,
+                legacy_bindings=legacy_bindings,
+                updated_legacy_bindings=legacy_bindings,
+                minted_new_thread=False,
+            )
+            self._conversation_persistence(request.app).prepare_turn(
+                edit_context,
+                branch_id=f"edit-{request_id}",
+                parent_message_id=(kept_messages[-1].get("id") if kept_messages else None),
+            )
 
             response = StreamingResponse(
-                self.stream_events(
-                    request.app,
-                    normalized_message,
-                    resolved_thread_id,
-                    trusted_user_identity,
-                    request_id=request_id,
-                    stream_id=stream_id,
-                    cancel_handle=cancel_handle,
-                    history_messages=to_langchain_history_messages(kept_messages),
-                    replace_history=True,
-                    auth_context=auth_context,
+                self._conversation_persistence(request.app).stream_events_with_persistence(
+                    edit_context,
+                    self.stream_events(
+                        request.app,
+                        normalized_message,
+                        resolved_thread_id,
+                        trusted_user_identity,
+                        request_id=request_id,
+                        stream_id=stream_id,
+                        cancel_handle=cancel_handle,
+                        history_messages=to_langchain_history_messages(kept_messages),
+                        replace_history=True,
+                        auth_context=auth_context,
+                        conversation_context=edit_context.conversation_context,
+                        complete_payload_enricher=self._build_complete_payload_enricher(edit_context),
+                    ),
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -630,17 +717,22 @@ class ChatService:
         )
 
         try:
-            async for chunk in self.stream_events(
-                request.app,
-                context.message,
-                context.thread_id,
-                context.trusted_user_identity,
-                request_id=context.request_id,
-                stream_id=context.stream_id,
-                history_messages=context.history_messages,
-                replace_history=False,
-                auth_context=context.auth_context,
-                complete_payload_enricher=self._build_complete_payload_enricher(context),
+            self._conversation_persistence(request.app).prepare_turn(context)
+            async for chunk in self._conversation_persistence(request.app).stream_events_with_persistence(
+                context,
+                self.stream_events(
+                    request.app,
+                    context.message,
+                    context.thread_id,
+                    context.trusted_user_identity,
+                    request_id=context.request_id,
+                    stream_id=context.stream_id,
+                    history_messages=context.history_messages,
+                    replace_history=False,
+                    auth_context=context.auth_context,
+                    conversation_context=context.conversation_context,
+                    complete_payload_enricher=self._build_complete_payload_enricher(context),
+                ),
             ):
                 for event in parse_sse_payloads(chunk):
                     msg_type = event.get("type")
@@ -747,6 +839,19 @@ class ChatService:
             sanitized = sanitize_chat_history_messages(raw_messages)
             return sanitized if isinstance(sanitized, list) else []
 
+        try:
+            messages = self._conversation_repository(request.app).list_messages(thread_id=thread_id)
+            history_payload = messages_to_history_payload(messages)
+            sanitized = sanitize_chat_history_messages(history_payload)
+            if isinstance(sanitized, list) and sanitized:
+                return sanitized
+        except Exception as exc:
+            self._log.warning(
+                "读取 conversation DB 历史失败，回退旧历史来源",
+                thread_id=summarize_thread_id(thread_id),
+                error=str(exc),
+            )
+
         checkpointer = getattr(request.app.state, "checkpointer", None)
         if not checkpointer:
             return load_artifact_history_messages(thread_id, logger=self._log)
@@ -772,6 +877,7 @@ class ChatService:
             return
 
         raise RuntimeError("当前单 Agent 运行模式不支持覆盖非 dev 历史状态")
+
 
     def _clear_stale_thread_artifact(self, thread_id: str) -> None:
         try:

@@ -66,6 +66,7 @@ def build_plan_snapshot(
     thread_id: str,
     user_identity: str,
     auth_context: AuthContext,
+    conversation_context: dict[str, Any] | None = None,
 ) -> PlanSnapshot:
     """Build a deterministic goal-native plan snapshot without side effects."""
 
@@ -79,6 +80,7 @@ def build_plan_snapshot(
         auth_context=auth_context,
         current_payload=payload,
         state=conversation_state,
+        conversation_context=conversation_context,
     )
     report_from_previous_artifact = resolved_context.relation_to_previous == "report_handoff"
     if report_from_previous_artifact:

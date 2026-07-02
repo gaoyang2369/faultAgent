@@ -114,6 +114,7 @@ class ResolvedContext(BaseModel):
     last_report_url: str | None = None
     evidence_mode: str = "collect_new"
     should_refresh_runtime_data: bool = False
+    conversation_context_signals_summary: dict[str, Any] = Field(default_factory=dict)
 
     def legacy_context_resolution(self) -> dict[str, Any]:
         """Return the dict shape expected by existing routes, tests and payloads."""
@@ -139,6 +140,7 @@ class ResolvedContext(BaseModel):
             "stale_evidence": self.stale_evidence,
             "missing_context": list(self.missing_context),
             "context_resolution_reason": self.context_resolution_reason,
+            "conversation_context_signals_summary": self.conversation_context_signals_summary,
         }
 
 
@@ -174,6 +176,11 @@ def summarize_resolved_context(value: Any) -> dict[str, Any]:
         "stale_evidence": bool(data.get("stale_evidence")),
         "missing_context": list(data.get("missing_context") or []),
         "context_resolution_reason": str(data.get("context_resolution_reason") or ""),
+        "conversation_context_signals_summary": (
+            data.get("conversation_context_signals_summary")
+            if isinstance(data.get("conversation_context_signals_summary"), dict)
+            else {}
+        ),
         "candidates_count": candidate_counts,
         "source": data.get("source"),
         "used_active_asset": data.get("used_active_asset"),

@@ -10,16 +10,28 @@ from .history_index import (
     record_history_thread,
     remove_history_thread,
 )
+from .conversation_store import (
+    MemoryConversationRepository,
+    SQLiteConversationRepository,
+    configure_conversation_repository,
+    get_conversation_repository,
+    reset_conversation_repository,
+)
 
 __all__ = [
     "FileAdminPdfRepository",
     "FileGovernanceRepository",
     "FileHistoryIndexRepository",
     "MemoryHistoryIndexRepository",
+    "MemoryConversationRepository",
+    "SQLiteConversationRepository",
+    "configure_conversation_repository",
     "configure_history_index_repository",
     "get_admin_pdf_repository",
+    "get_conversation_repository",
     "sanitize_governance_thread_hint",
     "get_history_index_repository",
     "record_history_thread",
     "remove_history_thread",
+    "reset_conversation_repository",
 ]

@@ -6,6 +6,7 @@ from typing import Any
 
 from ..runtime.dev_mode import get_dev_messages, get_dev_todos_payload, list_dev_threads
 from ..common.logger import get_logger
+from ..repositories.conversation_store import get_conversation_repository, messages_to_history_payload
 from ..repositories.history_index import get_history_index_repository
 from ..common.utils import sanitize_chat_history_messages, summarize_identifier_for_log
 from ..diagnosis.artifact_store import get_thread_artifact
@@ -211,6 +212,10 @@ class HistoryService:
             or getattr(app.state, "history_index_repository", None)
             or get_history_index_repository()
         )
+        self.conversation_repository = (
+            getattr(app.state, "conversation_repository", None)
+            or get_conversation_repository()
+        )
         self._log = logger or get_logger("services.history")
 
     async def list_history(
@@ -240,6 +245,12 @@ class HistoryService:
             return self._history_list_payload(history_type, thread_ids, paged_response, limit, cursor, keyword)
 
         try:
+            db_thread_ids = self.conversation_repository.list_thread_ids(session_id=self.session_id)
+            if db_thread_ids:
+                owned_db_thread_ids = self.session_manager.filter_owned_thread_ids(self.session_id, db_thread_ids)
+                self._log_history_list_returned(history_type, owned_db_thread_ids, paged_response)
+                return self._history_list_payload(history_type, owned_db_thread_ids, paged_response, limit, cursor, keyword)
+
             indexed_thread_ids = self.history_index_repository.list_thread_ids(session_id=self.session_id)
             owned_chat_ids = self.session_manager.filter_owned_thread_ids(self.session_id, indexed_thread_ids)
             self._log_history_list_returned(history_type, owned_chat_ids, paged_response)
@@ -288,6 +299,30 @@ class HistoryService:
                 dev_mode=True,
             )
             return messages
+
+        try:
+            stored_messages = self.conversation_repository.list_messages(thread_id=resolved_chat_id)
+            if stored_messages:
+                history_messages = messages_to_history_payload(stored_messages)
+                sanitized_messages = sanitize_chat_history_messages(history_messages)
+                if isinstance(sanitized_messages, list) and sanitized_messages:
+                    self._record_history_thread(history_type, resolved_chat_id)
+                    self._log.info(
+                        "从 conversation DB 返回对话历史详情",
+                        history_type=history_type,
+                        session_id=summarize_session_id(self.session_id),
+                        chat_id=summarize_thread_id(resolved_chat_id),
+                        message_count=len(sanitized_messages),
+                    )
+                    return sanitized_messages
+        except Exception as exc:
+            self._log.warning(
+                "读取 conversation DB 历史详情失败，回退旧历史来源",
+                history_type=history_type,
+                session_id=summarize_session_id(self.session_id),
+                chat_id=summarize_thread_id(resolved_chat_id),
+                error=str(exc),
+            )
 
         checkpointer = getattr(self.app.state, "checkpointer", None)
         if not checkpointer or not hasattr(checkpointer, "aget"):
@@ -386,6 +421,16 @@ class HistoryService:
             return {"deleted": True, "server_deleted": True, "thread_id": chat_id}
 
         try:
+            try:
+                self.conversation_repository.soft_delete_thread(thread_id=resolved_chat_id)
+            except Exception as conversation_error:
+                self._log.warning(
+                    "软删除 conversation DB 对话失败",
+                    history_type=history_type,
+                    session_id=summarize_session_id(self.session_id),
+                    chat_id=summarize_thread_id(resolved_chat_id),
+                    error=str(conversation_error),
+                )
             checkpointer = getattr(self.app.state, "checkpointer", None)
             if checkpointer and hasattr(checkpointer, "adelete_thread"):
                 await checkpointer.adelete_thread(resolved_chat_id)

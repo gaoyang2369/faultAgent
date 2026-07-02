@@ -86,7 +86,15 @@ class SingleAgentStagesMixin:
         else:
             try:
                 payload = await self._invoke_json_model(
-                    build_single_agent_understanding_prompt(self.message, self.user_identity)
+                    build_single_agent_understanding_prompt(
+                        self.message,
+                        self.user_identity,
+                        conversation_context_safety=(
+                            self.conversation_context.get("safety")
+                            if isinstance(self.conversation_context, dict)
+                            else None
+                        ),
+                    )
                 )
             except Exception as exc:  # noqa: BLE001
                 _log.warning(
@@ -102,6 +110,7 @@ class SingleAgentStagesMixin:
             auth_context=self.auth_context,
             current_payload=payload,
             state=conversation_state,
+            conversation_context=self.conversation_context,
         )
         report_from_previous_artifact = resolved_context.relation_to_previous == "report_handoff"
         if report_from_previous_artifact:

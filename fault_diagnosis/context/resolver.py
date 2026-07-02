@@ -6,6 +6,7 @@ from typing import Any
 
 from ..security.assets import asset_is_in_scope
 from ..security.contracts import AuthContext
+from .conversation_interpreter import summarize_recent_context_signals
 from .contracts import CaseState, ConversationDiagnosisState, ResolvedContext
 
 _CONTEXT_WORDS = (
@@ -87,21 +88,42 @@ class ContextResolver:
         auth_context: AuthContext,
         current_payload: dict[str, Any],
         state: ConversationDiagnosisState | None,
+        recent_context_signals: dict[str, Any] | None = None,
     ) -> ResolvedContext:
         active_case = state.active_case if state is not None else None
-        references = _context_reference_labels(message)
+        signals = recent_context_signals if isinstance(recent_context_signals, dict) else {}
+        signals_summary = summarize_recent_context_signals(signals)
+        signal_refs = [
+            str(item.get("label") or "")
+            for item in (signals.get("deictic_refs") or [])
+            if isinstance(item, dict)
+        ]
+        signal_intents = _as_list(signals.get("open_followup_intents"))
+        references = _dedupe([*_context_reference_labels(message), *signal_refs])
         suppress_reuse = _has_any(message, _PERMISSION_SCOPE_WORDS)
         current_asset = str(current_payload.get("equipment_hint") or "").strip() or None
         current_fault_code = str(current_payload.get("fault_code_hint") or "").strip().upper() or None
+        signal_current_assets = _as_list(signals.get("current_message_assets"))
+        signal_current_fault_codes = _as_list(signals.get("current_message_fault_codes"))
+        latest_correction_target = str(signals.get("latest_correction_target_asset") or "").strip() or None
+        if not current_asset:
+            current_asset = signal_current_assets[0] if signal_current_assets else latest_correction_target
+            if current_asset:
+                current_payload["equipment_hint"] = current_asset
+        if not current_fault_code and signal_current_fault_codes:
+            current_fault_code = signal_current_fault_codes[0].upper()
+            current_payload["fault_code_hint"] = current_fault_code
         state_assets = _dedupe([case.active_asset for case in (state.cases if state else []) if case.active_asset])
         state_fault_codes = _dedupe(
             [code for case in (state.cases if state else []) for code in case.active_fault_codes]
         )
+        signal_assets = _as_list(signals.get("mentioned_assets"))
+        signal_fault_codes = _as_list(signals.get("mentioned_fault_codes"))
         current_assets = _dedupe([current_asset])
         current_fault_codes = _dedupe([current_fault_code])
         candidates = {
-            "assets": _dedupe([*current_assets, *([] if suppress_reuse else state_assets)]),
-            "fault_codes": _dedupe([*current_fault_codes, *([] if suppress_reuse else state_fault_codes)]),
+            "assets": _dedupe([*current_assets, *([] if suppress_reuse else state_assets), *signal_assets]),
+            "fault_codes": _dedupe([*current_fault_codes, *([] if suppress_reuse else state_fault_codes), *signal_fault_codes]),
         }
         payload_time_window = (
             current_payload.get("time_range_hint")
@@ -119,6 +141,7 @@ class ContextResolver:
             active_asset=current_asset,
             active_fault_codes=current_fault_codes,
             context_resolution_reason="当前消息提供了明确上下文。" if (current_asset or current_fault_code) else "未发现可继承上下文。",
+            conversation_context_signals_summary=signals_summary,
         )
 
         if active_case is None or suppress_reuse:
@@ -128,7 +151,11 @@ class ContextResolver:
             return resolved
 
         if current_asset and active_case.active_asset and current_asset != active_case.active_asset:
-            resolved.relation_to_previous = "correction" if references else "new_case"
+            resolved.relation_to_previous = "correction" if (references or latest_correction_target or "correction" in signal_intents) else "new_case"
+            resolved.source = "conversation_context_signals" if latest_correction_target and not signal_current_assets else "current_message"
+            resolved.resolved = True
+            resolved.active_asset = current_asset
+            resolved.active_fault_codes = current_fault_codes
             resolved.context_resolution_reason = "当前消息显式指定了新的设备，优先使用当前设备。"
             current_payload["context_resolution"] = resolved.legacy_context_resolution()
             return resolved
@@ -153,12 +180,13 @@ class ContextResolver:
         permission_errors = _context_permission_errors(active_case, auth_context)
         if permission_errors:
             resolved.candidates = {"assets": current_assets, "fault_codes": current_fault_codes}
+            resolved.conversation_context_signals_summary = _redact_context_signal_details(signals_summary)
             resolved.missing_context.extend(permission_errors)
             resolved.context_resolution_reason = "上一轮上下文不在当前身份授权范围内，已禁止继承。"
             current_payload["context_resolution"] = resolved.legacy_context_resolution()
             return resolved
 
-        relation = _relation_to_previous(message, references, active_case)
+        relation = _relation_to_previous(message, references, active_case, signals)
         used_asset = False
         used_fault = False
         inherited_slots: dict[str, Any] = {}
@@ -197,7 +225,7 @@ class ContextResolver:
             references=references,
             candidates=candidates,
             resolved=bool(inherited_slots or current_asset or current_fault_code or relation != "new_case"),
-            source="conversation_state" if inherited_slots else "current_message",
+            source="conversation_state" if inherited_slots else "conversation_context_signals" if signals else "current_message",
             used_active_asset=used_asset,
             used_active_fault_codes=used_fault,
             active_asset=str(current_payload.get("equipment_hint") or "").strip() or active_case.active_asset,
@@ -207,6 +235,7 @@ class ContextResolver:
             last_report_url=active_case.last_report_url,
             evidence_mode=_evidence_mode_for_relation(relation, stale),
             should_refresh_runtime_data=stale or relation == "refresh_current_status",
+            conversation_context_signals_summary=signals_summary,
         )
         if active_case.projection_warnings:
             resolved.context_resolution_reason = " ".join(
@@ -233,8 +262,25 @@ def _asset_allowed(asset: str, auth: AuthContext) -> bool:
     return auth.is_admin() or asset_is_in_scope(asset, auth.asset_scope)
 
 
-def _relation_to_previous(message: str, references: list[str], case: CaseState) -> str:
+def _relation_to_previous(
+    message: str,
+    references: list[str],
+    case: CaseState,
+    signals: dict[str, Any] | None = None,
+) -> str:
     compact = (message or "").replace(" ", "")
+    signals = signals if isinstance(signals, dict) else {}
+    intents = set(_as_list(signals.get("open_followup_intents")))
+    if "correction" in intents:
+        return "correction"
+    if "action_followup" in intents:
+        return "action_followup"
+    if "report_handoff" in intents:
+        return "report_handoff"
+    if "refresh_current_status" in intents:
+        return "refresh_current_status"
+    if "continuation" in intents:
+        return "continuation"
     if _has_any(compact, _REPORT_WORDS) and (_has_any(compact, _REPORT_CONTEXT_WORDS) or references):
         return "report_handoff"
     if _has_any(compact, _REFRESH_WORDS):
@@ -305,3 +351,26 @@ def _has_any(text: str, keywords: tuple[str, ...]) -> bool:
 
 def _dedupe(values: list[Any]) -> list[str]:
     return list(dict.fromkeys(str(item).strip() for item in values if str(item or "").strip()))
+
+
+def _as_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return _dedupe(value)
+    if str(value or "").strip():
+        return [str(value).strip()]
+    return []
+
+
+def _redact_context_signal_details(summary: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(summary or {})
+    redacted["mentioned_assets"] = []
+    redacted["mentioned_fault_codes"] = []
+    redacted["recent_corrections"] = []
+    redacted["candidate_artifact_ref_types"] = []
+    redacted["redacted_by_authorization"] = True
+    stats = dict(redacted.get("stats") or {})
+    stats["mentioned_asset_count"] = 0
+    stats["mentioned_fault_code_count"] = 0
+    stats["candidate_artifact_ref_count"] = 0
+    redacted["stats"] = stats
+    return redacted

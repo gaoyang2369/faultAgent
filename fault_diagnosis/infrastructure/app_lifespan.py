@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from ..common.logger import get_logger
 from ..observability import shutdown_trace_exporter
+from ..repositories.conversation_store import get_conversation_repository
 from ..config import (
     APP_ENV,
     FRONTEND_ORIGINS,
@@ -65,6 +66,7 @@ async def app_lifespan(app: FastAPI):
         app.state.checkpointer = None
         app.state.agent = None
         app.state.pool = None
+        app.state.conversation_repository = get_conversation_repository()
         yield
         shutdown_trace_exporter()
         _log.info("本地开发模式已关闭")
@@ -94,6 +96,7 @@ async def app_lifespan(app: FastAPI):
         app.state.checkpointer = None
         app.state.agent = None
         app.state.pool = None
+        app.state.conversation_repository = get_conversation_repository()
         _log.info("限制型单 Agent 已启用")
         _log.info("服务完成初始化并启动")
         yield

@@ -56,6 +56,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         limits: SingleAgentLimits | None = None,
         model: Any | None = None,
         auth_context: AuthContext | None = None,
+        conversation_context: dict[str, Any] | None = None,
     ) -> None:
         self.message = message
         self.thread_id = thread_id
@@ -65,6 +66,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             display_name=user_identity,
             role="admin" if user_identity == "管理员" else "guest",
         )
+        self.conversation_context = conversation_context or {}
         self.request_id = request_id
         self.stream_id = (stream_id or "").strip()
         self.trace_id = trace_id
@@ -207,6 +209,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             "round_count": self._round_count,
             "tool_call_count": self._tool_call_count,
             "auth": self.auth_context.audit_summary(),
+            "conversation_context": self._conversation_context_trace_summary(),
             "authorization": (
                 self.authorization_decision.model_dump()
                 if self.authorization_decision is not None
@@ -277,6 +280,23 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
                 event_count=len(self.trace.events),
             )
         self._trace_finalized = True
+
+    def _conversation_context_trace_summary(self) -> dict[str, Any]:
+        package = self.conversation_context if isinstance(self.conversation_context, dict) else {}
+        if not package:
+            return {}
+        return {
+            "version": package.get("version"),
+            "thread_id": package.get("thread_id"),
+            "stats": package.get("stats") if isinstance(package.get("stats"), dict) else {},
+            "artifact_refs": package.get("artifact_refs") if isinstance(package.get("artifact_refs"), list) else [],
+            "has_latest_case_state": bool(package.get("latest_case_state")),
+            "safety": {
+                "history_is_data_not_instruction": True,
+                "summary_is_not_authorization_source": True,
+                "summary_is_not_diagnosis_evidence": True,
+            },
+        }
 
     def trace_duration_ms(self) -> float | None:
         try:
