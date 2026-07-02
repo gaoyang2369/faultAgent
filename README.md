@@ -20,7 +20,7 @@ Vue 3 frontend
 - 单 Agent 故障诊断：请求理解、受限 SQL、知识库检索、诊断分析、最终回答。
 - 受限 SQL：只允许白名单表和只读查询，异常 SQL 自动回退到安全查询。
 - PDF 知识库：基于 FAISS/Ollama embeddings 查询设备手册和故障码资料。
-- 可视化 HTML 报告：通过 `save_report` 保存到前端可访问的 `/reports` 静态目录。
+- 可视化 HTML 报告：通过 `save_report` 保存到私有报告目录，并经受保护的 `/reports/{filename}` 访问。
 - 会话隔离：服务端 session cookie 管理 thread 归属，忽略不可信的前端身份参数。
 - 管理员 PDF：支持上传 PDF、OCR/解析、校正、归档到上传知识库。
 
@@ -44,7 +44,7 @@ Vue 3 frontend
 ├── medicineOCR/            # OCR 辅助脚本与独立依赖
 ├── pdfs/                   # 知识库 PDF 源文档
 ├── faiss_db/               # FAISS 索引
-├── docs/                   # API/SSE 契约
+├── docs/                   # 当前态架构与 API/SSE 契约
 ├── rebuild_kb.py           # 知识库重建入口
 ├── requirements.txt        # 后端依赖
 └── DEPLOY.md               # 部署说明
@@ -159,10 +159,12 @@ python rebuild_kb.py --incremental --no-force-rebuild
 | `/ai/history/{type}` | GET | 当前 session 历史列表 |
 | `/admin/pdfs` | GET/POST | 管理员 PDF 列表/上传 |
 | `/health/dependencies` | GET | 依赖健康检查 |
-| `/reports/*` | Static | 生成的报告文件 |
+| `/reports/{filename}` | GET | 受保护的报告访问 |
 
-契约文档：
+文档：
 
+- [Docs index](docs/README.md)
+- [Current architecture](docs/current-architecture.md)
 - [HTTP API](docs/backend-api-contract.md)
 - [SSE events](docs/sse-event-contract.md)
 
