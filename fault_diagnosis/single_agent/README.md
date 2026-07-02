@@ -1,393 +1,277 @@
 # single_agent 单 Agent 说明
 
-`fault_diagnosis/single_agent/` 是故障诊断后端的 Agent 核心实现。它不是多 Agent 编排，也不是让模型自由循环选择工具的开放式 Agent，而是一条受限、可审计、固定阶段的单 Agent 诊断流水线：
+`fault_diagnosis/single_agent/` 是 faultAgent 后端的限制型单 Agent 核心。它不是多 Agent 编排，不是 LangChain ReAct 式开放循环，也不是让 LLM 自由决定调用哪个工具。工具调用由固定阶段代码、goal-native policy、权限和硬白名单共同控制，主流程可审计、可复现、可限制。
 
-```text
-请求理解 -> 任务分类与 workflow policy -> 证据账本初始化
-  -> 按 policy 收集运行数据/知识库/权限风险证据
-  -> 诊断分析 -> 工单建议/报告
-  -> 证据链校验 -> 最终回答 -> 输出校验 -> 保存诊断产物
-```
+诊断结论必须落到 `EvidenceBundle`；工单和设备动作只能输出建议、草稿或人工确认要求，不能自动执行设备控制，不能自动派发工单。
 
-这份 README 重点解释 Agent 层内部：流程、任务分类、workflow、工具调用、证据链和扩展约定。后端整体入口、服务层、SSE 契约和部署方式见上一级 [README](../README.md)。
+## Agent 定位与边界
 
-## 入口与边界
-
-外部请求不会直接调用阶段函数，而是走后端聊天流入口：
+外部入口不是阶段函数，而是：
 
 ```text
 GET /chat/stream
-  -> fault_diagnosis/api/chat.py
+  -> api/chat.py
   -> ChatService.stream_chat
   -> agent_runtime.streaming.token_stream_events
   -> RestrictedSingleAgentRunner.stream_events
+  -> single_agent/flow.py
 ```
 
-语音兼容入口 `POST /agent/chat` 也复用同一条 SSE 流，只是在服务层把流式事件聚合成 JSON。
+`POST /agent/chat` 语音兼容入口也复用同一条流，只在服务层聚合成 JSON。
 
-Agent 层只负责“如何完成一次诊断任务”，不负责 HTTP 权限、会话归属、历史索引、应用启动和数据库池初始化。这些属于 `api/`、`services/`、`auth/`、`repositories/`、`infrastructure/` 等后端层。
+Agent 层只负责一次诊断请求如何执行；HTTP、session、thread ownership、历史索引、数据库池和应用启动属于 `api/`、`services/`、`auth/`、`repositories/`、`infrastructure/`。
 
-## 核心目录
+## 当前 goal-native 主链路
+
+```text
+user request
+  -> understand_request
+  -> ContextManager.resolve
+  -> ResolvedContext
+  -> build_goal_set
+  -> GoalSet
+  -> resolve_task_family
+  -> select_policy_from_intent_axes
+  -> resolve_nodes_from_goals
+  -> readiness / manual_confirmation
+  -> fixed stages
+  -> EvidenceBundle
+  -> final_answer
+  -> output compat projection
+  -> save artifact
+```
+
+内部不再以旧任务类型或旧意图列表为核心。旧任务类型、旧候选任务和旧意图列表只在 output/artifact/前端兼容边界生成。退役的 shadow/diff/gate 计划字段不再是当前生产链路。
+
+核心目录：
 
 ```text
 single_agent/
-  __init__.py                 对外导出 RestrictedSingleAgentRunner 等公共类型
-  contracts.py                单 Agent 限制、决策结果、trace 事件合同
-  runner.py                   runner 门面、模型调用、工具白名单、trace、SSE 工具事件
-  flow.py                     顶层流式状态机和阶段编排顺序
-  stages.py                   understand/sql/knowledge/analysis/report/final/save 等阶段实现
-  intent.py                   轻量问候、规则 fallback、能力决策
-  workflow/
-    contracts.py              TaskRoute、WorkflowPolicy、WorkflowPlan 与 GoalSet 合约
-    router.py                 规则优先的任务分类、对象抽取、子目标拆解
-    policies.py               每类任务的 workflow policy、节点开关、工具映射
-    nodes.py                  权限检查、风险检查、处置建议、审计节点
-    todos.py                  将内部阶段投影成前端 5 个 workflow 进度分组
-  evidence/
-    __init__.py               EvidenceBundle 门面与工具 evidence 预览
-    sql.py                    从 SQL 结果构造运行数据证据
-    knowledge.py              从知识库结果构造手册/故障码证据
-    claims.py                 从分析结论和工单建议构造 Claim
-    quality.py                证据链质量检查与输出 guardrail
-  output/
-    payloads.py               complete 事件 payload 构建与前端兼容字段合并
-  support/
-    json_utils.py             模型 JSON 抽取、修复、解析
-    serialization.py          trace/tool 输出序列化和预览
-    tool_access.py            知识库和报告工具懒加载
-  artifacts.py                线程级诊断产物 envelope 构建
-  final_answer.py             最终回答 fallback 模板
-  prompts.py                  理解、分析、证据合成 prompt
-  reporting/
-    __init__.py               报告能力公共出口
-    payloads.py               报告 payload、图表 payload、分析摘要入口
-    operation.py              结构化运行诊断报告模型与规则构建
-    sections.py               报告文本章节构建
-    defs.py                   报告结构定义和阈值常量
-    utils.py                  报表/证据/工单共享的格式化与指标 helper
-  sql_safety.py               SQL schema、只读校验、fallback 查询
-  sql_result_parser.py        SQL 工具输出解析
-  workorder_suggestions.py    诊断产物到工单草稿建议
+  runner.py                 runner 门面、模型调用、工具白名单、trace、工具 SSE
+  flow.py                   顶层流式状态机和固定阶段顺序
+  stages.py                 understand/sql/knowledge/analysis/report/final/save 等业务阶段
+  intent.py                 请求理解 fallback、capability decision
+  context.py                ArtifactBackedCaseStore 和 ContextManager 门面
+  planner.py                /chat/plan 的 side-effect-free goal-native plan
+  workflow/                 GoalSet、task_family、policy、node、todo 投影
+  planning/                 diagnosis/workorder readiness 和人工确认合同
+  evidence/                 EvidenceBundle 构建、SQL/KB evidence、Claim、质量校验
+  output/                   complete payload、模板化输出、兼容字段投影
+  reporting/                报告 payload、结构化运行报告、章节和指标 helper
+  compat/                   单向 legacy 字段投影
+  support/                  JSON、序列化、工具懒加载
+  sql_safety.py             SQL schema、只读校验、fallback/fast plan
+  sql_result_parser.py      SQL 输出解析
+  artifacts.py              DiagnosisArtifactEnvelope 构建和保存
+  workorder_suggestions.py  工单建议/草稿产物
 ```
 
-## 运行模型
+`planning/` 中如果仍有历史 shadow/diff/gate 文件，只能按退役迁移遗留理解；当前执行链路使用的是 readiness 和 manual confirmation。
 
-### 受限单 Agent
+## 上下文管理
 
-`RestrictedSingleAgentRunner` 是当前唯一 Agent runner。它的关键约束在 `contracts.py`：
+上下文合同定义在 `fault_diagnosis/context/contracts.py`：
 
-```python
-class SingleAgentLimits(BaseModel):
-    max_rounds: int = 16
-    max_tool_calls: int = 4
-    allowed_tools: tuple[str, ...] = (
-        "sql_db_query_checker",
-        "sql_db_query",
-        "query_knowledge_base",
-        "save_report",
-    )
-```
+- `ResolvedContext`：本轮请求对上一轮上下文的解析结果，包含 `relation_to_previous`、`referenced_artifact_id`、`inherited_slots`、`stale_evidence`、`missing_context`、`evidence_mode`、`should_refresh_runtime_data` 等。
+- `CaseState`：从线程级 diagnosis artifact 投影出来的活动诊断 case，记录当前设备、故障码、报告、证据包、严重程度、数据新鲜度和 pending actions。
+- `PendingAction`：上一轮 artifact 暗示的待处理动作，只表示“待确认动作”，不是已经执行。
+- `ContextReference`：用户话语里对上一轮对象或显式对象的引用。
+- `ArtifactBackedCaseStore`：位于 `single_agent/context.py`，从 `diagnosis.artifact_store.get_thread_artifact()` 读取当前 thread 最近 artifact，并投影成 `ConversationDiagnosisState`。
+- `ContextResolver`：位于 `context/resolver.py`，判断本轮是否能复用上一轮设备、报告、故障码、运行数据和 pending action。
 
-含义：
+上下文关系包括 `new_case`、`report_handoff`、`action_followup`、`refresh_current_status`、`continuation`、`ambiguous`、`correction`。
 
-- `max_rounds` 限制一次运行最多进入多少个内部阶段。完整诊断链路包含证据初始化、校验、保存等阶段，所以当前默认是 16。
-- `max_tool_calls` 限制工具调用次数。常规完整链路通常是 SQL checker、SQL query、知识库、报告，最多 4 次。
-- `allowed_tools` 是兜底硬白名单。实际运行时还会被 workflow policy 解析出的 `runtime_tools` 收窄。
+复用原则：
 
-模型不会直接决定“调用哪个工具”。模型只参与请求理解、SQL 规划、诊断证据合成等文本/JSON 生成；工具由阶段代码按 policy 显式调用。
+- 可复用必须满足 thread、权限、设备、时间、artifact 类型和 staleness 条件。
+- 缺证据时不能假装有证据。
+- stale evidence 必须刷新或披露。
+- 越权时不能继承上下文。
+- 用户显式切换设备时不能复用旧设备 artifact。
 
-### 直接回复快路径
+典型续问：
 
-`intent.py` 会识别纯问候、能力询问和感谢，例如“你好”“你能做什么”“谢谢”。这类请求不进入 SQL、知识库或诊断链路，直接生成 `final_answer` 并发送 `complete`。
+- “基于刚才结果生成报告”：`report_handoff`，从上一轮 artifact 生成报告。
+- “是不是要生成工单”：`action_followup`，复用上一轮诊断但检查 stale、权限和 evidence。
+- “那 J2 呢”：显式新设备，不能复用 J1 artifact。
+- “刚才那个故障码什么意思”：可继承故障码，但存在多个候选时进入 `ambiguous`。
 
-### 报告续写快路径
+## 意图拆解 / GoalSet
 
-当用户说“基于刚才结果生成报告”“导出报告”等，并且当前 thread 已有保存过的诊断 artifact，`understand_request()` 会设置：
+`GoalSet` 定义在 `workflow/contracts.py`，由 `workflow/goals.py::build_goal_set()` 确定性构造，不由 LLM 直接生成。LLM 或规则理解只提供初始 payload；GoalSet 根据请求文本、抽取对象、resolved context 和 route hint 生成。
 
-```text
-report_from_previous_artifact = true
-requested_output = report
-task_family = reporting
-```
+`IntentGoal` 表示一个结构化目标，包含：
 
-随后流程跳过重新查询 SQL/知识库，调用 `stream_report_from_previous_artifact()` 从线程级 artifact 映射报告输入并生成 HTML 报告。
+- `goal_id`
+- `goal_type`
+- `status`
+- `depends_on`
+- `required_slots`
+- `missing_slots`
+- `required_evidence`
+- `expected_output`
+- `risk_level`
+- `source`
+- `context_refs`
+- `reason`
 
-## 任务分类
+一个请求可以有多个 goal，也可以有依赖和 blocked 状态。例如：
 
-任务分类由三步组成：
+- “A07089 是什么？现在设备有故障吗？要不要生成工单？”会拆出故障码解释、运行状态、严重性/诊断、工单判断。
+- “生成报告，然后看看是否需要工单”会拆出报告和工单判断，后者受 evidence 和人工确认限制。
+- “这个告警严重吗，怎么处理？”会结合上下文生成严重性评估和处置建议。
 
-1. `understand_request()` 先用规则 fallback 或模型理解，生成 `DiagnosisRequest`。
-2. `workflow/router.py` 的 `route_task()` 根据关键词、设备、故障码、时间窗口、报告/动作意图等信息生成 `TaskRoute`。
-3. `workflow/policies.py` 的 `build_workflow_plan()` 选择 `WorkflowPolicy`，解析启用节点和运行时工具白名单。
+当前支持的 `goal_type`：
 
-当前内部路由已经切换为 GoalSet、task_family 和 policy_id：
+- `explain_fault_code`：解释故障码或告警码含义。
+- `check_runtime_status`：查询当前/最近运行状态。
+- `diagnose_fault`：判断并诊断故障。
+- `assess_severity`：评估严重程度、影响或风险。
+- `recommend_resolution`：给出处置建议。
+- `generate_report`：生成或导出报告。
+- `decide_workorder`：判断是否建议生成待确认工单草稿。
+- `refresh_current_status`：刷新当前实时状态。
+- `clarify_missing_context`：澄清缺失或歧义上下文。
+- `answer_meta_question`：回答权限、身份或能力范围问题。
 
-| 任务族 | 典型用户问题 | workflow 重点 | 默认输出 |
-| --- | --- | --- | --- |
-| `status_query` | “当前状态怎么样”“是否在线”“最近运行情况” | 运行数据查询、当前状态摘要、必要时工单判断 | 简短状态回答 |
-| `alarm_triage` | “F01002 是什么”“这个告警还在吗”“严重吗” | 知识库解释、当前告警状态、处置建议 | 告警分诊回答 |
-| `fault_diagnosis` | “为什么故障”“帮我诊断异常”“设备高温原因” | SQL + 知识库 + 诊断分析 + 处置建议 + 工单建议 | 诊断回答，可选报告 |
-| `root_cause_analysis` | “做 RCA”“根因分析”“复盘” | 事件窗口、因果证据、影响范围、报告 | RCA 回答或报告 |
-| `health_assessment` | “健康评分”“风险趋势”“是否劣化” | 趋势窗口、数据充分性、风险/预测边界 | 健康评估回答 |
-| `knowledge_qa` | “故障码含义”“SOP 步骤”“手册怎么说” | 知识库证据、适用范围、安全提示 | 知识问答 |
-| `report_generation` | “生成报告”“导出报告”“总结成文档” | 使用已有或新收集证据生成报告 | 报告链接和摘要 |
-| `action_request` | “重启设备”“关闭告警”“派发工单” | 权限检查、风险检查、只给草稿/审批提示、审计 | 不直接执行动作 |
+兼容投影中还可能出现 `create_workorder_draft`、`dispatch_workorder`，但当前 GoalSet builder 不主动生成这些 goal；高风险动作会被 manual confirmation 和权限边界拦住。
 
-任务路由结果会写入 `SingleAgentDecision`，核心字段包括：
+## task_family 与 policy
 
-- `task_family`：目标族，例如运行状态、诊断、报告或动作/工单。
-- `route_confidence`：路由置信度。
-- `objects`：设备、告警码、系统、位置、指标、主题。
-- `time_window`：时间窗口或默认策略。
-- `subgoals`：拆解后的子目标，可能是 `ready` 或 `blocked`。
-- `missing_slots`：缺失槽位，例如 `device_id_or_system`、`time_window`。
-- `risk_level`：`read_only`、`requires_confirmation`、`write_action`、`high_risk`。
-- `requested_output`：`answer`、`report` 或 `action_confirmation`。
-- `workflow_policy`：选中的 policy 全量配置。
-- `enabled_nodes`：解析后的节点开关。
-- `runtime_tools`：本轮实际允许调用的工具名。
-- `guardrails`：本轮要遵守的输出和动作边界。
+`task_family` 是 goal-native 粗粒度任务族，不是旧任务类型。它用于 policy 选择、观测和调试。
 
-## Workflow Policy
+当前取值：
 
-每类任务都有一条 policy，定义：
+- `knowledge_lookup`：知识库/故障码解释。
+- `runtime_status`：当前或最近运行状态。
+- `diagnosis`：故障诊断、告警分诊、根因、健康评估。
+- `reporting`：报告生成。
+- `action_or_workorder`：工单或高风险动作请求。
+- `meta`：权限、身份、澄清等元问题。
 
-- `required_slots`：完成任务最好具备的槽位。
-- `conditional_required_slots`：某些节点启用时额外需要的槽位。
-- `enabled_nodes`：节点是固定启用、固定禁用，还是按条件启用。
-- `evidence_requirements`：证据链要求。
-- `output_schema`：预期输出形态。
-- `on_missing_evidence`：证据不足时的处理策略。
-- `guardrails`：输出和动作安全边界。
+policy selection 输入是 GoalSet goal types、`task_family`、`resolved_context`、`requested_output`、`action_target`、`action_type`、readiness/manual confirmation 相关轴。稳定 policy id 在 `workflow/policies.py`：
 
-注意：policy 里的 `allowed_tools`/`forbidden_tools` 是领域能力语义，例如“允许读资产库”“禁止设备控制写操作”。当前真正能被 runner 调用的工具只有 `runtime_tools` 与 `SingleAgentLimits.allowed_tools` 的交集。
+- `status_query_v1`
+- `alarm_triage_v1`
+- `fault_diagnosis_v1`
+- `root_cause_analysis_v1`
+- `health_assessment_v1`
+- `knowledge_qa_v1`
+- `report_generation_v1`
+- `action_request_v1`
+- `permission_scope_query_v1`
 
-节点解析逻辑在 `_resolve_node()`：
+`select_policy_from_intent_axes()` 只根据 goal-native 轴选 policy，不存在 legacy policy fallback。`resolve_nodes_from_goals()` 从 goal 和 task family 补齐 node 需求；`build_workflow_plan()` 解析 `enabled_nodes` 和 `runtime_tools`。
 
-- `sql`：设备上下文、任务类型和 `need_sql` flag 决定是否查询数据库。
-- `knowledge`：知识问答、告警码、处置需求会触发知识库。
-- `resolution_recommendation`：需要处置建议时启用。
-- `workorder_decision`：用户有工单意图且有设备上下文时启用。
-- `report`：用户请求报告或输出形态为 report 时启用。
-- `permission_check`、`risk_check`、`audit_log`：动作请求启用。
+`runtime_tools` 由启用节点映射得到：
 
-## 阶段流
+- `sql` -> `sql_db_query_checker`、`sql_db_query`
+- `knowledge` -> `query_knowledge_base`
+- `report` -> `save_report`
 
-正常诊断请求的主流程由 `flow.py` 驱动：
+实际工具调用还会经过 runner 硬白名单和 `security/tool_gateway.py` 权限校验。
+
+## 固定阶段流程
+
+当前主流程在 `flow.py`：
 
 ```text
 start
   -> understand
+  -> access_authorization
   -> select_workflow_policy
   -> initialize_evidence_bundle
-  -> permission_check              按 policy 可选
-  -> risk_check                    按 policy 可选
-  -> sql                           启用则执行，未启用则生成 skipped artifact
-  -> knowledge                     启用则执行；若 SQL 结果发现故障码，也可补充触发
+  -> permission_check              按 enabled_nodes 可选
+  -> risk_check                    按 enabled_nodes 可选
+  -> workorder_decision            工单 artifact 续问快路径可提前进入
+  -> report                        report_handoff 快路径可提前进入
+  -> sql                           启用则执行，否则 skipped artifact
+  -> knowledge                     启用或 SQL 发现故障码时执行，否则 skipped artifact
   -> analysis
-  -> resolution_recommendation     按 policy 可选
-  -> workorder_decision            启用则判断，否则生成 skipped suggestion
-  -> report                        启用则生成 HTML，否则生成 skipped report artifact
+  -> resolution_recommendation     按 enabled_nodes 可选
+  -> workorder_decision            启用则生成建议，否则 skipped suggestion
+  -> report                        启用则生成 HTML，否则 skipped report artifact
   -> evidence_validation
   -> final_answer
   -> output_guardrail
-  -> audit_log                     动作请求可选
+  -> audit_log                     动作/工单请求可选
   -> save_artifact
   -> token
   -> complete
 ```
 
-阶段职责：
+轻量问候和能力询问走直接回复快路径：`start -> final_answer -> token -> complete`。
 
-| 阶段 | 主要文件 | 产物 |
-| --- | --- | --- |
-| `understand` | `stages.py`、`intent.py` | `DiagnosisRequest`、`SingleAgentDecision` 初稿 |
-| `select_workflow_policy` | `flow.py`、`workflow/policies.py` | `workflow_route`、`workflow_policy` artifact，设置 `runtime_tools` |
-| `initialize_evidence_bundle` | `evidence/__init__.py` | 空的 `EvidenceBundle` 账本 |
-| `permission_check` | `workflow/nodes.py` | 动作请求权限边界，默认不允许直接写操作 |
-| `risk_check` | `workflow/nodes.py` | 动作请求风险等级和人工确认要求 |
-| `sql` | `stages.py`、`sql_safety.py` | `SqlStepArtifact`，后续转 SQL evidence |
-| `knowledge` | `stages.py`、`tools/kb_tools.py` | `KnowledgeStepArtifact`，后续转知识库 evidence |
-| `analysis` | `stages.py`、`reporting/payloads.py`、`prompts.py` | `AnalysisStepArtifact` |
-| `resolution_recommendation` | `workflow/nodes.py` | 处置建议节点产物 |
-| `workorder_decision` | `workorder_suggestions.py` | `WorkOrderSuggestion` |
-| `report` | `stages.py`、`tools/report_tools.py` | `ReportStepArtifact` 和 HTML 文件 |
-| `evidence_validation` | `evidence/quality.py` | 完整 `EvidenceBundle` 与质量检查 |
-| `final_answer` | `final_answer.py`、`stages.py` | 用户可读最终回答 |
-| `output_guardrail` | `evidence/quality.py` | 输出与证据一致性检查 |
-| `audit_log` | `workflow/nodes.py` | 动作请求审计信息 |
-| `save_artifact` | `artifacts.py`、`diagnosis/artifact_store.py` | 线程级 `DiagnosisArtifactEnvelope` |
+阶段说明：
 
-前端进度不直接展示全部内部阶段，而是由 `workflow/todos.py` 投影成 5 个分组：
+| 阶段 | 输入 | 输出 | 可跳过 | LLM | 工具 | EvidenceBundle |
+| --- | --- | --- | --- | --- | --- | --- |
+| `understand` | message、history/context、auth | `DiagnosisRequest`、`SingleAgentDecision` | 否 | 可能，规则 fallback 可替代 | 否 | 记录用户请求基础 |
+| `access_authorization` | auth、decision | authorization、access_scope | 否 | 否 | 否 | 防止越权证据进入后续 |
+| `select_workflow_policy` | GoalSet、task_family、context | policy、enabled_nodes、runtime_tools | 否 | 否 | 否 | 决定后续 evidence 需求 |
+| `initialize_evidence_bundle` | request、decision | 空 `EvidenceBundle` | 否 | 否 | 否 | 初始化账本 |
+| `permission_check` | action/workorder decision | permission_check artifact | 可 | 否 | 否 | 高风险边界证据 |
+| `risk_check` | action/workorder decision | risk_check artifact | 可 | 否 | 否 | 高风险边界证据 |
+| `sql` | request、policy、auth scope | `SqlStepArtifact` | 可 | 可能用于 SQL 规划，fast plan 可跳过 | `sql_db_query_checker`、`sql_db_query` | 运行数据 evidence |
+| `knowledge` | request、SQL fault codes | `KnowledgeStepArtifact` | 可 | 否 | `query_knowledge_base` | 手册/故障码 evidence |
+| `analysis` | SQL、KB、request | `AnalysisStepArtifact` | 否 | 是 | 否 | 生成判断基础 |
+| `resolution_recommendation` | decision、analysis | recommendation artifact | 可 | 否 | 否 | 处置建议 evidence |
+| `workorder_decision` | request、SQL、KB、analysis 或上一轮 artifact | `WorkOrderSuggestion` | 可 | 否 | 否 | 工单建议 claim |
+| `report` | SQL、KB、analysis、workorder | `ReportStepArtifact` | 可 | 否 | `save_report` | 报告 artifact |
+| `evidence_validation` | 所有阶段产物 | 完整 `EvidenceBundle`、quality checks | 否 | 否 | 否 | 核心证据链 |
+| `final_answer` | analysis、report、decision、evidence | 用户回答 | 否 | 可能，模板 fallback | 否 | 引用 evidence |
+| `output_guardrail` | final answer、EvidenceBundle、decision | guardrail result / safe rewrite | 否 | 否 | 否 | 校验 claim 和危险话术 |
+| `audit_log` | action/workorder artifacts | audit artifact | 可 | 否 | 否 | 审计信息 |
+| `save_artifact` | 全部产物 | `DiagnosisArtifactEnvelope` | 否 | 否 | artifact store | 保存可复用上下文 |
 
-```text
-理解与规划 -> 收集证据 -> 诊断分析 -> 生成报告 -> 校验并完成
-```
+前端进度不是完整阶段列表，而由 `workflow/todos.py` 投影成少量分组。
 
-## 工具与调用方式
+## 工具调用与安全边界
 
-工具调用统一走 `RestrictedSingleAgentRunner._invoke_restricted_tool()`：
-
-```text
-_start_tool_call()
-  -> 检查工具是否在本轮 runtime_tools 或兜底 allowed_tools 中
-  -> 检查 max_tool_calls
-  -> 写 trace tool_call
-  -> 发送 SSE tool_start
-invoke_tool()
-  -> 支持 LangChain tool.ainvoke / tool.invoke / 普通 callable
-_finish_tool_call()
-  -> 写 trace tool_result
-  -> 构造 tool_end
-  -> 对 SQL/知识库工具补充 evidence preview
-```
-
-### 当前工具清单
-
-| 工具名 | 实现位置 | 调用阶段 | 输入 | 输出与用途 | 关键限制 |
-| --- | --- | --- | --- | --- | --- |
-| `sql_db_query_checker` | `tools/sql_tools.py` 通过 `SQLDatabaseToolkit` 生成 | `sql` | `{"query": sql_query}` | 返回修正后的 SQL 文本 | fast plan 会跳过 checker；返回 SQL 仍必须只读且表名合法 |
-| `sql_db_query` | `tools/sql_tools.py` 通过 `SQLDatabaseToolkit` 生成 | `sql` | `{"query": sql_query}` | 返回数据库查询结果，写入 `SqlStepArtifact` | 只能执行阶段生成并校验过的只读查询 |
-| `query_knowledge_base` | `tools/kb_tools.py` | `knowledge` | `{"query": query}` | 返回故障码/手册/SOP 片段，写入 `KnowledgeStepArtifact` | 优先本地 PDF 故障码精确匹配，再查基础/上传 PDF 知识库 |
-| `save_report` | `tools/report_tools.py` | `report` | `SaveReportSchema` 字段 | 生成 HTML 报告，返回 `/reports/*.html` 或失败信息 | 文件名会安全归一化，只允许写入报告目录 |
-
-### SQL 工具安全
-
-SQL 规划在 `sql_safety.py` 中集中处理：
-
-- 只允许 `SELECT` 或 `WITH`。
-- 只允许访问：
-  - `real_data_01`
-  - `real_data_02`
-  - `real_data_03`
-  - `device_alarm`
-  - `device_metric`
-  - `device_fault_data`
-  - `fault_records`
-- 禁止使用旧表 `real_data`。
-- 当前/最近运行数据默认查 `real_data_01`；如果设备名能在资产目录中解析，则优先使用该设备绑定的数据表。
-- 设备过滤使用 `device_name` 或 `inverter_name`，不要假设 `real_data_01/02/03` 有 `device_id`。
-- 设备别名和数据源由 `security/assets.py` 管理。内置默认映射为 `J1号机/G120电机1 -> real_data_01`、`J2号机/G120电机2 -> real_data_02`、`J3号机/G120电机3 -> real_data_03`，可用 `ASSET_REGISTRY_PATH` 指向 JSON 文件覆盖。
-- 非生产环境默认启用 `DCMA_SQL_TIME_ANCHOR=latest_row_if_stale`：权限窗口仍是最近 1 小时或 7 天，但当真实 `NOW()` 窗口没有数据时，会回退到该表 `MAX(create_time)` 附近的数据窗口，便于半个月前的演示库生成报告。生产环境默认 `now`。
-- 如果模型生成 SQL 为空、非只读或包含未知表，会回退到 `build_fallback_sql_query()`。
-- 常见运行状态/报告类请求会走 `build_fast_sql_plan()`，直接生成确定性 SQL 并跳过 checker。
-
-### 知识库工具行为
-
-`query_knowledge_base` 的检索顺序：
-
-1. 从 query 中提取故障码。
-2. 在本地 PDF 文本中做故障码精确匹配。
-3. 如果精确匹配不足，再查基础 FAISS 知识库。
-4. 如果存在上传 PDF 索引或语料，再合并上传 PDF 结果。
-5. 返回带来源、文件名、页码、抽取后端和文档片段的文本块。
-
-知识库只提供元信息和手册证据，不代表实时设备状态。实时状态必须来自 SQL 或其他运行数据证据。
-
-### 报告工具行为
-
-`save_report` 接收结构化报告字段：
+Runner 硬限制在 `contracts.py::SingleAgentLimits`：
 
 ```text
-report_filename
-chart_payload
-operation_report_payload
+max_rounds = 18
+max_tool_calls = 4
+allowed_tools = (
+  "sql_db_query_checker",
+  "sql_db_query",
+  "query_knowledge_base",
+  "save_report",
+)
 ```
 
-阶段代码会用 `build_report_payload()` 组装唯一的新报告结构。`operation_report_payload` 是结构化运行诊断报告 JSON；报告工具只渲染该结构，不再保留旧 Markdown 章节模板回退。`chart_payload` 只接受新图表结构（`trend_groups`、`latest_metric_groups` 等）。报告工具负责 HTML 模板、ECharts 图表数据嵌入、文件名安全处理和写入 `REPORTS_DIR`。
+工具调用统一走 `RestrictedSingleAgentRunner._invoke_restricted_tool()`：先检查硬白名单、本轮 `runtime_tools`、`max_tool_calls` 和 `authorize_tool_call()`，再写 trace、发 `tool_start`，执行工具，最后写 `tool_end` 和 evidence preview。
 
-### 手动调用示例
+当前工具：
 
-常规调试优先通过 `/chat/stream` 走完整 Agent，因为这样会生成 trace、证据链和线程级 artifact：
+| 工具 | 阶段 | 输入 | 输出 | 权限与安全 |
+| --- | --- | --- | --- | --- |
+| `sql_db_query_checker` | `sql` | `{"query": sql}` | checker 返回 SQL 文本 | 必须有 `tool.sql.read`，且仍要只读/表名/ACL 复检；fast plan 可跳过 |
+| `sql_db_query` | `sql` | `{"query": sql}` | SQL 结果文本，写入 `SqlStepArtifact` | 只执行阶段生成并校验过的只读 SQL；结合 `allowed_tables`、设备范围和时间窗口 |
+| `query_knowledge_base` | `knowledge` | `{"query": query}` | 故障码/手册/SOP 片段，写入 `KnowledgeStepArtifact` | 必须有 `tool.kb.search`；RAG 结果按角色、资产、系统可见性过滤 |
+| `save_report` | `report` | `report_filename`、`chart_payload`、`operation_report_payload` | HTML 报告文件和访问 URL，写入 `ReportStepArtifact` | 必须有 `tool.report.write_draft`；只能写报告目录；访问仍经 `/reports/{filename}` 权限校验 |
 
-```bash
-curl -N --get "http://localhost:8000/chat/stream" \
-  --data-urlencode "message=J1号机当前运行状态怎么样" \
-  --data-urlencode "user_identity=游客"
-```
+模型不直接自由调用工具。SQL 是只读；报告只写 `trash/run/reports/`；知识库不是实时状态来源；工单建议不等于已创建或已派发。
 
-如果只想单独验证工具，可以在 Python 里直接调用 LangChain tool：
+## EvidenceBundle 与输出可信度
 
-```python
-from fault_diagnosis.tools.kb_tools import query_knowledge_base
+数据模型在 `diagnosis/contracts.py`：
 
-result = query_knowledge_base.invoke({"query": "F01002 故障码 含义 触发原因 处理步骤"})
-print(result)
-```
+- `EvidenceItem` = 事实证据，描述来源、内容、质量和元数据。
+- `Claim` = 基于证据形成的判断，必须引用 `supporting_evidence_ids`。
+- `EvidenceBundle` = 本轮事实与判断账本，包含 task、evidence、claims、quality checks 和关联产物。
 
-```python
-from fault_diagnosis.diagnosis.adapters import build_sql_tools_map
+证据来源：
 
-tools = build_sql_tools_map()
-result = tools["sql_db_query"].invoke({
-    "query": "SELECT id, device_name, status, fault_code, alarm_code, create_time FROM real_data_01 ORDER BY create_time DESC, id DESC LIMIT 5"
-})
-print(result)
-```
+- 用户请求：`ev_user_request`
+- SQL 结果：运行状态、样本窗口、告警事件、指标快照、时序特征、缺失运行数据
+- 知识库片段：故障码、手册、SOP、适用范围
+- 分析结果：诊断摘要、根因候选、风险评估、建议
+- 工单建议：是否建议工单、优先级、验收标准
+- 报告 artifact：报告文件名、报告生成状态
 
-```python
-from fault_diagnosis.tools.report_tools import save_report
-
-result = save_report.invoke({
-    "report_filename": "debug_report",
-    "chart_payload": None,
-    "operation_report_payload": "{\"title\":\"测试诊断报告\",\"report_time\":\"2026-06-17 10:00:00\",\"asset\":\"J1号机\",\"report_type\":\"运行诊断报告\",\"data_window\":\"测试窗口\",\"sample_count\":0,\"data_age_text\":\"未评估\",\"data_freshness_label\":\"已滞后\",\"data_freshness_note\":\"测试报告不代表当前实时状态。\",\"data_currentness_level\":\"stale\",\"data_currentness_label\":\"STALE / 不代表实时状态\",\"asset_risk_level\":\"unknown\",\"asset_risk_label\":\"UNKNOWN / 无法判断\",\"action_priority\":\"P1\",\"action_priority_label\":\"立即确认实时数据与现场状态\",\"confidence_level\":\"低\",\"severity\":\"unknown\",\"severity_label\":\"UNKNOWN / 无法判断\",\"confidence\":\"低\",\"one_sentence_conclusion\":\"测试结构化报告。\",\"top_actions\":[],\"kpi_cards\":[],\"findings\":[],\"cause_candidates\":[],\"action_plan\":[],\"workorder_suggestion\":{},\"evidence_summary\":[],\"limitations\":[],\"appendix\":{}}",
-})
-print(result)
-```
-
-## 证据链
-
-证据链是当前诊断 Agent 的核心合同，数据模型定义在 `diagnosis/contracts.py`：
-
-```text
-EvidenceItem   单条事实证据，只表达来源、内容、时效、质量，不直接下结论
-Claim          基于证据形成的判断，必须引用 supporting_evidence_ids
-EvidenceBundle 一次任务的证据账本，包含任务信息、证据、判断、质量检查和关联产物
-```
-
-### EvidenceItem
-
-常见来源：
-
-- `ev_user_request`：用户原始请求。
-- `ev_sql_sample_window`：SQL 返回样本窗口。
-- `ev_sql_event_codes`：故障码/告警码统计。
-- `ev_sql_speed_deviation`：速度偏差特征。
-- `ev_sql_load_level`：负载率快照。
-- `ev_sql_temperature_level`：温度快照。
-- `ev_kb_001` 等：知识库手册片段。
-- `ev_sql_result_missing`、`ev_kb_result_missing`：工具未返回有效证据时的缺失证据项。
-
-EvidenceItem 的质量标签包括：
-
-- `reliability`：来源可靠性。
-- `freshness`：时效性，可能是 `current`、`recent`、`stale`、`unknown`。
-- `relevance`：与任务相关性。
-- `completeness`：完整性，可能是 `complete`、`partial`、`missing`。
-
-### Claim
-
-`evidence/claims.py` 会从 `AnalysisStepArtifact` 和 `WorkOrderSuggestion` 生成判断：
-
-- `claim_diagnosis_summary`：最终诊断摘要。
-- `claim_root_cause_001` 等：根因候选。
-- `claim_risk_assessment`：风险提示。
-- `claim_recommendation`：处置建议。
-- `claim_workorder_decision`：是否建议生成工单。
-
-Claim 必须包含：
-
-- `statement`：判断文本。
-- `confidence`：置信度。
-- `supporting_evidence_ids`：支持证据 ID。
-- `missing_evidence`：仍缺失的验证材料。
-- `reasoning_summary`：短推理摘要，不保存长链路思考。
-- `status`：`candidate`、`confirmed`、`rejected` 或 `final`。
-
-### EvidenceBundle 质量检查
-
-`evidence/quality.py` 的 `validate_evidence_bundle()` 会写入：
+质量检查由 `evidence/quality.py::validate_evidence_bundle()` 生成，当前字段包括：
 
 - `has_asset`
 - `has_user_request`
@@ -401,220 +285,214 @@ Claim 必须包含：
 - `missing_evidence_disclosed`
 - `evidence_count`
 - `claim_count`
+- `no_unauthorized_evidence_refs` 由 flow 在授权后补充
 
-判断证据链是否完整时，优先看这些结构化字段，而不是只看日志里“证据链校验完成”这类摘要。
+`output_guardrail` 防止：
 
-### 输出 Guardrail
+- 空回答。
+- 声称已执行重启、停机、关闭告警、复位、改参数、派发等高风险动作。
+- claim 缺少支持证据。
+- 引用不存在的 evidence id。
+- 权限降级时未披露权限限制。
+- stale artifact 没有刷新或披露。
 
-`build_output_guardrail_result()` 会检查：
+## Readiness / Manual Confirmation / 工单与动作边界
 
-- 最终回答是否为空。
-- 动作请求是否出现“已重启/已停机/已关闭告警/已派发”等危险执行表述。
-- Claim 是否缺少支持证据。
-- Claim 是否引用不存在的 evidence id。
+`planning/action_readiness.py` 定义 `WorkorderActionReadiness`：
 
-结果会进入 `complete.output_guardrail`、trace metadata 和保存的 artifact。
+- `ready_for_draft`
+- `action_type`: `workorder_decision`、`workorder_draft`、`device_action`、`unknown`
+- `requires_human_confirmation`
+- `permission_check_required`
+- `risk_check_required`
+- `audit_log_required`
+- `output_guardrail_required`
+- `stale_refresh_required`
+- `missing_critical_evidence`
+- `blockers`
 
-## 输出与持久化
+`planning/manual_confirmation.py` 定义 `ManualConfirmationRequirement`：
 
-### SSE 事件
+- `required`
+- `confirmation_type`: `workorder_draft`、`dispatch`、`reset`、`stop_machine`、`parameter_change`、`unknown`
+- `required_role`: `engineer`、`admin`、`unknown`
+- `allowed_next_step`: `draft_only`、`ask_confirmation`、`refresh_data_first`、`deny`
+- `forbidden_phrases`
 
-Agent 可能发送的事件：
+边界规则：
 
-```text
-start
-task_update
-ping
-tool_start
-tool_end
-token
-complete
-server_error
-```
+- `draft_only`：只允许形成待确认工单草稿建议。
+- `ask_confirmation`：可以询问人工确认，但不能代替确认执行。
+- `refresh_data_first`：上一轮 evidence stale，必须先刷新或披露。
+- `deny`：设备控制、派发、停机、复位、改参数等直接执行请求必须拒绝或转人工审批。
 
-其中：
+必须明确：
 
-- `start`：包含 thread、stream、trace 和初始 stage。
-- `task_update`：前端 workflow 进度面板数据。
-- `ping`：长阶段保活。
-- `tool_start/tool_end`：工具输入输出、阶段、run_id、预览、可选 evidence preview。
-- `token`：当前实现通常在最终回答阶段一次性发送完整回答。
-- `complete`：完整结构化结果。
-- `server_error`：错误分类后的兼容错误事件。
+- 不自动派发工单。
+- 不自动重启设备。
+- 不自动复位。
+- 不自动停机/启停。
+- 不自动修改参数。
+- 工单建议只表示“建议创建/草稿”，不是已经创建。
+- evidence stale 时要刷新或明确提示。
+- 权限不足时不能继续工单或动作流程。
 
-### complete payload
+## 输出与兼容字段
 
-完整诊断 `complete` 由 `output/payloads.py` 构建，核心字段：
+`output/payloads.py` 构建 `complete`。推荐消费的新字段：
 
-```text
-runtime
-final_content
-report_filename
-report_url
-decision
-sql_artifact
-knowledge_artifact
-analysis_artifact
-permission_check
-risk_check
-resolution_recommendation
-audit_log
-workorder_decision
-report_artifact
-evidence_bundle
-output_guardrail
-workflow_route
-workflow_policy
-todos
-artifact
-trace
-event_count
-```
-
-`build_diagnosis_contract_payload()` 会补齐前端历史兼容字段。字段名里保留 `workflow_*` 是为了兼容前端，不表示后端仍有独立 workflow runner。
-
-### Artifact
-
-`save_artifact` 阶段会构建并保存 `DiagnosisArtifactEnvelope`：
-
-- `workflow_type`：通常等于任务类型，例如 `fault_diagnosis`。
-- `thread_id`
-- `created_at`
-- `request_summary`
-- `final_answer`
-- `report_filename`
-- `payload`：包含 request、decision、各阶段 artifact、trace、证据链、guardrail。
-- `evidence`：兼容旧前端的证据数组，优先使用 EvidenceBundle 的 evidence_items。
-
-保存位置由 `diagnosis/artifact_store.py` 和后端环境变量决定。默认文件后端会写入：
-
-```text
-trash/run/diagnosis_artifacts/*.jsonl
-```
-
-线程级 artifact 也是“基于刚才诊断生成报告”的数据来源。
-
-## Trace 与调试
-
-每个阶段会写 `AgentTrace` 事件：
-
-- `stage`
-- `decision`
-- `tool_call`
-- `tool_result`
-- `artifact`
-- `final_answer`
-
-runner 同时会把关键 metadata 写入 trace exporter 和本地 trace，包括：
-
-- `round_count`
-- `tool_call_count`
-- `decision`
-- `workflow_policy_id`
+- `resolved_context`
+- `goal_set`
 - `task_family`
-- `report_filename`
-- `evidence_bundle_id`
-- `evidence_count`
-- `claim_count`
-- `evidence_quality_checks`
+- `policy_id`
+- `decision.enabled_nodes` / `workflow_route.enabled_nodes`
+- `decision.runtime_tools` / `workflow_route.runtime_tools`
+- `readiness`
+- `diagnosis_readiness`
+- `workorder_action_readiness`
+- `manual_confirmation`
+- `evidence_bundle`
 - `output_guardrail`
 
-调试固定 workflow 报错时，先检查：
+旧兼容字段：
 
-1. 是否超过 `max_rounds`。
-2. 是否超过 `max_tool_calls`。
-3. 工具名是否在本轮 `runtime_tools` 和硬白名单中。
-4. SQL 是否只读、表名是否在允许列表。
-5. `evidence_quality_checks` 是否有悬空引用或缺失披露。
-6. `complete` payload 或保存 artifact 是否包含完整证据包。
+- 旧主任务类型投影
+- 旧候选任务类型投影
+- 旧意图列表投影
+- `workflow_route`
+- `workflow_policy`
+- `workflow_result`
+- `workflow_envelope`
 
-## 扩展约定
+旧字段只用于前端、历史 artifact 和输出模板兼容，不用于内部决策。`compat/legacy_intent.py` 的职责是从新结构单向投影旧字段，不能反向修改 GoalSet、route 或 policy，也不再用于内部 fallback。
 
-### 新增或修改任务分类
+## `/chat/plan` 调试说明
 
-优先改：
+`/chat/plan` 是受控调试接口，仅在 `ENABLE_PLAN_ENDPOINT=true` 或 `LOCAL_DEV_MODE=true` 时可用。它仍复用服务端 session/auth，不信任前端身份。
 
-- `workflow/contracts.py`：新增 GoalSet、TaskRoute 或 policy 结构字段。
-- `workflow/router.py`：新增分类关键词、对象抽取、子目标和缺失槽位。
-- `workflow/policies.py`：新增或调整 policy、节点开关、证据要求、guardrail。
-- `intent.py`：如果理解 payload 或规则 fallback 也需要新增字段，再同步调整。
+输出 schema 为 `agent_plan_snapshot.v2`，包含：
 
-### 调整 workflow 阶段
+- `resolved_context`
+- `goal_set`
+- `task_family`
+- `policy_id`
+- `workflow_policy`
+- `enabled_nodes`
+- `skipped_nodes`
+- `planned_tools`
+- `runtime_tools`
+- `readiness`
+- `manual_confirmation`
+- `missing_slots`
+- `evidence_gaps`
+- `authorization`
 
-优先改：
+它不输出退役的 shadow/diff/gate 计划字段，也不改变真实执行。
 
-- `flow.py`：阶段顺序和启停逻辑。
-- `stages.py`：单个业务阶段内部实现。
-- `workflow/todos.py`：前端进度分组投影。
-- `contracts.py`：阶段数量变化时检查 `SingleAgentLimits.max_rounds`。
+## 典型场景走读
 
-新增阶段后要重新数完整链路阶段数，避免最后在 `save_artifact` 或 `complete` 前被 `max_rounds` 截断。
-
-### 新增工具
-
-需要同时处理：
-
-1. 在 `fault_diagnosis/tools/` 或合适模块实现工具。
-2. 在 `workflow/policies.py` 中把对应节点映射到运行时工具名。
-3. 在 `contracts.py` 的 `SingleAgentLimits.allowed_tools` 加入硬白名单。
-4. 在 `stages.py` 中明确哪个阶段、什么输入调用该工具。
-5. 在 `runner.py` 或 evidence 模块中补充必要的 `tool_end` evidence preview。
-6. 在 `diagnosis/contracts.py` 或阶段 artifact 中定义结构化输出。
-7. 补测试，至少覆盖白名单、节点启停和 artifact/complete payload。
-
-### 修改输出字段
-
-优先改：
-
-- `output/payloads.py`：`complete` payload。
-- `artifacts.py`：保存 artifact。
-- `runtime/diagnosis_contract_adapter.py`：前端历史兼容合同。
-- `diagnosis/contracts.py`：领域合同。
-
-不要把前端兼容字段散落回 `runner.py` 或 `flow.py`。
-
-### 修改证据链
-
-优先改：
-
-- `diagnosis/contracts.py`：EvidenceItem / Claim / EvidenceBundle 合同。
-- `evidence/sql.py`：SQL 结果证据。
-- `evidence/knowledge.py`：知识库结果证据。
-- `evidence/claims.py`：判断构造。
-- `evidence/quality.py`：质量检查和输出 guardrail。
-
-保持三层语义：
+`A07089 是什么意思？`
 
 ```text
-EvidenceItem = 事实
-Claim = 判断
-EvidenceBundle = 一次任务的事实账本和判断集合
+explain_fault_code -> task_family=knowledge_lookup -> policy=knowledge_qa_v1
+  -> knowledge -> analysis -> evidence_validation -> final_answer
 ```
 
-不要把事实和判断混成一个泛化 dict。
+预期查知识库，不查 SQL；回答要说明手册证据边界，不声称当前设备实时状态。
+
+`J1号机当前状态怎么样？`
+
+```text
+check_runtime_status -> task_family=runtime_status -> policy=status_query_v1
+  -> sql -> analysis -> evidence_validation -> final_answer
+```
+
+预期查 SQL，披露数据窗口、样本时间和 freshness。
+
+`生成J1号机运行报告`
+
+```text
+generate_report -> task_family=reporting -> policy=report_generation_v1
+  -> sql/knowledge as needed -> analysis -> report -> save_artifact
+```
+
+预期生成私有 HTML 报告，保存 report artifact 和 diagnosis artifact。
+
+报告后追问 `从结果来看是不是要生成工单？`
+
+```text
+action_followup -> decide_workorder
+  -> check referenced artifact / stale / auth / device
+  -> workorder_decision -> evidence_validation -> final_answer
+```
+
+预期可复用上一轮 artifact，但只给建议或草稿边界。
+
+设备切换 `那J2呢？`
+
+```text
+explicit new device -> relation=new_case/correction
+  -> refresh J2 data or disclose missing evidence
+```
+
+不能复用 J1 artifact。
+
+高风险动作 `帮我重启设备`
+
+```text
+action_or_workorder -> policy=action_request_v1
+  -> permission_check -> risk_check -> manual_confirmation.allowed_next_step=deny
+```
+
+预期拒绝自动执行，提示需要人工审批/现场确认。
+
+guest 权限不足：
+
+```text
+auth role=guest -> policy_engine denies/degrades
+  -> no report/workorder/root-cause diagnosis
+```
+
+不能通过历史上下文绕过权限。
+
+## 开发扩展指南
+
+- 新增 `goal_type`：改 `workflow/contracts.py`、`workflow/goals.py`、`workflow/axes.py`，再补 policy 和测试。
+- 新增 `task_family`：改 `workflow/contracts.py`、`workflow/task_family.py`、policy 选择和授权映射。
+- 新增 `policy_id`：改 `workflow/policies.py` 的 registry、`_policy_id_from_axes()` 和节点解析。
+- 新增 `enabled_node`：改 policy、`resolve_nodes_from_goals()`、`workflow_node_enabled()` 使用点、`flow.py` 阶段位置和 `workflow/todos.py` 投影。
+- 新增工具：实现工具，加入 `SingleAgentLimits.allowed_tools`、`security/tool_gateway.py`、policy runtime tool 映射、stage 调用和 evidence preview。
+- 新增 evidence 类型：改 `diagnosis/contracts.py`、`single_agent/evidence/*`、`evidence/quality.py` 和输出模板。
+- 修改最终回答模板：改 `output/templates.py`、`output/renderers.py` 或 `final_answer.py`。
+- 修改报告模板：改 `tools/report_tools.py` 和 `single_agent/reporting/`。
+- 修改权限边界：改 `security/permissions.py`、`policy_engine.py`、`sql_acl.py`、`rag_acl.py`、`tool_gateway.py`。
+- 修改 `/chat/plan` 输出：改 `single_agent/planner.py`。
+- 修改前端兼容字段：改 `output/payloads.py`、`compat/legacy_intent.py`、`runtime/diagnosis_contract_adapter.py`。
+
+禁止事项：
+
+- 不要重新引入旧任务类型作为内部 policy key。
+- 不要让旧意图列表决定节点启停。
+- 不要恢复 shadow/diff/gate 双轨迁移。
+- 不要让 LLM 自由选择工具。
+- 不要绕过 EvidenceBundle 直接下诊断结论。
+- 不要自动执行设备控制或派发工单。
 
 ## 验证建议
 
-文档修改不需要跑完整测试。代码改动建议按风险选择：
+README 更新后建议执行：
 
 ```bash
 PYTHONPATH=. pytest -q
-python -m pytest tests
-python -m compileall fault_diagnosis
+PYTHONPATH=. python scripts/goal_native_cutover_check.py
+PYTHONPATH=. python scripts/legacy_dependency_scan.py --json
+python -m compileall -q fault_diagnosis
 git diff --check
 ```
 
-涉及前端展示时，再到 `agent_fronted/` 运行：
+涉及前端字段或展示时再执行：
 
 ```bash
+cd agent_fronted
 npm run build
 ```
-
-## 维护原则
-
-- Agent 是固定、可审计、受限工具调用的诊断流水线，不要退回模型自由工具循环。
-- `runner.py` 只保留运行时门面和横切能力，业务阶段放在 `stages.py` 或独立模块。
-- workflow policy 决定任务路径，阶段实现负责产物质量，两者不要互相塞逻辑。
-- SQL/知识库/报告工具必须有明确输入输出和安全边界。
-- 诊断结论必须能回溯到 EvidenceBundle，而不是只存在最终回答文本里。
-- 动作请求只能给建议、草稿、审批提示和审计信息，不直接执行设备控制、配置修改、告警关闭或工单派发。
