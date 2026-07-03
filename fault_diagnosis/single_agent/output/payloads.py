@@ -386,20 +386,9 @@ def _produced_artifacts(
             )
         )
     if report_artifact.success and (decision.requested_output == "report" or "generate_report" in str(decision.goal_set)):
-        report_id = report_artifact.report_url or report_artifact.report_filename or ""
-        if report_id:
-            items.append(
-                _artifact_item(
-                    artifact_id=report_id,
-                    artifact_type="report",
-                    role="produced",
-                    created_in_current_turn=True,
-                    display_policy="show_card",
-                    source_artifact_id=saved_envelope.created_at,
-                    title=report_artifact.report_title or "报告结果",
-                    url=report_artifact.report_url,
-                )
-            )
+        report_item = _report_artifact_item(report_artifact, source_artifact_id=saved_envelope.created_at)
+        if report_item:
+            items.append(report_item)
     if workorder_suggestion.lifecycle_status == "recommended_draft":
         items.append(
             _artifact_item(
@@ -432,23 +421,30 @@ def _report_handoff_produced_artifacts(
     decision: SingleAgentDecision,
     report_artifact: ReportStepArtifact,
 ) -> list[dict[str, Any]]:
+    report_item = _report_artifact_item(report_artifact, source_artifact_id=decision.referenced_artifact_id)
+    return [report_item] if report_item else []
+
+
+def _report_artifact_item(
+    report_artifact: ReportStepArtifact,
+    *,
+    source_artifact_id: str | None,
+) -> dict[str, Any] | None:
     if not report_artifact.success:
-        return []
+        return None
     report_id = report_artifact.report_url or report_artifact.report_filename or ""
     if not report_id:
-        return []
-    return [
-        _artifact_item(
-            artifact_id=report_id,
-            artifact_type="report",
-            role="produced",
-            created_in_current_turn=True,
-            display_policy="show_card",
-            source_artifact_id=decision.referenced_artifact_id,
-            title=report_artifact.report_title or "报告结果",
-            url=report_artifact.report_url,
-        )
-    ]
+        return None
+    return _artifact_item(
+        artifact_id=report_id,
+        artifact_type="report",
+        role="produced",
+        created_in_current_turn=True,
+        display_policy="show_card",
+        source_artifact_id=source_artifact_id,
+        title=report_artifact.report_title or "报告结果",
+        url=report_artifact.report_url,
+    )
 
 
 def _referenced_artifacts(*, decision: SingleAgentDecision, report_artifact: ReportStepArtifact) -> list[dict[str, Any]]:

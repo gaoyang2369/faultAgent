@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Literal
-
-from pydantic import BaseModel, Field
 
 from ...diagnosis.artifact_store import list_thread_artifacts
 from ...diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType, SqlStepArtifact
@@ -26,17 +25,17 @@ _SUPPORTED_ARTIFACT_TYPES = {
 }
 
 
-class ReportSourceDecision(BaseModel):
+@dataclass(slots=True)
+class ReportSourceDecision:
     """Decision contract shared by planning and streaming report execution."""
 
     requested: bool = False
     mode: ReportSourceMode | str = ""
     referenced_artifact_id: str | None = None
-    referenced_artifact_type: str | None = None
-    inherited_slots: dict[str, Any] = Field(default_factory=dict)
-    readiness: dict[str, Any] = Field(default_factory=dict)
-    blockers: list[str] = Field(default_factory=list)
-    candidate_summary: list[dict[str, Any]] = Field(default_factory=list)
+    inherited_slots: dict[str, Any] = field(default_factory=dict)
+    readiness: dict[str, Any] = field(default_factory=dict)
+    blockers: list[str] = field(default_factory=list)
+    candidate_summary: list[dict[str, Any]] = field(default_factory=list)
     selected_artifact_id: str | None = None
     selected_artifact_type: str | None = None
 
@@ -96,14 +95,21 @@ def resolve_report_source(
 
     if valid_candidates:
         ranked_candidates = sorted(
-            valid_candidates,
-            key=lambda item: _candidate_priority(item[0], item[1], requested_device=requested_device),
+            [
+                (
+                    _candidate_priority(envelope, result, requested_device=requested_device),
+                    envelope,
+                    result,
+                )
+                for envelope, result in valid_candidates
+            ],
+            key=lambda item: item[0],
             reverse=True,
         )
-        top_priority = _candidate_priority(ranked_candidates[0][0], ranked_candidates[0][1], requested_device=requested_device)
+        top_priority = ranked_candidates[0][0]
         top_candidates = [
             item for item in ranked_candidates
-            if _candidate_priority(item[0], item[1], requested_device=requested_device) == top_priority
+            if item[0] == top_priority
         ]
         if len(top_candidates) > 1:
             return ReportSourceDecision(
@@ -116,18 +122,16 @@ def resolve_report_source(
                     for item in candidate_summary
                 ],
             )
-        envelope, result = ranked_candidates[0]
+        _, envelope, result = ranked_candidates[0]
         artifact_id = _artifact_id(envelope)
         inherited = {
             **inherited_slots,
             **_artifact_inherited_slots(envelope),
-            "referenced_artifact_type": str(envelope.workflow_type),
         }
         return ReportSourceDecision(
             requested=True,
             mode="reuse_artifact",
             referenced_artifact_id=artifact_id,
-            referenced_artifact_type=str(envelope.workflow_type),
             inherited_slots={key: value for key, value in inherited.items() if value not in (None, "", [], {})},
             readiness=_readiness(
                 True,
@@ -184,11 +188,10 @@ def apply_report_source_decision(
         "report_readiness": decision.readiness,
         "report_blockers": list(decision.blockers),
         "referenced_artifact_id": decision.referenced_artifact_id,
-        "referenced_artifact_type": decision.referenced_artifact_type,
         "selected_artifact_id": decision.selected_artifact_id,
         "selected_artifact_type": decision.selected_artifact_type,
-        "candidate_artifact_count": len(decision.candidate_summary),
-        "candidate_summary": decision.candidate_summary,
+        "report_candidate_artifact_count": len(decision.candidate_summary),
+        "report_candidate_summary": decision.candidate_summary,
     }
     if hasattr(resolved_context, "report_source_mode"):
         resolved_context.report_source_mode = decision.mode
@@ -491,9 +494,10 @@ def _artifact_inherited_slots(envelope: DiagnosisArtifactEnvelope) -> dict[str, 
     analysis = payload.get("analysis_artifact") if isinstance(payload.get("analysis_artifact"), dict) else {}
     evidence = payload.get("evidence_bundle") if isinstance(payload.get("evidence_bundle"), dict) else {}
     request = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+    artifact_device = _artifact_device(payload)
     return {
-        "device": _artifact_device(payload),
-        "asset_id": payload.get("asset_id") or request.get("equipment_hint") or _artifact_device(payload),
+        "device": artifact_device,
+        "asset_id": payload.get("asset_id") or request.get("equipment_hint") or artifact_device,
         "source_table": payload.get("source_table") or sql.get("source_table"),
         "sql_artifact_id": payload.get("sql_artifact_id") or sql.get("artifact_id") or envelope.created_at,
         "analysis_artifact_id": payload.get("analysis_artifact_id") or analysis.get("artifact_id") or envelope.created_at,
