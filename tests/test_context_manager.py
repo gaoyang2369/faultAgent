@@ -60,9 +60,19 @@ def _artifact(
             "next_action": "刷新当前状态后确认是否派发",
         },
         "workorder_decision": {
+            "lifecycle_status": "recommended_draft",
             "need_workorder": True,
             "status": "待确认",
             "reason": "上一轮诊断建议生成待确认工单草稿。",
+            "pending_action": {
+                "action_type": "workorder_draft",
+                "status": "pending",
+                "artifact_id": f"eb_{asset}",
+                "source_diagnosis_artifact_id": f"eb_{asset}",
+                "source_report_artifact_id": f"/reports/{asset}.html",
+                "required_role": "engineer",
+                "source_hash": f"hash_{asset}",
+            },
         },
     }
     if snapshot is not None:
@@ -110,6 +120,20 @@ def test_report_artifact_workorder_followup_resolves_action_context() -> None:
     assert resolved.inherited_slots["device"] == "J1"
     assert resolved.pending_actions
     assert payload["equipment_hint"] == "J1"
+    assert resolved.pending_actions[0].action_type == "workorder_draft"
+
+
+def test_not_evaluated_workorder_does_not_project_negative_recommendation() -> None:
+    artifact = _artifact()
+    artifact.payload["workorder_decision"] = {
+        "lifecycle_status": "not_evaluated",
+        "reason": "当前 workflow 未启用工单决策",
+    }
+    case = case_state_from_artifact(artifact)
+
+    assert case is not None
+    assert case.pending_actions == []
+    assert artifact.payload["workorder_decision"].get("need_workorder") is None
 
 
 def test_previous_result_report_handoff_resolves_report_context() -> None:

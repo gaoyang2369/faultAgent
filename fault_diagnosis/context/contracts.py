@@ -28,6 +28,14 @@ class PendingAction(BaseModel):
     artifact_id: str | None = None
     reason: str = ""
     required_evidence: list[str] = Field(default_factory=list)
+    source_diagnosis_artifact_id: str | None = None
+    recommendation_artifact_id: str | None = None
+    source_report_artifact_id: str | None = None
+    required_role: str = "engineer"
+    stale_refresh_required: bool = False
+    expires_at: str | None = None
+    source_hash: str | None = None
+    consumed_by_artifact_id: str | None = None
 
 
 class CaseState(BaseModel):
@@ -167,6 +175,12 @@ def summarize_resolved_context(value: Any) -> dict[str, Any]:
                 "action_type": item.get("action_type"),
                 "status": item.get("status"),
                 "artifact_id": item.get("artifact_id"),
+                "source_diagnosis_artifact_id": item.get("source_diagnosis_artifact_id"),
+                "recommendation_artifact_id": item.get("recommendation_artifact_id"),
+                "source_report_artifact_id": item.get("source_report_artifact_id"),
+                "required_role": item.get("required_role"),
+                "stale_refresh_required": bool(item.get("stale_refresh_required", False)),
+                "source_hash": item.get("source_hash"),
                 "required_evidence_count": len(item.get("required_evidence") or []),
             }
             for item in pending_actions

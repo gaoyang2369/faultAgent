@@ -219,6 +219,25 @@ def _assistant_content_json(event: dict[str, Any]) -> dict[str, Any]:
 
 def _artifact_refs_from_complete(event: dict[str, Any]) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
+    structured_refs = []
+    for key in ("produced_artifacts", "referenced_artifacts"):
+        items = event.get(key)
+        if isinstance(items, list):
+            structured_refs.extend(item for item in items if isinstance(item, dict))
+    if structured_refs:
+        return [
+            {
+                "artifact_id": str(item.get("artifact_id") or "").strip(),
+                "artifact_type": str(item.get("artifact_type") or "artifact").strip(),
+                "artifact_backend": "diagnosis_artifact_store",
+                "ref_role": str(item.get("role") or ("produced_by" if item.get("created_in_current_turn") else "referenced")).strip(),
+                "created_in_current_turn": bool(item.get("created_in_current_turn")),
+                "display_policy": item.get("display_policy"),
+                "source_artifact_id": item.get("source_artifact_id"),
+            }
+            for item in structured_refs
+            if str(item.get("artifact_id") or "").strip()
+        ]
     artifact = event.get("artifact") if isinstance(event.get("artifact"), dict) else {}
     if artifact:
         artifact_id = str(artifact.get("created_at") or artifact.get("id") or "").strip()

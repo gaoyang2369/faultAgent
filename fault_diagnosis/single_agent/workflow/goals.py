@@ -15,8 +15,10 @@ GOAL_PRIORITY = {
     "assess_severity": 5,
     "recommend_resolution": 6,
     "decide_workorder": 7,
-    "generate_report": 8,
-    "answer_meta_question": 9,
+    "create_workorder_draft": 8,
+    "dispatch_workorder": 9,
+    "generate_report": 10,
+    "answer_meta_question": 11,
 }
 
 GOAL_TO_INTENT = {
@@ -28,6 +30,8 @@ GOAL_TO_INTENT = {
     "recommend_resolution": "resolution_recommendation",
     "generate_report": "report_generation",
     "decide_workorder": "workorder_decision",
+    "create_workorder_draft": "create_workorder_draft",
+    "dispatch_workorder": "dispatch_workorder",
     "answer_meta_question": "permission_scope_query",
 }
 
@@ -38,6 +42,20 @@ _SEVERITY_WORDS = ("严重", "影响", "风险", "后果")
 _RESOLUTION_WORDS = ("怎么处理", "如何处理", "怎么解决", "如何解决", "建议", "处置", "解决")
 _REPORT_WORDS = ("报告", "导出", "生成报告", "出报告")
 _WORKORDER_WORDS = ("工单", "派单", "派人", "要不要处理", "是否处理", "要不要生成工单", "是不是要生成工单")
+_WORKORDER_DECISION_WORDS = ("要不要生成工单", "是否生成工单", "是不是要生成工单", "要不要工单", "是否需要工单")
+_CREATE_WORKORDER_DRAFT_WORDS = (
+    "我要生成工单",
+    "确认生成",
+    "确认创建",
+    "创建工单",
+    "生成工单",
+    "生成工单草稿",
+    "创建工单草稿",
+    "那就生成",
+    "现在生成",
+    "生成吧",
+)
+_DISPATCH_WORKORDER_WORDS = ("派发工单", "执行工单", "下发维修任务", "下发工单", "派单", "直接派发", "确认派发")
 _PERMISSION_WORDS = ("权限", "身份", "能访问", "可以访问", "哪些设备", "哪些数据")
 
 
@@ -69,6 +87,17 @@ def build_goal_set(
     has_device = bool(payload.get("equipment_hint") or _object_values(objects, "device_ids"))
 
     specs: list[dict[str, Any]] = []
+    asks_decide_workorder_raw = _has_any(compact, _WORKORDER_DECISION_WORDS) or "workorder_decision" in legacy_candidates
+    asks_dispatch_workorder = _has_any(compact, _DISPATCH_WORKORDER_WORDS) or "dispatch_workorder" in legacy_candidates
+    asks_create_workorder_draft = (
+        _has_any(compact, _CREATE_WORKORDER_DRAFT_WORDS)
+        or "create_workorder_draft" in legacy_candidates
+        or _has_pending_workorder_draft(context)
+        and _looks_like_short_confirmation(compact)
+    ) and not asks_dispatch_workorder and not asks_decide_workorder_raw
+    asks_decide_workorder = (
+        asks_decide_workorder_raw
+    ) and not asks_create_workorder_draft and not asks_dispatch_workorder
 
     if relation == "ambiguous":
         specs.append(_goal_spec("clarify_missing_context", text, source="inferred_from_context", status="ready", missing_slots=missing_context, reason="上下文指代存在歧义，需要用户确认对象。"))
@@ -79,9 +108,12 @@ def build_goal_set(
     if relation == "report_handoff" or requested_output == "report" or _has_any(compact, _REPORT_WORDS):
         specs.append(_goal_spec("generate_report", text, source=_source_for_relation(relation), expected_output="report", context_refs=context_refs, reason="用户要求生成或导出报告。"))
 
-    if relation == "action_followup" and (_has_any(compact, _WORKORDER_WORDS) or "workorder_decision" in legacy_candidates):
-        if stale:
-            specs.append(_goal_spec("refresh_current_status", text, source="inferred_from_context", required_slots=["device"], required_evidence=["latest_realtime_status"], context_refs=context_refs, reason="上一轮证据已滞后，工单判断前需要刷新当前状态。"))
+    if relation == "action_followup" and (asks_decide_workorder or asks_create_workorder_draft or asks_dispatch_workorder):
+        if asks_dispatch_workorder:
+            specs.append(_goal_spec("dispatch_workorder", text, source="inferred_from_context", expected_output="dispatch_boundary", risk_level="high_risk", required_evidence=["human_approval", "latest_realtime_status"], context_refs=context_refs, reason="用户请求派发或执行工单，Agent 只能给出派发边界和外部审批要求。"))
+        elif asks_create_workorder_draft:
+            specs.append(_goal_spec("create_workorder_draft", text, source="inferred_from_context", expected_output="workorder_draft", risk_level="requires_confirmation", required_evidence=["diagnosis_summary", "severity_or_status_level", "recommended_action_policy"], context_refs=context_refs, reason="用户明确确认生成待确认工单草稿。"))
+        elif stale:
             specs.append(_goal_spec("decide_workorder", text, source="inferred_from_context", expected_output="workorder_decision", risk_level="requires_confirmation", required_evidence=["diagnosis_summary", "severity_or_status_level", "latest_realtime_status"], context_refs=context_refs, reason="基于上一轮结果判断是否生成待确认工单草稿，不能直接派发。"))
         else:
             specs.extend(_workorder_followup_specs(text, context_refs=context_refs, source="inferred_from_context"))
@@ -104,13 +136,19 @@ def build_goal_set(
         specs.append(_goal_spec("assess_severity", text, required_evidence=["diagnosis_summary", "severity_or_status_level"], reason="用户需要评估严重性。"))
     if _has_any(compact, _RESOLUTION_WORDS) or "resolution_recommendation" in legacy_candidates:
         specs.append(_goal_spec("recommend_resolution", text, required_evidence=["diagnosis_summary", "manual_or_policy_reference"], reason="用户需要处置建议。"))
-    if _has_any(compact, _WORKORDER_WORDS) or "workorder_decision" in legacy_candidates:
+    if asks_dispatch_workorder:
+        status, missing, reason = _followup_status(missing_context, inherited_slots, relation)
+        specs.append(_goal_spec("dispatch_workorder", text, status=status, expected_output="dispatch_boundary", risk_level="high_risk", missing_slots=missing, required_evidence=["latest_realtime_status", "external_human_approval"], context_refs=context_refs if status != "blocked" else [], reason=reason if status == "blocked" else "用户请求派发工单，Agent 不自动派发。"))
+    elif asks_create_workorder_draft:
+        status, missing, reason = _followup_status(missing_context, inherited_slots, relation)
+        specs.append(_goal_spec("create_workorder_draft", text, status=status, expected_output="workorder_draft", risk_level="requires_confirmation", missing_slots=missing, required_evidence=["diagnosis_summary", "severity_or_status_level", "recommended_action_policy"], context_refs=context_refs if status != "blocked" else [], reason=reason if status == "blocked" else "用户确认生成待确认工单草稿。"))
+    elif asks_decide_workorder or (_has_any(compact, _WORKORDER_WORDS) and not asks_create_workorder_draft):
         status, missing, reason = _followup_status(missing_context, inherited_slots, relation)
         specs.append(_goal_spec("decide_workorder", text, status=status, expected_output="workorder_decision", risk_level="requires_confirmation", missing_slots=missing, required_evidence=["diagnosis_summary", "severity_or_status_level", "recommended_action_policy"], context_refs=context_refs if status != "blocked" else [], reason=reason))
 
     if missing_context and not inherited_slots and relation in {"action_followup", "continuation", "report_handoff"}:
         for spec in specs:
-            if spec["goal_type"] in {"decide_workorder", "generate_report", "assess_severity", "diagnose_fault", "recommend_resolution"}:
+            if spec["goal_type"] in {"decide_workorder", "create_workorder_draft", "dispatch_workorder", "generate_report", "assess_severity", "diagnose_fault", "recommend_resolution"}:
                 spec["status"] = "blocked"
                 spec["missing_slots"] = _dedupe([*spec.get("missing_slots", []), *missing_context])
                 spec["context_refs"] = []
@@ -271,7 +309,7 @@ def _primary_goal_id(goals: list[IntentGoal], execution_order: list[str]) -> str
     ready_types = {goal.goal_type for goal in ready_goals}
     if not ready_goals and len(goals) == 1 and goals[0].goal_type == "clarify_missing_context":
         return goals[0].goal_id
-    for goal_type in ("generate_report", "decide_workorder"):
+    for goal_type in ("generate_report", "dispatch_workorder", "create_workorder_draft", "decide_workorder"):
         for goal in ready_goals:
             if goal.goal_type == goal_type:
                 return goal.goal_id
@@ -311,6 +349,8 @@ def _description_for_goal(goal_type: str, text: str = "") -> str:
         "recommend_resolution": "给出处置建议",
         "generate_report": "生成或导出报告",
         "decide_workorder": "判断是否生成待确认工单草稿",
+        "create_workorder_draft": "创建待确认工单草稿",
+        "dispatch_workorder": "派发边界和外部审批提示",
         "refresh_current_status": "刷新当前实时状态",
         "clarify_missing_context": "澄清缺失上下文",
         "answer_meta_question": "回答权限或元信息问题",
@@ -323,13 +363,19 @@ def _expected_output(goal_type: str) -> str:
         return "report"
     if goal_type == "decide_workorder":
         return "workorder_decision"
+    if goal_type == "create_workorder_draft":
+        return "workorder_draft"
+    if goal_type == "dispatch_workorder":
+        return "dispatch_boundary"
     if goal_type == "clarify_missing_context":
         return "clarification"
     return "answer"
 
 
 def _risk_level(goal_type: str) -> str:
-    return "requires_confirmation" if goal_type == "decide_workorder" else "read_only"
+    if goal_type == "dispatch_workorder":
+        return "high_risk"
+    return "requires_confirmation" if goal_type in {"decide_workorder", "create_workorder_draft"} else "read_only"
 
 
 def _source_for_relation(relation: str) -> str:
@@ -342,6 +388,19 @@ def _context_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     return {}
+
+
+def _has_pending_workorder_draft(context: dict[str, Any]) -> bool:
+    for item in context.get("pending_actions") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("action_type") == "workorder_draft" and item.get("status", "pending") == "pending":
+            return True
+    return False
+
+
+def _looks_like_short_confirmation(compact: str) -> bool:
+    return any(word in compact for word in ("生成", "创建", "确认", "可以", "那就", "现在", "就这样"))
 
 
 def _goal_set_dict(value: Any) -> dict[str, Any]:

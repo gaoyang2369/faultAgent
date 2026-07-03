@@ -15,6 +15,7 @@ from ..diagnosis.contracts import (
     KnowledgeStepArtifact,
     ReportStepArtifact,
     SqlStepArtifact,
+    WorkOrderDraftArtifact,
     WorkOrderSuggestion,
 )
 from ..context import build_case_state_snapshot
@@ -40,6 +41,7 @@ def build_diagnosis_artifact_envelope(
     workflow_artifacts: dict[str, object] | None = None,
     auth: dict[str, Any] | None = None,
     authorization: dict[str, Any] | None = None,
+    workorder_draft: WorkOrderDraftArtifact | None = None,
 ) -> DiagnosisArtifactEnvelope:
     evidence = (
         evidence_bundle.evidence_items
@@ -85,6 +87,8 @@ def build_diagnosis_artifact_envelope(
         "auth": auth or {},
         "authorization": authorization or {},
     }
+    if workorder_draft is not None:
+        payload["workorder_draft"] = workorder_draft.model_dump(exclude_none=True)
     if evidence_bundle is not None:
         payload["evidence_bundle"] = evidence_bundle.model_dump(exclude_none=True)
     envelope = DiagnosisArtifactEnvelope(

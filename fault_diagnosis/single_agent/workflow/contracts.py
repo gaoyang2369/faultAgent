@@ -24,7 +24,14 @@ TaskFamilySource = Literal[
 SubgoalStatus = Literal["ready", "blocked", "skipped"]
 RiskLevel = Literal["read_only", "requires_confirmation", "write_action", "high_risk"]
 GoalRiskLevel = Literal["read_only", "requires_confirmation", "high_risk"]
-GoalExpectedOutput = Literal["answer", "report", "workorder_decision", "clarification"]
+GoalExpectedOutput = Literal[
+    "answer",
+    "report",
+    "workorder_decision",
+    "workorder_draft",
+    "dispatch_boundary",
+    "clarification",
+]
 GoalSource = Literal["explicit_user_request", "inferred_from_context", "compatibility_projection"]
 NodeSetting = bool | Literal["conditional"]
 GOAL_SET_SCHEMA_VERSION = "goal_set.v1"

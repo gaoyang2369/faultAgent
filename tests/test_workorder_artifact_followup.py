@@ -21,6 +21,7 @@ from fault_diagnosis.single_agent.contracts import SingleAgentDecision
 from fault_diagnosis.single_agent.evidence.quality import build_output_guardrail_result
 from fault_diagnosis.single_agent.intent import decide_capabilities, fallback_understanding_payload
 from fault_diagnosis.single_agent.runner import RestrictedSingleAgentRunner
+from fault_diagnosis.single_agent.workorder_drafts import build_pending_workorder_draft_action
 from fault_diagnosis.single_agent.workorder_suggestions import build_workorder_suggestion_from_artifact
 
 
@@ -105,6 +106,29 @@ def _artifact(thread_id: str = "thread.followup") -> DiagnosisArtifactEnvelope:
     )
 
 
+def _recommendation_artifact(thread_id: str = "thread.followup") -> DiagnosisArtifactEnvelope:
+    envelope = _artifact(thread_id)
+    suggestion = build_workorder_suggestion_from_artifact(
+        envelope=envelope,
+        decision=SingleAgentDecision(objects={"device_ids": ["G120电机1"], "alarm_codes": ["A07089"]}),
+        user_identity="管理员",
+    )
+    suggestion.source_diagnosis_artifact_id = "eb_followup"
+    suggestion.source_report_artifact_id = "/reports/report.html"
+    pending = build_pending_workorder_draft_action(
+        thread_id=thread_id,
+        suggestion=suggestion,
+        source_diagnosis_artifact_id="eb_followup",
+        source_report_artifact_id="/reports/report.html",
+        recommendation_artifact_id="trace.recommend",
+        stale_refresh_required=True,
+    )
+    suggestion.pending_action = pending.model_dump(exclude_none=True)
+    envelope.created_at = "2026-06-24T10:05:00"
+    envelope.payload["workorder_decision"] = suggestion.model_dump(exclude_none=True)
+    return envelope
+
+
 def _request(message: str, payload: dict) -> object:
     from fault_diagnosis.diagnosis.contracts import DiagnosisRequest
 
@@ -179,6 +203,26 @@ async def _collect_flow_events(monkeypatch) -> list[dict]:
     return [payload for chunk in chunks if (payload := parse_sse_chunk(chunk))]
 
 
+async def _collect_create_draft_events(monkeypatch, *, message: str = "那就生成吧", reset_store: bool = True) -> list[dict]:
+    from fault_diagnosis.single_agent import runner as runner_module
+
+    if reset_store:
+        configure_artifact_store_backend(MemoryArtifactStoreBackend())
+        save_thread_artifact(_recommendation_artifact())
+    monkeypatch.setattr(runner_module, "get_trace_exporter", lambda: _NoopTraceExporter())
+    app = SimpleNamespace(state=SimpleNamespace(chat_model=None))
+    runner = RestrictedSingleAgentRunner(
+        message=message,
+        thread_id="thread.followup",
+        user_identity="管理员",
+        request_id="request.create",
+        stream_id="stream.create",
+        trace_id="trace.create",
+    )
+    chunks = [chunk async for chunk in runner.stream_events(app)]
+    return [payload for chunk in chunks if (payload := parse_sse_chunk(chunk))]
+
+
 def test_flow_workorder_from_artifact_no_sql(monkeypatch) -> None:
     import asyncio
 
@@ -207,6 +251,38 @@ def test_flow_workorder_from_artifact_no_sql(monkeypatch) -> None:
     assert "complete" in events
 
 
+def test_create_workorder_draft_from_pending_action(monkeypatch) -> None:
+    import asyncio
+
+    parsed = asyncio.run(_collect_create_draft_events(monkeypatch))
+    payloads = [item[1] for item in parsed]
+    complete = next(payload for payload in payloads if payload.get("type") == "chat_complete")
+
+    assert any(goal["goal_type"] == "create_workorder_draft" for goal in complete["decision"]["goal_set"]["goals"])
+    assert complete["workorder_decision"]["lifecycle_status"] == "draft_created"
+    assert complete["workorder_draft"]["draft_id"].startswith("WOD-")
+    assert complete["workorder_draft"]["status"] == "pending_verification"
+    assert "建议生成" not in complete["final_content"]
+    assert any(
+        item["artifact_type"] == "workorder_draft"
+        and item["created_in_current_turn"] is True
+        and item["display_policy"] == "show_card"
+        for item in complete["produced_artifacts"]
+    )
+
+
+def test_repeated_create_workorder_draft_reuses_existing_id(monkeypatch) -> None:
+    import asyncio
+
+    first = asyncio.run(_collect_create_draft_events(monkeypatch, message="那就生成吧"))
+    first_complete = next(payload for _event, payload in first if payload.get("type") == "chat_complete")
+    first_id = first_complete["workorder_draft"]["draft_id"]
+    second = asyncio.run(_collect_create_draft_events(monkeypatch, message="现在生成", reset_store=False))
+    second_complete = next(payload for _event, payload in second if payload.get("type") == "chat_complete")
+
+    assert second_complete["workorder_draft"]["draft_id"] == first_id
+
+
 def test_workorder_from_stale_artifact() -> None:
     suggestion = build_workorder_suggestion_from_artifact(
         envelope=_artifact(),
@@ -218,6 +294,7 @@ def test_workorder_from_stale_artifact() -> None:
     assert "直接派发" not in suggestion.reason
     assert any("滞后" in item or "采样窗口" in item for item in suggestion.key_evidence)
     assert suggestion.workorder_type in {"参数/配置核查工单", "运行异常确认工单"}
+    assert suggestion.lifecycle_status == "recommended_draft"
 
 
 def test_guardrail_sql_workorder_contradiction() -> None:

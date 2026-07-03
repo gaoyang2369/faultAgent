@@ -301,17 +301,28 @@ def _pending_actions_from_payload(
 ) -> list[PendingAction]:
     if not workorder:
         return []
-    status = str(workorder.get("status") or "").strip()
-    if not (workorder.get("need_workorder") or status):
+    pending = workorder.get("pending_action")
+    if isinstance(pending, dict):
+        try:
+            return [PendingAction.model_validate(pending)]
+        except Exception:
+            return []
+    lifecycle = str(workorder.get("lifecycle_status") or "").strip()
+    if lifecycle != "recommended_draft":
         return []
     required = ["latest_realtime_status"] if evidence_freshness == "stale" else []
     return [
         PendingAction(
-            action_type="workorder_decision",
-            status=status or "pending",
+            action_type="workorder_draft",
+            status="pending",
             artifact_id=latest_artifact_id,
             reason=str(workorder.get("reason") or ""),
             required_evidence=required,
+            source_diagnosis_artifact_id=workorder.get("source_diagnosis_artifact_id") or latest_artifact_id,
+            recommendation_artifact_id=latest_artifact_id,
+            source_report_artifact_id=workorder.get("source_report_artifact_id"),
+            required_role="engineer",
+            stale_refresh_required=evidence_freshness == "stale",
         )
     ]
 

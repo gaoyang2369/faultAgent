@@ -114,8 +114,8 @@ assert.match(
 )
 assert.match(
   diagnosisCardSource,
-  /\['status_card', 'diagnosis_card', 'report_status'\]\.includes\(uiPayload\.value\?\.type\)/,
-  'diagnosis card should render for explicit status, diagnosis, and successful report ui payloads'
+  /\['status_card', 'diagnosis_card', 'report_status', 'workorder_card'\]\.includes\(uiPayload\.value\?\.type\)/,
+  'diagnosis card should render for explicit status, diagnosis, successful report, and workorder ui payloads'
 )
 assert.match(
   diagnosisCardSource,
@@ -124,8 +124,13 @@ assert.match(
 )
 assert.match(
   source,
-  /\['status_card', 'diagnosis_card', 'report_status'\]\.includes\(messageUiPayload\.value\?\.type\)/,
+  /\['status_card', 'diagnosis_card', 'report_status', 'workorder_card'\]\.includes\(messageUiPayload\.value\?\.type\)/,
   'chat message should gate diagnosis card rendering by explicit ui payload type'
+)
+assert.match(
+  source,
+  /created_in_current_turn === true && item\?\.display_policy === 'show_card'/,
+  'report cards should only render for produced artifacts with show_card policy'
 )
 assert.match(
   source,

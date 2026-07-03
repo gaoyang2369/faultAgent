@@ -63,6 +63,8 @@ def build_manual_confirmation_requirement(
         next_step: AllowedNextStep = "refresh_data_first"
     elif action_type == "workorder_draft":
         next_step = "draft_only"
+    elif action_type == "workorder_dispatch":
+        next_step = "deny"
     elif action_type == "workorder_decision":
         next_step = "ask_confirmation"
     elif action_type == "device_action":

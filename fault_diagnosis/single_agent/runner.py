@@ -243,6 +243,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             manual_confirmation = getattr(self._workflow_task_decision, "manual_confirmation", {}) or {}
             if manual_confirmation:
                 trace_metadata.setdefault("manual_confirmation", manual_confirmation)
+            trace_metadata.setdefault("planning_snapshot", self._planning_snapshot_trace_summary())
         if self.evidence_bundle is not None:
             trace_metadata.setdefault("evidence_bundle_id", getattr(self.evidence_bundle, "bundle_id", None))
             trace_metadata.setdefault("evidence_count", len(getattr(self.evidence_bundle, "evidence_items", []) or []))
@@ -296,6 +297,33 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
                 "summary_is_not_authorization_source": True,
                 "summary_is_not_diagnosis_evidence": True,
             },
+        }
+
+    def _planning_snapshot_trace_summary(self) -> dict[str, Any]:
+        decision = self._workflow_task_decision
+        if decision is None:
+            return {}
+        resolved_context = summarize_resolved_context(getattr(decision, "resolved_context", {}) or {})
+        pending_actions = resolved_context.get("pending_actions") or []
+        return {
+            "conversation_context_signals_summary": resolved_context.get("conversation_context_signals_summary") or {},
+            "resolved_context": resolved_context,
+            "goal_set": summarize_goal_set(getattr(decision, "goal_set", {}) or {}),
+            "task_family": getattr(decision, "task_family", ""),
+            "policy_id": (getattr(decision, "workflow_policy", {}) or {}).get("policy_id"),
+            "enabled_nodes": getattr(decision, "enabled_nodes", {}) or {},
+            "manual_confirmation": getattr(decision, "manual_confirmation", {}) or {},
+            "workorder_action_readiness": getattr(decision, "workorder_action_readiness", {}) or {},
+            "pending_action": pending_actions[0] if pending_actions else None,
+            "artifact_refs": [
+                {
+                    "artifact_id": item.get("artifact_id"),
+                    "artifact_type": item.get("artifact_type"),
+                    "role": item.get("ref_role") or item.get("role") or "referenced",
+                }
+                for item in (self._conversation_context_trace_summary().get("artifact_refs") or [])
+                if isinstance(item, dict)
+            ],
         }
 
     def trace_duration_ms(self) -> float | None:

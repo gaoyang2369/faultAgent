@@ -19,6 +19,7 @@ from ..diagnosis.contracts import (
     KnowledgeStepArtifact,
     ReportStepArtifact,
     SqlStepArtifact,
+    WorkOrderDraftArtifact,
     WorkOrderSuggestion,
 )
 from ..diagnosis.report_mapper import map_artifact_to_report_payload
@@ -58,6 +59,14 @@ from .sql_safety import REAL_DATA_LATEST_TABLE, build_fast_sql_plan
 from .sql_result_parser import parse_sql_rows
 from .support.tool_access import get_knowledge_tool, get_report_tool
 from .workorder_suggestions import build_workorder_suggestion, build_workorder_suggestion_from_artifact
+from .workorder_drafts import (
+    build_pending_workorder_draft_action,
+    build_workorder_draft_artifact,
+    find_existing_workorder_draft,
+    find_pending_workorder_draft_action,
+    source_ids_from_envelope,
+    validate_pending_workorder_draft_action,
+)
 
 _log = get_logger("single_agent.stages")
 
@@ -436,6 +445,19 @@ class SingleAgentStagesMixin:
             decision=decision,
             user_identity=self.user_identity,
         )
+        source_diagnosis_id, source_report_id = source_ids_from_envelope(envelope)
+        suggestion.source_diagnosis_artifact_id = source_diagnosis_id
+        suggestion.source_report_artifact_id = source_report_id
+        if suggestion.lifecycle_status == "recommended_draft":
+            pending = build_pending_workorder_draft_action(
+                thread_id=self.thread_id,
+                suggestion=suggestion,
+                source_diagnosis_artifact_id=source_diagnosis_id,
+                source_report_artifact_id=source_report_id,
+                recommendation_artifact_id=self.trace_id,
+                stale_refresh_required=bool(getattr(decision, "should_refresh_runtime_data", False)),
+            )
+            suggestion.pending_action = pending.model_dump(exclude_none=True)
         referenced = self._artifacts_from_previous_envelope(envelope)
         self._record_artifact("referenced_diagnosis_artifact", envelope, stage="workorder_decision")
         self._record_artifact("workorder_decision", suggestion, stage="workorder_decision")
@@ -521,6 +543,148 @@ class SingleAgentStagesMixin:
         lines.append("动作边界：我没有创建或派发工单，只生成待确认草稿建议；派发前需要管理员或工程师确认。")
         if any("滞后" in item or "latest_realtime_status" in item for item in [suggestion.reason, *decision.missing_or_stale_evidence]):
             lines.append("数据边界：上一轮数据已滞后或仅代表采样窗口，派发前请刷新当前状态。")
+        return "\n".join(lines)
+
+    async def create_workorder_draft_from_previous_artifact(
+        self,
+        suggestion: WorkOrderSuggestion | None = None,
+        referenced_envelope: DiagnosisArtifactEnvelope | None = None,
+    ) -> tuple[str, WorkOrderSuggestion, WorkOrderDraftArtifact | None, DiagnosisArtifactEnvelope, SqlStepArtifact, KnowledgeStepArtifact, AnalysisStepArtifact, ReportStepArtifact]:
+        envelope = referenced_envelope or get_thread_artifact(self.thread_id)
+        if envelope is None:
+            raise SingleAgentExecutionError("当前线程没有可用于创建工单草稿的诊断或报告结果")
+        decision = self._workflow_task_decision or SingleAgentDecision()
+        existing_payload = envelope.payload.get("workorder_draft") if isinstance(envelope.payload, dict) else None
+        if isinstance(existing_payload, dict):
+            try:
+                existing = WorkOrderDraftArtifact.model_validate(existing_payload)
+                suggestion = WorkOrderSuggestion(
+                    lifecycle_status="draft_created",
+                    need_workorder=True,
+                    reason="已存在待确认工单草稿。",
+                    workorder_type=existing.workorder_type,
+                    priority=existing.priority,
+                    assignee_role=existing.recommended_assignee_role,
+                    acceptance_criteria=existing.acceptance_criteria,
+                    equipment_object=existing.device,
+                    fault_code=existing.fault_code,
+                    title=existing.title,
+                    status="已生成草稿",
+                    source_diagnosis_artifact_id=existing.source_diagnosis_artifact_id,
+                    source_report_artifact_id=existing.source_report_artifact_id,
+                )
+                referenced = self._artifacts_from_previous_envelope(envelope)
+                final_answer = self._build_workorder_draft_answer(existing, reused=True)
+                self._record_artifact("workorder_decision", suggestion, stage="create_workorder_draft")
+                self._record_artifact("workorder_draft", existing, stage="create_workorder_draft")
+                return (final_answer, suggestion, existing, envelope, *referenced)
+            except Exception:
+                pass
+        if suggestion is None:
+            suggestion = build_workorder_suggestion_from_artifact(
+                envelope=envelope,
+                decision=decision,
+                user_identity=self.user_identity,
+            )
+        source_diagnosis_id, source_report_id = source_ids_from_envelope(envelope)
+        suggestion.lifecycle_status = "recommended_draft" if suggestion.need_workorder else "not_recommended"
+        suggestion.source_diagnosis_artifact_id = source_diagnosis_id
+        suggestion.source_report_artifact_id = source_report_id
+        pending = find_pending_workorder_draft_action(decision.resolved_context or {}) or suggestion.pending_action
+        if pending is None and suggestion.lifecycle_status == "recommended_draft":
+            pending = build_pending_workorder_draft_action(
+                thread_id=self.thread_id,
+                suggestion=suggestion,
+                source_diagnosis_artifact_id=source_diagnosis_id,
+                source_report_artifact_id=source_report_id,
+                recommendation_artifact_id=decision.referenced_artifact_id or source_diagnosis_id,
+                stale_refresh_required=bool((decision.resolved_context or {}).get("stale_evidence")),
+            ).model_dump(exclude_none=True)
+        ok, reason = validate_pending_workorder_draft_action(
+            pending_action=pending,
+            auth_context=self.auth_context,
+            device=suggestion.equipment_object,
+        )
+        referenced = self._artifacts_from_previous_envelope(envelope)
+        if not ok:
+            suggestion.lifecycle_status = "not_recommended"
+            suggestion.reason = reason
+            self._record_artifact("workorder_decision", suggestion, stage="create_workorder_draft")
+            return (reason, suggestion, None, envelope, *referenced)
+        existing = find_existing_workorder_draft(self.thread_id, str((pending or {}).get("source_hash") or ""))
+        if existing is not None:
+            suggestion.lifecycle_status = "draft_created"
+            suggestion.status = "已生成草稿"
+            final_answer = self._build_workorder_draft_answer(existing, reused=True)
+            self._record_artifact("workorder_decision", suggestion, stage="create_workorder_draft")
+            self._record_artifact("workorder_draft", existing, stage="create_workorder_draft")
+            return (final_answer, suggestion, existing, envelope, *referenced)
+        draft = build_workorder_draft_artifact(
+            thread_id=self.thread_id,
+            suggestion=suggestion,
+            pending_action=pending or {},
+            source_diagnosis_artifact_id=source_diagnosis_id,
+            source_report_artifact_id=source_report_id,
+            stale=bool((decision.resolved_context or {}).get("stale_evidence")),
+        )
+        suggestion.lifecycle_status = "draft_created"
+        suggestion.status = "已生成草稿"
+        suggestion.pending_action = {**(pending or {}), "status": "consumed", "consumed_by_artifact_id": draft.draft_id}
+        final_answer = self._build_workorder_draft_answer(draft, reused=False)
+        self._record_artifact("workorder_decision", suggestion, stage="create_workorder_draft")
+        self._record_artifact("workorder_draft", draft, stage="create_workorder_draft")
+        return (final_answer, suggestion, draft, envelope, *referenced)
+
+    def build_dispatch_workorder_boundary(self) -> tuple[str, WorkOrderSuggestion]:
+        decision = self._workflow_task_decision or SingleAgentDecision()
+        manual = decision.manual_confirmation or {}
+        lifecycle = (
+            "dispatch_requires_external_approval"
+            if self.auth_context.role in {"engineer", "admin"}
+            else "dispatch_forbidden"
+        )
+        reason = (
+            "Agent 不会自动派发工单；请进入外部人工提交/审批入口，并在派发前刷新当前状态。"
+            if lifecycle == "dispatch_requires_external_approval"
+            else "当前身份无权派发工单，且 Agent 不执行自动派发。"
+        )
+        suggestion = WorkOrderSuggestion(
+            lifecycle_status=lifecycle,
+            need_workorder=None,
+            reason=reason,
+            priority="P2",
+            priority_label="需审批",
+            risk_level="高",
+            status="需外部审批" if lifecycle == "dispatch_requires_external_approval" else "禁止派发",
+        )
+        final_answer = (
+            f"{reason}\n\n"
+            "动作边界：本轮不会派发、执行设备控制或修改参数。\n"
+            "下一步：刷新当前状态，确认草稿内容后由有权限人员在外部工单系统提交审批。"
+        )
+        if manual.get("required_role"):
+            final_answer += f"\n审批角色：{manual.get('required_role')}。"
+        self._record_artifact("workorder_decision", suggestion, stage="dispatch_workorder")
+        return final_answer, suggestion
+
+    def _build_workorder_draft_answer(self, draft: WorkOrderDraftArtifact, *, reused: bool) -> str:
+        lines = [
+            f"工单草稿{'已存在' if reused else '已创建'}：{draft.draft_id}",
+            f"设备：{draft.device}",
+        ]
+        if draft.fault_code:
+            lines.append(f"事件：{draft.fault_code}")
+        lines.extend(
+            [
+                f"类型：{draft.workorder_type}",
+                f"优先级：{draft.priority}",
+                f"状态：{draft.status}",
+                "不会自动派发。",
+            ]
+        )
+        if draft.stale_warning:
+            lines.append(f"数据边界：{draft.stale_warning}")
+        lines.append("派发前需要刷新当前状态，并通过外部人工审批入口提交。")
         return "\n".join(lines)
 
     def _build_analysis_artifact_from_payload(
@@ -849,12 +1013,14 @@ class SingleAgentStagesMixin:
 
     def _build_skipped_workorder_suggestion(self, reason: str) -> WorkOrderSuggestion:
         suggestion = WorkOrderSuggestion(
-            need_workorder=False,
+            lifecycle_status="not_evaluated",
+            need_workorder=None,
             reason=reason,
             workorder_type="",
             priority="P3",
             priority_label="未触发",
             risk_level="低",
+            status="未评估",
         )
         self._record_artifact("workorder_decision", suggestion, stage="workorder_decision")
         return suggestion
@@ -873,6 +1039,7 @@ class SingleAgentStagesMixin:
         output_guardrail: dict[str, object] | None = None,
         rendered_answer: Any | None = None,
         workflow_artifacts: dict[str, object] | None = None,
+        workorder_draft: WorkOrderDraftArtifact | None = None,
     ) -> DiagnosisArtifactEnvelope:
         self.trace.add_event(
             "artifact",
@@ -898,5 +1065,6 @@ class SingleAgentStagesMixin:
             workflow_artifacts=workflow_artifacts,
             auth=self.auth_context.audit_summary(),
             authorization=decision.authorization,
+            workorder_draft=workorder_draft,
         )
         return save_thread_artifact(envelope)

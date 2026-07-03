@@ -202,6 +202,7 @@ def build_workorder_suggestion(
     sql_report = build_sql_report_summary(sql_artifact, knowledge_artifact=knowledge_artifact)
     if not sql_report.rows:
         return WorkOrderSuggestion(
+            lifecycle_status="not_recommended",
             need_workorder=False,
             reason="SQL 未返回可解析运行数据，暂不自动生成工单。",
             workorder_type="",
@@ -219,7 +220,7 @@ def build_workorder_suggestion(
             fault_code=None,
             title="",
             trigger_source="故障诊断 Agent",
-            status="待派单",
+            status="不建议",
         )
 
     latest = sql_report.rows[0]
@@ -378,6 +379,7 @@ def build_workorder_suggestion(
     completion_window = _workorder_completion_window(risk_level)
 
     return WorkOrderSuggestion(
+        lifecycle_status="recommended_draft" if need_workorder else "not_recommended",
         need_workorder=need_workorder,
         reason=reason,
         workorder_type=workorder_type,
@@ -395,7 +397,7 @@ def build_workorder_suggestion(
         fault_code=primary_code or None,
         title=title,
         trigger_source="故障诊断 Agent",
-        status="待派单",
+        status="待确认" if need_workorder else "不建议",
     )
 
 
@@ -513,6 +515,7 @@ def build_workorder_suggestion_from_artifact(
 
     title_code = primary_code or "运行异常"
     return WorkOrderSuggestion(
+        lifecycle_status="recommended_draft" if need_workorder else "not_recommended",
         need_workorder=need_workorder,
         reason="；".join(reason_parts),
         workorder_type=workorder_type,
@@ -539,7 +542,7 @@ def build_workorder_suggestion_from_artifact(
         fault_code=primary_code or None,
         title=f"{active_asset} {title_code} 待确认工单草稿" if need_workorder else "",
         trigger_source=f"故障诊断 Agent / artifact follow-up / {user_identity or 'unknown'}",
-        status="待确认",
+        status="待确认" if need_workorder else "不建议",
     )
 
 
