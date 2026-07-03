@@ -27,6 +27,7 @@ from .planning import (
     summarize_manual_confirmation_requirement,
     summarize_workorder_action_readiness,
 )
+from .reporting.source_resolution import build_report_readiness, find_referenced_artifact
 from .workflow.nodes import (
     build_audit_log_result,
     build_permission_check_result,
@@ -298,6 +299,49 @@ class SingleAgentFlowMixin:
                 ),
             )
             self._configure_workflow_tasks(decision)
+            if decision.report_source_mode in {"blocked_missing_context", "ambiguous"}:
+                final_answer = self._build_report_blocked_answer(decision)
+                report_artifact = self._build_blocked_report_artifact(
+                    ";".join(decision.report_blockers or [decision.report_source_mode])
+                )
+                stage_started = self._start_stage("final_answer", "报告生成前置条件不足，直接澄清")
+                self._finish_stage("final_answer", stage_started, message="报告生成已阻塞")
+                self.trace.finish(status="completed", final_answer=final_answer)
+                yield encode_sse_event("token", {"type": "token", "content": final_answer}, trace_id=self.trace_id)
+                token_count += 1
+                event_count += 1
+                self._finish_open_stage_observations(status="completed")
+                self._finalize_trace_run(
+                    status="completed",
+                    final_answer=final_answer,
+                    metadata={
+                        "event_count": event_count,
+                        "token_count": token_count,
+                        "decision": decision.model_dump(),
+                        "task_family": decision.task_family,
+                        "readiness": {
+                            "diagnosis": decision.diagnosis_readiness,
+                            "workorder_action": decision.workorder_action_readiness,
+                            "report": decision.report_readiness,
+                        },
+                        "manual_confirmation": decision.manual_confirmation,
+                        "report_filename": report_artifact.report_filename,
+                    },
+                )
+                yield encode_sse_event(
+                    "complete",
+                    build_direct_complete_payload(
+                        thread_id=self.thread_id,
+                        trace_id=self.trace_id,
+                        request_id=self.request_id,
+                        final_answer=final_answer,
+                        decision=decision,
+                        trace=self.trace,
+                        event_count=event_count,
+                    ),
+                    trace_id=self.trace_id,
+                )
+                return
             task_frame = self._build_workflow_task_update_frame(current_stage="initialize_evidence_bundle")
             if task_frame:
                 yield task_frame
@@ -773,8 +817,64 @@ class SingleAgentFlowMixin:
                 return
 
             if decision.report_from_previous_artifact:
+                referenced_artifact = find_referenced_artifact(self.thread_id, decision.referenced_artifact_id)
+                decision.report_readiness = build_report_readiness(
+                    decision=decision,
+                    referenced_artifact=referenced_artifact,
+                )
+                if not decision.report_readiness.get("passed") or referenced_artifact is None:
+                    decision.report_blockers = list(
+                        dict.fromkeys(
+                            [
+                                *list(decision.report_blockers or []),
+                                *list((decision.report_readiness or {}).get("blockers", []) or []),
+                            ]
+                        )
+                    )
+                    final_answer = self._build_report_blocked_answer(decision)
+                    report_artifact = self._build_blocked_report_artifact(
+                        ";".join(decision.report_blockers or ["report_readiness_failed"])
+                    )
+                    stage_started = self._start_stage("final_answer", "报告材料不足，生成澄清提示")
+                    self._finish_stage("final_answer", stage_started, message="报告生成已阻塞")
+                    self.trace.finish(status="completed", final_answer=final_answer)
+                    self._finish_open_stage_observations(status="completed")
+                    self._finalize_trace_run(
+                        status="completed",
+                        final_answer=final_answer,
+                        metadata={
+                            "event_count": event_count,
+                            "token_count": token_count,
+                            "decision": decision.model_dump(),
+                            "task_family": decision.task_family,
+                            "readiness": {
+                                "diagnosis": decision.diagnosis_readiness,
+                                "workorder_action": decision.workorder_action_readiness,
+                                "report": decision.report_readiness,
+                            },
+                            "manual_confirmation": decision.manual_confirmation,
+                            "report_filename": report_artifact.report_filename,
+                        },
+                    )
+                    yield encode_sse_event("token", {"type": "token", "content": final_answer}, trace_id=self.trace_id)
+                    token_count += 1
+                    event_count += 1
+                    yield encode_sse_event(
+                        "complete",
+                        build_direct_complete_payload(
+                            thread_id=self.thread_id,
+                            trace_id=self.trace_id,
+                            request_id=self.request_id,
+                            final_answer=final_answer,
+                            decision=decision,
+                            trace=self.trace,
+                            event_count=event_count,
+                        ),
+                        trace_id=self.trace_id,
+                    )
+                    return
                 stage_started = self._start_stage("report", "基于当前线程已有结果生成报告")
-                async for chunk in self.stream_report_from_previous_artifact():
+                async for chunk in self.stream_report_from_previous_artifact(decision, referenced_artifact):
                     yield chunk
                     event_count += 1
                 final_answer, report_artifact = self._last_step_result
@@ -982,20 +1082,43 @@ class SingleAgentFlowMixin:
                 return
 
             if workflow_node_enabled(decision, "report"):
-                stage_started = self._start_stage("report", "生成可视化 HTML 报告")
-                async for chunk in self.stream_report_step(
-                    request,
-                    sql_artifact,
-                    knowledge_artifact,
-                    analysis_artifact,
-                    workorder_suggestion,
-                    current_time,
-                ):
-                    yield chunk
-                    event_count += 1
-                report_artifact = self._last_step_result
-                self._finish_stage("report", stage_started, message=report_artifact.save_result)
-                task_frame = self._build_workflow_task_update_frame(completed_stage="report")
+                referenced_artifact = find_referenced_artifact(self.thread_id, decision.referenced_artifact_id)
+                decision.report_readiness = build_report_readiness(
+                    decision=decision,
+                    sql_artifact=sql_artifact,
+                    referenced_artifact=referenced_artifact,
+                )
+                if decision.report_readiness.get("passed"):
+                    stage_started = self._start_stage("report", "生成可视化 HTML 报告")
+                    async for chunk in self.stream_report_step(
+                        request,
+                        sql_artifact,
+                        knowledge_artifact,
+                        analysis_artifact,
+                        workorder_suggestion,
+                        current_time,
+                    ):
+                        yield chunk
+                        event_count += 1
+                    report_artifact = self._last_step_result
+                    self._finish_stage("report", stage_started, message=report_artifact.save_result)
+                    task_frame = self._build_workflow_task_update_frame(completed_stage="report")
+                else:
+                    decision.report_blockers = list(
+                        dict.fromkeys(
+                            [
+                                *list(decision.report_blockers or []),
+                                *list((decision.report_readiness or {}).get("blockers", []) or []),
+                            ]
+                        )
+                    )
+                    stage_started = self._start_stage("report", "报告材料不足，跳过报告生成")
+                    report_artifact = self._build_blocked_report_artifact(
+                        ";".join(decision.report_blockers or ["report_readiness_failed"])
+                    )
+                    self._record_artifact("report", report_artifact, stage="report")
+                    self._finish_stage("report", stage_started, status="skipped", message=report_artifact.save_result)
+                    task_frame = self._build_workflow_task_update_frame(skipped_stage="report")
                 if task_frame:
                     yield task_frame
                     event_count += 1

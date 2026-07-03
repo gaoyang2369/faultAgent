@@ -209,6 +209,20 @@ class ContextResolver:
             inherited_slots["evidence_bundle"] = active_case.latest_evidence_bundle_id
         if active_case.latest_report_id:
             inherited_slots["report"] = active_case.latest_report_id
+        if active_case.reportable:
+            inherited_slots["reportable"] = True
+        if active_case.sql_artifact_id:
+            inherited_slots["sql_artifact_id"] = active_case.sql_artifact_id
+        if active_case.analysis_artifact_id:
+            inherited_slots["analysis_artifact_id"] = active_case.analysis_artifact_id
+        if active_case.evidence_bundle_id:
+            inherited_slots["evidence_bundle_id"] = active_case.evidence_bundle_id
+        if active_case.source_table:
+            inherited_slots["source_table"] = active_case.source_table
+        if active_case.data_window:
+            inherited_slots["data_window"] = active_case.data_window
+        if active_case.freshness_label or active_case.evidence_freshness:
+            inherited_slots["freshness"] = active_case.freshness_label or active_case.evidence_freshness
 
         stale = active_case.evidence_freshness == "stale" or _has_stale_text(active_case)
         resolved = ResolvedContext(

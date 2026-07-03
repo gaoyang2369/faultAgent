@@ -157,10 +157,14 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
 
     latest_evidence_bundle_id = _first_non_empty(
         [
+            payload.get("evidence_bundle_id"),
             evidence_bundle.get("bundle_id"),
             context_resolution.get("last_evidence_bundle_id"),
         ]
     )
+    sql_artifact = payload.get("sql_artifact") if isinstance(payload.get("sql_artifact"), dict) else {}
+    analysis_artifact = payload.get("analysis_artifact") if isinstance(payload.get("analysis_artifact"), dict) else {}
+    reportable = payload.get("reportable") is True and _has_reportable_material(payload)
     latest_report_id = _first_non_empty(
         [
             report_artifact.get("report_url"),
@@ -281,6 +285,17 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
             ]
         ),
         evidence_freshness=evidence_freshness,
+        reportable=reportable,
+        report_blockers=_as_text_list(payload.get("report_blockers")),
+        source_table=_first_non_empty([payload.get("source_table"), sql_artifact.get("source_table")]),
+        sql_artifact_id=_first_non_empty([payload.get("sql_artifact_id"), sql_artifact.get("artifact_id"), latest_artifact_id]),
+        analysis_artifact_id=_first_non_empty([payload.get("analysis_artifact_id"), analysis_artifact.get("artifact_id"), latest_artifact_id]),
+        evidence_bundle_id=_first_non_empty([payload.get("evidence_bundle_id"), latest_evidence_bundle_id]),
+        data_window=(
+            payload.get("data_window")
+            if isinstance(payload.get("data_window"), dict)
+            else active_time_window
+        ),
     )
 
 
@@ -331,6 +346,26 @@ def _contains_stale_marker(value: Any) -> bool:
     text = str(value or "")
     lowered = text.lower()
     return any(marker in text or marker.lower() in lowered for marker in _STALE_MARKERS)
+
+
+def _has_reportable_material(payload: dict[str, Any]) -> bool:
+    if payload.get("reportable_payload") not in (None, "", [], {}):
+        return True
+    if payload.get("operation_report_payload") not in (None, "", [], {}):
+        return True
+    if payload.get("chart_payload") not in (None, "", [], {}):
+        return True
+    rows = payload.get("normalized_rows")
+    if isinstance(rows, list) and rows:
+        return True
+    materials = payload.get("report_materials") if isinstance(payload.get("report_materials"), dict) else {}
+    rows = materials.get("normalized_rows")
+    if isinstance(rows, list) and rows:
+        return True
+    evidence_bundle = payload.get("evidence_bundle") if isinstance(payload.get("evidence_bundle"), dict) else {}
+    evidence_items = evidence_bundle.get("evidence_items")
+    claims = evidence_bundle.get("claims")
+    return bool((isinstance(evidence_items, list) and evidence_items) or (isinstance(claims, list) and claims))
 
 
 def _flatten_context(value: Any) -> dict[str, Any]:

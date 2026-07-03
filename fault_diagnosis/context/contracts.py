@@ -70,6 +70,15 @@ class CaseState(BaseModel):
     available_followups: list[str] = Field(default_factory=list)
     unresolved_questions: list[str] = Field(default_factory=list)
     evidence_freshness: str = "unknown"
+    reportable: bool = False
+    report_source_mode: str = ""
+    report_readiness: dict[str, Any] = Field(default_factory=dict)
+    report_blockers: list[str] = Field(default_factory=list)
+    source_table: str | None = None
+    sql_artifact_id: str | None = None
+    analysis_artifact_id: str | None = None
+    evidence_bundle_id: str | None = None
+    data_window: dict[str, Any] = Field(default_factory=dict)
     projection_warnings: list[str] = Field(default_factory=list)
     source: str = "artifact_projection"
 
@@ -122,6 +131,9 @@ class ResolvedContext(BaseModel):
     last_report_url: str | None = None
     evidence_mode: str = "collect_new"
     should_refresh_runtime_data: bool = False
+    report_source_mode: str = ""
+    report_readiness: dict[str, Any] = Field(default_factory=dict)
+    report_blockers: list[str] = Field(default_factory=list)
     conversation_context_signals_summary: dict[str, Any] = Field(default_factory=dict)
 
     def legacy_context_resolution(self) -> dict[str, Any]:
@@ -148,6 +160,11 @@ class ResolvedContext(BaseModel):
             "stale_evidence": self.stale_evidence,
             "missing_context": list(self.missing_context),
             "context_resolution_reason": self.context_resolution_reason,
+            "evidence_mode": self.evidence_mode,
+            "should_refresh_runtime_data": self.should_refresh_runtime_data,
+            "report_source_mode": self.report_source_mode,
+            "report_readiness": self.report_readiness,
+            "report_blockers": list(self.report_blockers),
             "conversation_context_signals_summary": self.conversation_context_signals_summary,
         }
 
@@ -204,6 +221,12 @@ def summarize_resolved_context(value: Any) -> dict[str, Any]:
         summary["should_refresh_runtime_data"] = bool(data.get("should_refresh_runtime_data"))
     if data.get("evidence_mode"):
         summary["evidence_mode"] = data.get("evidence_mode")
+    if data.get("report_source_mode"):
+        summary["report_source_mode"] = data.get("report_source_mode")
+    if isinstance(data.get("report_readiness"), dict):
+        summary["report_readiness"] = data.get("report_readiness")
+    if data.get("report_blockers"):
+        summary["report_blockers"] = list(data.get("report_blockers") or [])
     return summary
 
 

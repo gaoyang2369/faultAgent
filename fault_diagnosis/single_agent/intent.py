@@ -286,6 +286,9 @@ def decide_capabilities(
             satisfied_evidence=route.satisfied_evidence,
             missing_or_stale_evidence=route.missing_or_stale_evidence,
             should_refresh_runtime_data=route.should_refresh_runtime_data,
+            report_source_mode=route.report_source_mode,
+            report_readiness=route.report_readiness,
+            report_blockers=route.report_blockers,
             action_target=route.action_target,
             route_confidence=route.route_confidence,
             user_goal=route.user_goal,
@@ -337,6 +340,9 @@ def decide_capabilities(
         satisfied_evidence=route.satisfied_evidence,
         missing_or_stale_evidence=route.missing_or_stale_evidence,
         should_refresh_runtime_data=route.should_refresh_runtime_data,
+        report_source_mode=route.report_source_mode,
+        report_readiness=route.report_readiness,
+        report_blockers=route.report_blockers,
         action_target=route.action_target,
         route_confidence=route.route_confidence,
         user_goal=route.user_goal,
@@ -401,6 +407,26 @@ def _apply_plan_mode_flags(route: Any) -> None:
         route.requested_output = "action_confirmation"
     elif route.plan_mode == "new_diagnosis_then_workorder":
         route.flags["need_workorder_decision"] = True
+    elif route.plan_mode == "report_from_artifact":
+        route.flags.update(
+            need_sql=False,
+            need_knowledge=False,
+            need_analysis=False,
+            need_report=True,
+        )
+    elif route.plan_mode == "report_refresh_sql":
+        route.flags.update(
+            need_sql=True,
+            need_analysis=True,
+            need_report=True,
+        )
+    elif route.plan_mode == "clarify_context" and route.report_source_mode in {"blocked_missing_context", "ambiguous"}:
+        route.flags.update(
+            need_sql=False,
+            need_knowledge=False,
+            need_analysis=False,
+            need_report=False,
+        )
 
 
 def _backfill_resolved_context_from_legacy(route: Any) -> None:
@@ -455,6 +481,9 @@ def _apply_resolved_context_to_route(route: Any, resolved_context: Any) -> None:
     route.referenced_artifact_id = context.get("referenced_artifact_id")
     route.evidence_mode = str(context.get("evidence_mode") or route.evidence_mode or "collect_new")
     route.should_refresh_runtime_data = bool(context.get("should_refresh_runtime_data"))
+    route.report_source_mode = str(context.get("report_source_mode") or route.report_source_mode or "")
+    route.report_readiness = context.get("report_readiness") if isinstance(context.get("report_readiness"), dict) else {}
+    route.report_blockers = [str(item) for item in (context.get("report_blockers") or []) if str(item)]
     missing_context = [str(item) for item in context.get("missing_context") or [] if str(item)]
     if missing_context:
         route.missing_or_stale_evidence = list(dict.fromkeys([*route.missing_or_stale_evidence, *missing_context]))
@@ -488,8 +517,22 @@ def _apply_resolved_context_to_route(route: Any, resolved_context: Any) -> None:
         )
         route.should_refresh_runtime_data = True
     elif relation == "report_handoff":
-        route.plan_mode = "report_from_artifact"
-        route.evidence_mode = "reuse_previous_artifact"
+        if route.report_source_mode == "reuse_artifact":
+            route.plan_mode = "report_from_artifact"
+            route.evidence_mode = "reuse_previous_artifact"
+        elif route.report_source_mode == "refresh_sql":
+            route.plan_mode = "report_refresh_sql"
+            route.evidence_mode = "reuse_and_refresh_status"
+            route.should_refresh_runtime_data = True
+        elif route.report_source_mode in {"blocked_missing_context", "ambiguous"}:
+            route.plan_mode = "clarify_context"
+            route.evidence_mode = "collect_new"
+            route.missing_or_stale_evidence = list(
+                dict.fromkeys([*route.missing_or_stale_evidence, *route.report_blockers])
+            )
+        else:
+            route.plan_mode = "report_from_artifact"
+            route.evidence_mode = "reuse_previous_artifact"
     elif relation == "continuation":
         route.plan_mode = "explain_from_artifact" if route.referenced_artifact_id else "normal"
     elif relation == "ambiguous":

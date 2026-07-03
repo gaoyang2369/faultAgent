@@ -360,6 +360,9 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
                 ],
                 "plan_mode": route.plan_mode,
                 "evidence_mode": route.evidence_mode,
+                "report_source_mode": route.report_source_mode,
+                "report_readiness": route.report_readiness,
+                "report_blockers": route.report_blockers,
             },
         )
     node_names = set(policy.enabled_nodes)
@@ -388,11 +391,47 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
             ],
             "plan_mode": route.plan_mode,
             "evidence_mode": route.evidence_mode,
+            "report_source_mode": route.report_source_mode,
+            "report_readiness": route.report_readiness,
+            "report_blockers": route.report_blockers,
         },
     )
 
 
 def _nodes_for_plan_mode(route: TaskRoute) -> dict[str, bool] | None:
+    if route.plan_mode == "report_from_artifact":
+        return {
+            "sql": False,
+            "knowledge": False,
+            "analysis": False,
+            "resolution_recommendation": False,
+            "workorder_decision": False,
+            "report": True,
+            "evidence_validation": False,
+            "output_guardrail": True,
+        }
+    if route.plan_mode == "report_refresh_sql":
+        return {
+            "sql": True,
+            "knowledge": False,
+            "analysis": True,
+            "resolution_recommendation": False,
+            "workorder_decision": False,
+            "report": True,
+            "evidence_validation": True,
+            "output_guardrail": True,
+        }
+    if route.plan_mode == "clarify_context" and route.report_source_mode in {"blocked_missing_context", "ambiguous"}:
+        return {
+            "sql": False,
+            "knowledge": False,
+            "analysis": False,
+            "resolution_recommendation": False,
+            "workorder_decision": False,
+            "report": False,
+            "evidence_validation": False,
+            "output_guardrail": False,
+        }
     if route.plan_mode == "workorder_decision_from_artifact":
         return {
             "permission_check": True,

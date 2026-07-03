@@ -72,6 +72,9 @@ def initialize_evidence_bundle(
         "requires_sql": decision.needs_sql,
         "requires_knowledge": decision.needs_knowledge,
         "requires_report": decision.needs_report,
+        "report_source_mode": decision.report_source_mode,
+        "report_readiness": decision.report_readiness,
+        "report_blockers": decision.report_blockers,
         "enabled_nodes": decision.enabled_nodes,
         "guardrails": decision.guardrails,
     }

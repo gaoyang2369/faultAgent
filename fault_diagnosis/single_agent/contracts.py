@@ -51,6 +51,9 @@ class SingleAgentDecision(BaseModel):
     satisfied_evidence: list[str] = Field(default_factory=list)
     missing_or_stale_evidence: list[str] = Field(default_factory=list)
     should_refresh_runtime_data: bool = False
+    report_source_mode: str = ""
+    report_readiness: dict[str, Any] = Field(default_factory=dict)
+    report_blockers: list[str] = Field(default_factory=list)
     action_target: str | None = None
     route_confidence: float = 0.0
     user_goal: str = ""

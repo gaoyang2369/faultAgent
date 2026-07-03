@@ -20,6 +20,8 @@ from ..diagnosis.contracts import (
 )
 from ..context import build_case_state_snapshot
 from .contracts import AgentTrace, SingleAgentDecision
+from .reporting.source_resolution import has_reportable_material
+from .sql_result_parser import parse_sql_rows
 from .workflow.axes import task_profile_for_compat
 
 
@@ -69,6 +71,7 @@ def build_diagnosis_artifact_envelope(
     )
     payload = {
         "runtime": "restricted_single_agent",
+        "task_family": decision.task_family,
         "request": request.model_dump(exclude_none=True),
         "decision": decision.model_dump(),
         "sql_artifact": sql_artifact.model_dump(exclude_none=True),
@@ -87,10 +90,29 @@ def build_diagnosis_artifact_envelope(
         "auth": auth or {},
         "authorization": authorization or {},
     }
+    normalized_rows = parse_sql_rows(sql_artifact.raw_output or sql_artifact.result_preview)
+    if normalized_rows:
+        payload["normalized_rows"] = normalized_rows
+    payload.update(
+        {
+            "device": request.equipment_hint or _first((decision.objects or {}).get("device_ids")),
+            "asset_id": request.equipment_hint or _first((decision.objects or {}).get("device_ids")),
+            "source_table": sql_artifact.source_table,
+            "sql_artifact_id": trace.trace_id,
+            "analysis_artifact_id": trace.trace_id,
+            "evidence_bundle_id": evidence_bundle.bundle_id if evidence_bundle is not None else None,
+            "fault_codes": [request.fault_code_hint] if request.fault_code_hint else (decision.objects or {}).get("alarm_codes", []),
+            "data_window": decision.time_window or {},
+            "freshness": _freshness_from_sql(sql_artifact),
+        }
+    )
     if workorder_draft is not None:
         payload["workorder_draft"] = workorder_draft.model_dump(exclude_none=True)
     if evidence_bundle is not None:
         payload["evidence_bundle"] = evidence_bundle.model_dump(exclude_none=True)
+    payload["reportable"] = has_reportable_material(payload)
+    if not payload["reportable"]:
+        payload["report_blockers"] = ["artifact_missing_reportable_material"]
     envelope = DiagnosisArtifactEnvelope(
         workflow_type=_artifact_type_from_decision(decision),
         thread_id=thread_id,
@@ -110,3 +132,15 @@ def _artifact_type_from_decision(decision: SingleAgentDecision) -> DiagnosisArti
         return DiagnosisArtifactType(task_profile_for_compat(decision))
     except ValueError:
         return DiagnosisArtifactType.FAULT_DIAGNOSIS
+
+
+def _first(value: Any) -> Any:
+    if isinstance(value, list) and value:
+        return value[0]
+    return value
+
+
+def _freshness_from_sql(sql_artifact: SqlStepArtifact) -> str:
+    if sql_artifact.data_state in {"empty", "blocked", "out_of_scope", "skipped"}:
+        return "unknown"
+    return "current" if sql_artifact.success and (sql_artifact.row_count or 0) > 0 else "unknown"

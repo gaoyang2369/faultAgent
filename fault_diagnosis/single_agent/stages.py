@@ -53,6 +53,12 @@ from .reporting import (
     extract_report_filename,
     extract_report_url,
 )
+from .reporting.source_resolution import (
+    apply_report_source_decision,
+    build_report_readiness,
+    find_referenced_artifact,
+    resolve_report_source,
+)
 from .support.serialization import preview, stringify
 from .sql_safety import build_fallback_sql_query, build_sql_prompt, has_unknown_sql_table, is_readonly_sql
 from .sql_safety import REAL_DATA_LATEST_TABLE, build_fast_sql_plan
@@ -121,7 +127,19 @@ class SingleAgentStagesMixin:
             state=conversation_state,
             conversation_context=self.conversation_context,
         )
-        report_from_previous_artifact = resolved_context.relation_to_previous == "report_handoff"
+        report_source = resolve_report_source(
+            thread_id=self.thread_id,
+            message=self.message,
+            auth_context=self.auth_context,
+            current_payload=payload,
+            resolved_context=resolved_context,
+        )
+        apply_report_source_decision(
+            resolved_context=resolved_context,
+            current_payload=payload,
+            decision=report_source,
+        )
+        report_from_previous_artifact = report_source.mode == "reuse_artifact"
         if report_from_previous_artifact:
             payload["needs_report"] = True
 
@@ -865,10 +883,17 @@ class SingleAgentStagesMixin:
         self._record_artifact("report", artifact, stage="report")
         self._last_step_result = artifact
 
-    async def stream_report_from_previous_artifact(self) -> AsyncGenerator[str, None]:
-        envelope = get_thread_artifact(self.thread_id)
+    async def stream_report_from_previous_artifact(
+        self,
+        decision: SingleAgentDecision,
+        envelope: DiagnosisArtifactEnvelope,
+    ) -> AsyncGenerator[str, None]:
         if envelope is None:
             raise SingleAgentExecutionError("当前线程没有可用于生成报告的结构化结果")
+        readiness = build_report_readiness(decision=decision, referenced_artifact=envelope)
+        decision.report_readiness = readiness
+        if not readiness.get("passed"):
+            raise SingleAgentExecutionError("报告材料不足，无法生成报告")
         report_payload = map_artifact_to_report_payload(envelope)
         async for chunk in self._invoke_restricted_tool(
             tool_name="save_report",
@@ -1010,6 +1035,25 @@ class SingleAgentStagesMixin:
         )
         self._record_artifact("report", artifact, stage="report")
         return artifact
+
+    def _build_blocked_report_artifact(self, reason: str) -> ReportStepArtifact:
+        return ReportStepArtifact(
+            success=False,
+            report_filename=None,
+            report_title=None,
+            report_url=None,
+            save_result=reason,
+            error=reason,
+        )
+
+    def _build_report_blocked_answer(self, decision: SingleAgentDecision) -> str:
+        blockers = [str(item) for item in (decision.report_blockers or []) if str(item)]
+        if not blockers:
+            blockers = [str(item) for item in (decision.report_readiness or {}).get("blockers", []) if str(item)]
+        reason = "、".join(list(dict.fromkeys(blockers))[:3]) or "缺少可用于生成报告的设备或数据"
+        if decision.report_source_mode == "ambiguous":
+            return "当前有多个可能的上一轮结果，无法确定要基于哪一个生成报告。请明确设备或时间范围后我再生成报告。"
+        return f"现在不能生成报告：{reason}。请重新指定设备或时间范围，或先查询一次设备状态后再导出报告。"
 
     def _build_skipped_workorder_suggestion(self, reason: str) -> WorkOrderSuggestion:
         suggestion = WorkOrderSuggestion(

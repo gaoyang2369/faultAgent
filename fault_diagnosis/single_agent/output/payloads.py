@@ -478,6 +478,13 @@ def build_ui_payload(
         ui_type = "knowledge_card"
     elif str(decision.task_family or "") == "action_or_workorder":
         ui_type = "workorder_card"
+    elif str(getattr(decision, "report_source_mode", "") or "") in {"blocked_missing_context", "ambiguous"}:
+        ui_type = "report_blocked"
+    elif _is_compat_task(decision, "report_generation") and not (
+        getattr(report_artifact, "success", False)
+        or (getattr(decision, "report_readiness", {}) or {}).get("passed")
+    ):
+        ui_type = "report_blocked"
     elif _is_compat_task(decision, "report_generation"):
         ui_type = "report_status"
     elif data_state in {"out_of_scope", "blocked", "empty"} or auth_mode == "degrade":

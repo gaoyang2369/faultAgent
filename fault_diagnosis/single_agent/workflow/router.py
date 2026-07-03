@@ -173,6 +173,13 @@ def route_task(
         referenced_case_id=resolved_context_payload.get("referenced_case_id")
         or resolved_context_payload.get("active_case_id"),
         should_refresh_runtime_data=bool(resolved_context_payload.get("should_refresh_runtime_data")),
+        report_source_mode=str(resolved_context_payload.get("report_source_mode") or ""),
+        report_readiness=(
+            resolved_context_payload.get("report_readiness")
+            if isinstance(resolved_context_payload.get("report_readiness"), dict)
+            else {}
+        ),
+        report_blockers=[str(item) for item in (resolved_context_payload.get("report_blockers") or []) if str(item)],
         action_target=action_target,
         route_confidence=confidence,
         user_goal=str(payload.get("analysis_goal") or normalized or task_key),

@@ -147,6 +147,13 @@ def validate_artifact_invariants(
         warnings.append("unsafe_workorder_completion_claim")
     if decision.plan_mode == "workorder_decision_from_artifact" and not decision.referenced_artifact_id:
         warnings.append("artifact_followup_missing_referenced_artifact")
+    if decision.requested_output == "report" or "generate_report" in str(decision.goal_set):
+        report_readiness = getattr(decision, "report_readiness", {}) or {}
+        if not report_readiness.get("passed") and _contains_report_created_claim(final_answer):
+            warnings.append("report_created_without_readiness")
+        analysis_text = str(getattr(analysis_artifact, "conclusion", "") or "")
+        if _analysis_claims_no_data(analysis_text) and _contains_report_created_claim(final_answer):
+            warnings.append("empty_material_report_claim")
     return {"passed": not warnings, "warnings": list(dict.fromkeys(warnings))}
 
 
@@ -215,6 +222,24 @@ def _claims_sql_returned_no_data(text: str) -> bool:
             "数据库未返回数据",
         )
     )
+
+
+def _analysis_claims_no_data(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "")
+    return any(
+        phrase in compact
+        for phrase in (
+            "无任何设备数据",
+            "无法生成报告",
+            "没有设备数据",
+            "未返回可解析运行记录",
+            "当前无设备数据",
+        )
+    )
+
+
+def _contains_report_created_claim(text: str) -> bool:
+    return any(keyword in (text or "") for keyword in ("报告链接", "已生成报告", "报告状态：已", "查看报告", "下载报告"))
 
 
 def _sql_has_rows(sql_artifact: SqlStepArtifact | None) -> bool:
