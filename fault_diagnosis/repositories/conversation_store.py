@@ -106,6 +106,9 @@ class ConversationRepository(Protocol):
     ) -> None:
         """Link a message to diagnosis/report/workorder artifacts."""
 
+    def list_message_artifact_refs(self, *, message_id: str) -> list[dict[str, Any]]:
+        """Return artifact refs linked to one message."""
+
     def list_thread_ids(self, *, session_id: str) -> list[str]:
         """Return active thread ids for a session by recent activity."""
 
@@ -453,6 +456,25 @@ class SQLiteConversationRepository:
 
         self._execute(op)
 
+    def list_message_artifact_refs(self, *, message_id: str) -> list[dict[str, Any]]:
+        message_id = str(message_id or "").strip()
+        if not message_id:
+            return []
+
+        def op(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+            rows = connection.execute(
+                """
+                SELECT artifact_id, artifact_type, artifact_backend, ref_role, created_at
+                FROM agent_message_artifact_refs
+                WHERE message_id = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (message_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+        return self._execute(op)
+
     def list_thread_ids(self, *, session_id: str) -> list[str]:
         session_id = str(session_id or "").strip()
         if not session_id:
@@ -708,6 +730,16 @@ class MemoryConversationRepository:
             for ref in kwargs.get("artifact_refs") or []:
                 if ref.get("artifact_id"):
                     self._refs.append({**ref, "thread_id": kwargs["thread_id"], "message_id": kwargs["message_id"]})
+
+    def list_message_artifact_refs(self, *, message_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            refs = [
+                deepcopy(ref)
+                for ref in self._refs
+                if ref.get("message_id") == message_id
+            ]
+        refs.sort(key=lambda item: (item.get("created_at") or "", item.get("artifact_id") or ""))
+        return refs
 
     def list_thread_ids(self, *, session_id: str) -> list[str]:
         with self._lock:

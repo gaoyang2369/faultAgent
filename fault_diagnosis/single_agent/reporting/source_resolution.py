@@ -36,11 +36,9 @@ class ReportSourceDecision(BaseModel):
     inherited_slots: dict[str, Any] = Field(default_factory=dict)
     readiness: dict[str, Any] = Field(default_factory=dict)
     blockers: list[str] = Field(default_factory=list)
-    candidate_artifact_ids: list[str] = Field(default_factory=list)
-
-    @property
-    def ready(self) -> bool:
-        return bool(self.readiness.get("passed"))
+    candidate_summary: list[dict[str, Any]] = Field(default_factory=list)
+    selected_artifact_id: str | None = None
+    selected_artifact_type: str | None = None
 
 
 def resolve_report_source(
@@ -50,6 +48,7 @@ def resolve_report_source(
     auth_context: AuthContext,
     current_payload: dict[str, Any],
     resolved_context: Any,
+    conversation_context: dict[str, Any] | None = None,
     artifact_limit: int = 10,
 ) -> ReportSourceDecision:
     """Resolve the report source once so plan and stream use identical rules."""
@@ -59,14 +58,6 @@ def resolve_report_source(
     if not requested:
         return ReportSourceDecision(requested=False)
 
-    if str(context.get("relation_to_previous") or "") == "ambiguous":
-        return ReportSourceDecision(
-            requested=True,
-            mode="ambiguous",
-            readiness=_readiness(False, blockers=["ambiguous_report_source"]),
-            blockers=["ambiguous_report_source"],
-        )
-
     wants_fresh = _has_any(message, _FRESH_WORDS)
     inherited_slots = _inherited_slots(current_payload, context)
     requested_device = str(
@@ -75,8 +66,9 @@ def resolve_report_source(
         or context.get("active_asset")
         or ""
     ).strip()
+    previous_artifact_ids = _previous_turn_artifact_ids(conversation_context)
     artifacts = list_thread_artifacts(thread_id, limit=artifact_limit)
-    valid_candidates: list[tuple[DiagnosisArtifactEnvelope, dict[str, Any]]] = []
+    scanned: list[tuple[DiagnosisArtifactEnvelope, dict[str, Any], dict[str, Any]]] = []
     rejected: list[str] = []
     for envelope in artifacts:
         result = _candidate_reportability(
@@ -85,13 +77,46 @@ def resolve_report_source(
             requested_device=requested_device,
             wants_fresh=wants_fresh,
         )
-        if result["valid"]:
-            valid_candidates.append((envelope, result))
-        elif result.get("reason"):
+        result["_previous_turn_candidate"] = _matches_previous_turn(envelope, previous_artifact_ids)
+        summary = _candidate_summary(
+            envelope,
+            result,
+            created_turn="previous",
+        )
+        scanned.append((envelope, result, summary))
+        if not result["valid"] and result.get("reason"):
             rejected.append(str(result["reason"]))
+    root_candidates = _dedupe_root_candidates(scanned, requested_device=requested_device)
+    valid_candidates = [
+        (item["envelope"], item["result"])
+        for item in root_candidates
+        if item["result"].get("valid")
+    ]
+    candidate_summary = [item["summary"] for item in root_candidates]
 
     if valid_candidates:
-        envelope, result = valid_candidates[0]
+        ranked_candidates = sorted(
+            valid_candidates,
+            key=lambda item: _candidate_priority(item[0], item[1], requested_device=requested_device),
+            reverse=True,
+        )
+        top_priority = _candidate_priority(ranked_candidates[0][0], ranked_candidates[0][1], requested_device=requested_device)
+        top_candidates = [
+            item for item in ranked_candidates
+            if _candidate_priority(item[0], item[1], requested_device=requested_device) == top_priority
+        ]
+        if len(top_candidates) > 1:
+            return ReportSourceDecision(
+                requested=True,
+                mode="ambiguous",
+                readiness=_readiness(False, blockers=["ambiguous_report_source"]),
+                blockers=["ambiguous_report_source"],
+                candidate_summary=[
+                    _mark_selected_summary(item, selected=False, ambiguous=True)
+                    for item in candidate_summary
+                ],
+            )
+        envelope, result = ranked_candidates[0]
         artifact_id = _artifact_id(envelope)
         inherited = {
             **inherited_slots,
@@ -110,7 +135,12 @@ def resolve_report_source(
                 checks=result.get("checks", {}),
             ),
             blockers=[],
-            candidate_artifact_ids=[_artifact_id(item[0]) for item in valid_candidates],
+            candidate_summary=[
+                _mark_selected_summary(item, selected=item.get("artifact_id") == artifact_id)
+                for item in candidate_summary
+            ],
+            selected_artifact_id=artifact_id,
+            selected_artifact_type=str(envelope.workflow_type),
         )
 
     if requested_device:
@@ -120,6 +150,7 @@ def resolve_report_source(
             inherited_slots={key: value for key, value in inherited_slots.items() if value not in (None, "", [], {})},
             readiness=_readiness(False, blockers=["fresh_sql_required"]),
             blockers=["fresh_sql_required", *list(dict.fromkeys(rejected))[:3]],
+            candidate_summary=candidate_summary,
         )
 
     return ReportSourceDecision(
@@ -128,6 +159,7 @@ def resolve_report_source(
         inherited_slots={},
         readiness=_readiness(False, blockers=["missing_device_or_reportable_artifact"]),
         blockers=["missing_device_or_reportable_artifact", *list(dict.fromkeys(rejected))[:3]],
+        candidate_summary=candidate_summary,
     )
 
 
@@ -153,11 +185,19 @@ def apply_report_source_decision(
         "report_blockers": list(decision.blockers),
         "referenced_artifact_id": decision.referenced_artifact_id,
         "referenced_artifact_type": decision.referenced_artifact_type,
+        "selected_artifact_id": decision.selected_artifact_id,
+        "selected_artifact_type": decision.selected_artifact_type,
+        "candidate_artifact_count": len(decision.candidate_summary),
+        "candidate_summary": decision.candidate_summary,
     }
     if hasattr(resolved_context, "report_source_mode"):
         resolved_context.report_source_mode = decision.mode
         resolved_context.report_readiness = decision.readiness
         resolved_context.report_blockers = list(decision.blockers)
+        resolved_context.report_candidate_summary = list(decision.candidate_summary)
+        resolved_context.report_candidate_artifact_count = len(decision.candidate_summary)
+        resolved_context.selected_artifact_id = decision.selected_artifact_id
+        resolved_context.selected_artifact_type = decision.selected_artifact_type
         if decision.mode in {"blocked_missing_context", "ambiguous"}:
             resolved_context.missing_context = list(
                 dict.fromkeys([*getattr(resolved_context, "missing_context", []), *decision.blockers])
@@ -260,7 +300,7 @@ def _candidate_reportability(
     if not has_reportable_material(payload):
         return {"valid": False, "reason": "artifact_missing_reportable_material"}
     artifact_device = _artifact_device(payload)
-    if requested_device and artifact_device and requested_device != artifact_device:
+    if requested_device and artifact_device and not _device_matches(requested_device, payload):
         return {"valid": False, "reason": "artifact_device_mismatch"}
     if artifact_device and not _asset_allowed(artifact_device, auth_context):
         return {"valid": False, "reason": "artifact_asset_out_of_scope"}
@@ -278,6 +318,151 @@ def _candidate_reportability(
             "has_reportable_material": True,
         },
     }
+
+
+def _candidate_priority(
+    envelope: DiagnosisArtifactEnvelope,
+    result: dict[str, Any],
+    *,
+    requested_device: str,
+) -> tuple[int, int, int, int, str]:
+    payload = envelope.payload or {}
+    checks = result.get("checks") if isinstance(result.get("checks"), dict) else {}
+    artifact_device = str(checks.get("artifact_device") or _artifact_device(payload) or "")
+    return (
+        1 if bool(result.get("_previous_turn_candidate")) else 0,
+        1 if _artifact_completed(payload) else 0,
+        _artifact_type_priority(envelope),
+        1 if requested_device and (artifact_device == requested_device or _device_matches(requested_device, payload)) else 0,
+        str(envelope.created_at or ""),
+    )
+
+
+def _dedupe_root_candidates(
+    scanned: list[tuple[DiagnosisArtifactEnvelope, dict[str, Any], dict[str, Any]]],
+    *,
+    requested_device: str,
+) -> list[dict[str, Any]]:
+    groups: dict[str, list[tuple[DiagnosisArtifactEnvelope, dict[str, Any], dict[str, Any]]]] = {}
+    for item in scanned:
+        key = _root_candidate_key(item[0])
+        groups.setdefault(key, []).append(item)
+
+    deduped: list[dict[str, Any]] = []
+    for items in groups.values():
+        selected = sorted(
+            items,
+            key=lambda item: (
+                1 if item[1].get("valid") else 0,
+                _candidate_priority(item[0], item[1], requested_device=requested_device),
+            ),
+            reverse=True,
+        )[0]
+        envelope, result, summary = selected
+        if len(items) > 1:
+            merged_reasons = list(dict.fromkeys(str(item[2].get("reason") or "") for item in items if item[2].get("reason")))
+            summary = {
+                **summary,
+                "merged_candidate_count": len(items),
+                "merged_reasons": merged_reasons,
+                "reason": "candidate_valid" if result.get("valid") else (merged_reasons[0] if merged_reasons else "candidate_rejected"),
+            }
+        deduped.append({"envelope": envelope, "result": result, "summary": summary})
+    deduped.sort(
+        key=lambda item: _candidate_priority(item["envelope"], item["result"], requested_device=requested_device),
+        reverse=True,
+    )
+    return deduped
+
+
+def _root_candidate_key(envelope: DiagnosisArtifactEnvelope) -> str:
+    payload = envelope.payload or {}
+    workorder = payload.get("workorder_decision") if isinstance(payload.get("workorder_decision"), dict) else {}
+    evidence = payload.get("evidence_bundle") if isinstance(payload.get("evidence_bundle"), dict) else {}
+    root = _first_non_empty(
+        [
+            payload.get("root_artifact_id"),
+            payload.get("source_turn_id"),
+            payload.get("source_diagnosis_artifact_id"),
+            payload.get("source_artifact_id"),
+            workorder.get("source_diagnosis_artifact_id"),
+            evidence.get("artifacts", {}).get("source_diagnosis_artifact_id")
+            if isinstance(evidence.get("artifacts"), dict)
+            else None,
+            envelope.created_at,
+        ]
+    )
+    return f"{envelope.thread_id}:{root}"
+
+
+def _matches_previous_turn(envelope: DiagnosisArtifactEnvelope, previous_ids: set[str]) -> bool:
+    if not previous_ids:
+        return False
+    payload = envelope.payload or {}
+    ids = set(_artifact_ids(envelope))
+    ids.add(str(_root_candidate_key(envelope).split(":", 1)[-1]))
+    for key in ("root_artifact_id", "source_turn_id", "source_diagnosis_artifact_id", "source_artifact_id"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            ids.add(value)
+    return bool(ids.intersection(previous_ids))
+
+
+def _artifact_type_priority(envelope: DiagnosisArtifactEnvelope) -> int:
+    artifact_type = str(envelope.workflow_type)
+    payload = envelope.payload or {}
+    task_family = str((payload.get("decision") or {}).get("task_family") or payload.get("task_family") or "")
+    if artifact_type == DiagnosisArtifactType.STATUS_QUERY.value or task_family == "runtime_status":
+        return 4
+    if artifact_type in {
+        DiagnosisArtifactType.FAULT_DIAGNOSIS.value,
+        DiagnosisArtifactType.ALARM_TRIAGE.value,
+        DiagnosisArtifactType.ROOT_CAUSE_ANALYSIS.value,
+        DiagnosisArtifactType.HEALTH_ASSESSMENT.value,
+    } or task_family == "diagnosis":
+        return 3
+    if artifact_type == DiagnosisArtifactType.STATUS_INSPECTION.value:
+        return 2
+    if artifact_type == DiagnosisArtifactType.REPORT_GENERATION.value or task_family == "reporting":
+        return 1
+    return 0
+
+
+def _candidate_summary(
+    envelope: DiagnosisArtifactEnvelope,
+    result: dict[str, Any],
+    *,
+    created_turn: str,
+) -> dict[str, Any]:
+    payload = envelope.payload or {}
+    request = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+    decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+    objects = decision.get("objects") if isinstance(decision.get("objects"), dict) else {}
+    fault_codes = payload.get("fault_codes") or request.get("fault_code_hint") or objects.get("alarm_codes") or []
+    if fault_codes and not isinstance(fault_codes, list):
+        fault_codes = [fault_codes]
+    return {
+        "artifact_id": _artifact_id(envelope),
+        "artifact_type": str(envelope.workflow_type),
+        "device": _artifact_device(payload),
+        "fault_codes": [str(item) for item in (fault_codes or []) if str(item or "").strip()],
+        "reportable": payload.get("reportable") is True,
+        "created_turn": created_turn,
+        "created_before_current_turn": created_turn == "previous",
+        "created_at": envelope.created_at,
+        "completed": _artifact_completed(payload),
+        "immediately_previous_turn": bool(result.get("_previous_turn_candidate")),
+        "reason": "candidate_valid" if result.get("valid") else str(result.get("reason") or "candidate_rejected"),
+    }
+
+
+def _mark_selected_summary(item: dict[str, Any], *, selected: bool, ambiguous: bool = False) -> dict[str, Any]:
+    marked = dict(item)
+    if selected:
+        marked["reason"] = "selected"
+    elif ambiguous and item.get("reason") == "candidate_valid":
+        marked["reason"] = "ambiguous_same_priority"
+    return marked
 
 
 def _is_report_request(message: str, payload: dict[str, Any], context: dict[str, Any]) -> bool:
@@ -334,10 +519,44 @@ def _artifact_device(payload: dict[str, Any]) -> str:
     ).strip()
 
 
+def _device_aliases(payload: dict[str, Any]) -> set[str]:
+    request = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+    decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+    objects = decision.get("objects") if isinstance(decision.get("objects"), dict) else {}
+    aliases: list[Any] = [
+        payload.get("device"),
+        payload.get("asset_id"),
+        payload.get("device_name"),
+        payload.get("inverter_name"),
+        request.get("equipment_hint"),
+        _first(objects.get("device_ids")),
+    ]
+    for key in ("device_aliases", "asset_aliases"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            aliases.extend(value)
+        elif value:
+            aliases.append(value)
+    return {str(item).strip() for item in aliases if str(item or "").strip()}
+
+
+def _device_matches(requested_device: str, payload: dict[str, Any]) -> bool:
+    requested = str(requested_device or "").strip()
+    if not requested:
+        return True
+    return requested in _device_aliases(payload)
+
+
 def _artifact_stale(payload: dict[str, Any]) -> bool:
     text = " ".join(str(item or "") for item in [payload.get("freshness"), payload.get("freshness_label"), payload])
     lowered = text.lower()
     return any(marker in text or marker in lowered for marker in ("已滞后", "滞后", "stale", "非实时", "不代表实时"))
+
+
+def _artifact_completed(payload: dict[str, Any]) -> bool:
+    trace = payload.get("trace") if isinstance(payload.get("trace"), dict) else {}
+    status = str(trace.get("status") or payload.get("status") or "").strip().lower()
+    return status in {"", "completed", "success", "succeeded", "finished"}
 
 
 def _artifact_id(envelope: DiagnosisArtifactEnvelope) -> str:
@@ -364,6 +583,44 @@ def _artifact_ids(envelope: DiagnosisArtifactEnvelope) -> list[str]:
             if str(item or "").strip()
         )
     )
+
+
+def _previous_turn_artifact_ids(conversation_context: dict[str, Any] | None) -> set[str]:
+    if not isinstance(conversation_context, dict):
+        return set()
+    previous = conversation_context.get("immediately_previous_assistant_turn")
+    if not isinstance(previous, dict):
+        previous = {}
+    refs = previous.get("produced_artifacts") if isinstance(previous.get("produced_artifacts"), list) else []
+    ids: set[str] = set()
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        for key in ("artifact_id", "source_artifact_id", "root_artifact_id", "source_diagnosis_artifact_id"):
+            value = str(ref.get(key) or "").strip()
+            if value:
+                ids.add(value)
+    if ids:
+        return ids
+    refs = conversation_context.get("artifact_refs") if isinstance(conversation_context.get("artifact_refs"), list) else []
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        if str(ref.get("ref_role") or "").strip() not in {"produced", "produced_by", "context_source"}:
+            continue
+        for key in ("artifact_id", "source_artifact_id"):
+            value = str(ref.get(key) or "").strip()
+            if value:
+                ids.add(value)
+    return ids
+
+
+def _first_non_empty(values: list[Any]) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
 
 def _readiness(passed: bool, *, source: str = "", checks: dict[str, Any] | None = None, blockers: list[str] | None = None) -> dict[str, Any]:

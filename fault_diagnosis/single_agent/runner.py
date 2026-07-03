@@ -305,6 +305,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             return {}
         resolved_context = summarize_resolved_context(getattr(decision, "resolved_context", {}) or {})
         pending_actions = resolved_context.get("pending_actions") or []
+        report_snapshot = self._report_planning_snapshot_summary(decision, resolved_context=resolved_context)
         return {
             "conversation_context_signals_summary": resolved_context.get("conversation_context_signals_summary") or {},
             "resolved_context": resolved_context,
@@ -312,7 +313,17 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             "task_family": getattr(decision, "task_family", ""),
             "policy_id": (getattr(decision, "workflow_policy", {}) or {}).get("policy_id"),
             "enabled_nodes": getattr(decision, "enabled_nodes", {}) or {},
-            "report_source_mode": getattr(decision, "report_source_mode", ""),
+            **report_snapshot,
+            "produced_artifacts": [],
+            "referenced_artifacts": [
+                {
+                    "artifact_id": report_snapshot.get("selected_artifact_id"),
+                    "artifact_type": report_snapshot.get("selected_artifact_type"),
+                    "role": "referenced",
+                }
+            ]
+            if report_snapshot.get("selected_artifact_id")
+            else [],
             "report_readiness": getattr(decision, "report_readiness", {}) or {},
             "report_blockers": list(getattr(decision, "report_blockers", []) or []),
             "manual_confirmation": getattr(decision, "manual_confirmation", {}) or {},
@@ -327,6 +338,28 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
                 for item in (self._conversation_context_trace_summary().get("artifact_refs") or [])
                 if isinstance(item, dict)
             ],
+        }
+
+    def _report_planning_snapshot_summary(
+        self,
+        decision: Any | None = None,
+        *,
+        resolved_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        decision = decision or self._workflow_task_decision
+        if decision is None:
+            return {}
+        if resolved_context is None:
+            resolved_context = summarize_resolved_context(getattr(decision, "resolved_context", {}) or {})
+        return {
+            "report_source_mode": getattr(decision, "report_source_mode", ""),
+            "candidate_artifact_count": getattr(decision, "report_candidate_artifact_count", 0),
+            "selected_artifact_id": getattr(decision, "selected_artifact_id", None)
+            or getattr(decision, "referenced_artifact_id", None),
+            "selected_artifact_type": getattr(decision, "selected_artifact_type", None),
+            "candidate_summary": list(getattr(decision, "report_candidate_summary", []) or []),
+            "inherited_slots": resolved_context.get("inherited_slots") or {},
+            "blockers": list(getattr(decision, "report_blockers", []) or []),
         }
 
     def trace_duration_ms(self) -> float | None:

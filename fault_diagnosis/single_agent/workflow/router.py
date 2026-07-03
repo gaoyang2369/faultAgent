@@ -180,6 +180,13 @@ def route_task(
             else {}
         ),
         report_blockers=[str(item) for item in (resolved_context_payload.get("report_blockers") or []) if str(item)],
+        report_candidate_summary=[
+            item for item in (resolved_context_payload.get("report_candidate_summary") or [])
+            if isinstance(item, dict)
+        ],
+        report_candidate_artifact_count=int(resolved_context_payload.get("report_candidate_artifact_count") or 0),
+        selected_artifact_id=resolved_context_payload.get("selected_artifact_id"),
+        selected_artifact_type=resolved_context_payload.get("selected_artifact_type"),
         action_target=action_target,
         route_confidence=confidence,
         user_goal=str(payload.get("analysis_goal") or normalized or task_key),

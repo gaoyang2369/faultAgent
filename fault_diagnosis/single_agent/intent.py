@@ -262,65 +262,23 @@ def decide_capabilities(
     needs_report = plan.resolved_nodes.get("report", False)
 
     if report_from_previous_artifact:
-        return SingleAgentDecision(
-            needs_sql=needs_sql,
-            needs_knowledge=needs_knowledge,
-            needs_report=True,
-            report_from_previous_artifact=True,
-            task_family=route.task_family,
-            task_family_reason=route.task_family_reason,
-            task_family_source=route.task_family_source,
-            task_family_warnings=route.task_family_warnings,
-            goals=[item.model_dump(exclude_none=True) for item in route.goals],
-            goal_set=route.goal_set,
-            resolved_context=route.resolved_context,
-            context_resolution=route.context_resolution,
-            active_case_id=route.resolved_context.get("active_case_id")
-            or (conversation_state.active_case_id if conversation_state else None),
-            relation_to_previous=route.relation_to_previous,
-            plan_mode=route.plan_mode,
-            evidence_mode=route.evidence_mode,
-            referenced_artifact_id=route.referenced_artifact_id,
-            referenced_case_id=route.referenced_case_id,
-            required_evidence=route.required_evidence,
-            satisfied_evidence=route.satisfied_evidence,
-            missing_or_stale_evidence=route.missing_or_stale_evidence,
-            should_refresh_runtime_data=route.should_refresh_runtime_data,
-            report_source_mode=route.report_source_mode,
-            report_readiness=route.report_readiness,
-            report_blockers=route.report_blockers,
-            action_target=route.action_target,
-            route_confidence=route.route_confidence,
-            user_goal=route.user_goal,
-            objects=route.objects.model_dump(exclude_none=True),
-            time_window=route.time_window.model_dump(exclude_none=True),
-            subgoals=[item.model_dump(exclude_none=True) for item in route.subgoals],
-            missing_slots=route.missing_slots,
-            risk_level=route.risk_level,
-            requested_output=route.requested_output,
-            action_type=route.action_type,
-            flags=route.flags,
-            workflow_policy=plan.policy.model_dump(exclude_none=True),
-            enabled_nodes=plan.resolved_nodes,
-            runtime_tools=plan.runtime_tools,
-            output_schema=plan.policy.output_schema,
-            guardrails=plan.policy.guardrails,
-            reason="识别到基于当前线程已有结果生成报告的请求",
-        )
+        reason = "识别到基于当前线程已有结果生成报告的请求"
+    else:
+        reason_parts = [
+            f"任务族 {route.task_family}",
+            "需要 SQL" if needs_sql else "跳过 SQL",
+            "需要知识库" if needs_knowledge else "跳过知识库",
+            "需要报告" if needs_report else "跳过报告",
+        ]
+        if plan.metadata.get("blocked_subgoals"):
+            reason_parts.append("存在可继续但需披露的 blocked subgoal")
+        reason = "；".join(reason_parts)
 
-    reason_parts = [
-        f"任务族 {route.task_family}",
-        "需要 SQL" if needs_sql else "跳过 SQL",
-        "需要知识库" if needs_knowledge else "跳过知识库",
-        "需要报告" if needs_report else "跳过报告",
-    ]
-    if plan.metadata.get("blocked_subgoals"):
-        reason_parts.append("存在可继续但需披露的 blocked subgoal")
     return SingleAgentDecision(
         needs_sql=needs_sql,
         needs_knowledge=needs_knowledge,
-        needs_report=needs_report,
-        report_from_previous_artifact=False,
+        needs_report=True if report_from_previous_artifact else needs_report,
+        report_from_previous_artifact=report_from_previous_artifact,
         task_family=route.task_family,
         task_family_reason=route.task_family_reason,
         task_family_source=route.task_family_source,
@@ -343,6 +301,10 @@ def decide_capabilities(
         report_source_mode=route.report_source_mode,
         report_readiness=route.report_readiness,
         report_blockers=route.report_blockers,
+        report_candidate_summary=route.report_candidate_summary,
+        report_candidate_artifact_count=route.report_candidate_artifact_count,
+        selected_artifact_id=route.selected_artifact_id,
+        selected_artifact_type=route.selected_artifact_type,
         action_target=route.action_target,
         route_confidence=route.route_confidence,
         user_goal=route.user_goal,
@@ -359,7 +321,7 @@ def decide_capabilities(
         runtime_tools=plan.runtime_tools,
         output_schema=plan.policy.output_schema,
         guardrails=plan.policy.guardrails,
-        reason="；".join(reason_parts),
+        reason=reason,
     )
 
 
@@ -484,6 +446,10 @@ def _apply_resolved_context_to_route(route: Any, resolved_context: Any) -> None:
     route.report_source_mode = str(context.get("report_source_mode") or route.report_source_mode or "")
     route.report_readiness = context.get("report_readiness") if isinstance(context.get("report_readiness"), dict) else {}
     route.report_blockers = [str(item) for item in (context.get("report_blockers") or []) if str(item)]
+    route.report_candidate_summary = [item for item in (context.get("report_candidate_summary") or []) if isinstance(item, dict)]
+    route.report_candidate_artifact_count = int(context.get("report_candidate_artifact_count") or 0)
+    route.selected_artifact_id = context.get("selected_artifact_id")
+    route.selected_artifact_type = context.get("selected_artifact_type")
     missing_context = [str(item) for item in context.get("missing_context") or [] if str(item)]
     if missing_context:
         route.missing_or_stale_evidence = list(dict.fromkeys([*route.missing_or_stale_evidence, *missing_context]))

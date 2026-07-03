@@ -134,6 +134,10 @@ class ResolvedContext(BaseModel):
     report_source_mode: str = ""
     report_readiness: dict[str, Any] = Field(default_factory=dict)
     report_blockers: list[str] = Field(default_factory=list)
+    report_candidate_summary: list[dict[str, Any]] = Field(default_factory=list)
+    report_candidate_artifact_count: int = 0
+    selected_artifact_id: str | None = None
+    selected_artifact_type: str | None = None
     conversation_context_signals_summary: dict[str, Any] = Field(default_factory=dict)
 
     def legacy_context_resolution(self) -> dict[str, Any]:
@@ -165,6 +169,10 @@ class ResolvedContext(BaseModel):
             "report_source_mode": self.report_source_mode,
             "report_readiness": self.report_readiness,
             "report_blockers": list(self.report_blockers),
+            "report_candidate_summary": self.report_candidate_summary,
+            "report_candidate_artifact_count": self.report_candidate_artifact_count,
+            "selected_artifact_id": self.selected_artifact_id,
+            "selected_artifact_type": self.selected_artifact_type,
             "conversation_context_signals_summary": self.conversation_context_signals_summary,
         }
 
@@ -227,6 +235,14 @@ def summarize_resolved_context(value: Any) -> dict[str, Any]:
         summary["report_readiness"] = data.get("report_readiness")
     if data.get("report_blockers"):
         summary["report_blockers"] = list(data.get("report_blockers") or [])
+    if data.get("report_candidate_summary"):
+        summary["report_candidate_summary"] = list(data.get("report_candidate_summary") or [])
+    if data.get("report_candidate_artifact_count") is not None:
+        summary["report_candidate_artifact_count"] = int(data.get("report_candidate_artifact_count") or 0)
+    if data.get("selected_artifact_id"):
+        summary["selected_artifact_id"] = data.get("selected_artifact_id")
+    if data.get("selected_artifact_type"):
+        summary["selected_artifact_type"] = data.get("selected_artifact_type")
     return summary
 
 

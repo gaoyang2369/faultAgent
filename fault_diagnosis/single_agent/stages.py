@@ -133,6 +133,7 @@ class SingleAgentStagesMixin:
             auth_context=self.auth_context,
             current_payload=payload,
             resolved_context=resolved_context,
+            conversation_context=self.conversation_context,
         )
         apply_report_source_decision(
             resolved_context=resolved_context,

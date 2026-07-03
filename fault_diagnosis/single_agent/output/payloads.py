@@ -155,6 +155,15 @@ def build_report_handoff_complete_payload(
         "workorder_action_readiness": workorder_action_readiness,
         "manual_confirmation": manual_confirmation,
         "authorization": decision.authorization,
+        "report_artifact": report_artifact.model_dump(exclude_none=True),
+        "produced_artifacts": _report_handoff_produced_artifacts(
+            decision=decision,
+            report_artifact=report_artifact,
+        ),
+        "referenced_artifacts": _referenced_artifacts(
+            decision=decision,
+            report_artifact=report_artifact,
+        ),
         "ui_payload": build_ui_payload(decision=decision, report_artifact=report_artifact),
         "todos": todos,
         "workflow_route": {
@@ -416,6 +425,30 @@ def _produced_artifacts(
             )
         )
     return items
+
+
+def _report_handoff_produced_artifacts(
+    *,
+    decision: SingleAgentDecision,
+    report_artifact: ReportStepArtifact,
+) -> list[dict[str, Any]]:
+    if not report_artifact.success:
+        return []
+    report_id = report_artifact.report_url or report_artifact.report_filename or ""
+    if not report_id:
+        return []
+    return [
+        _artifact_item(
+            artifact_id=report_id,
+            artifact_type="report",
+            role="produced",
+            created_in_current_turn=True,
+            display_policy="show_card",
+            source_artifact_id=decision.referenced_artifact_id,
+            title=report_artifact.report_title or "报告结果",
+            url=report_artifact.report_url,
+        )
+    ]
 
 
 def _referenced_artifacts(*, decision: SingleAgentDecision, report_artifact: ReportStepArtifact) -> list[dict[str, Any]]:

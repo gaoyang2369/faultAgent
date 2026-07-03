@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, AsyncGenerator
@@ -299,6 +300,14 @@ class SingleAgentFlowMixin:
                 ),
             )
             self._configure_workflow_tasks(decision)
+            if decision.report_source_mode:
+                planning_snapshot_summary = self._report_planning_snapshot_summary(decision)
+                _log.info(
+                    f"report_handoff planning_snapshot {json.dumps(planning_snapshot_summary, ensure_ascii=False, default=str)}",
+                    thread_id=self.thread_id,
+                    trace_id=self.trace_id,
+                    **planning_snapshot_summary,
+                )
             if decision.report_source_mode in {"blocked_missing_context", "ambiguous"}:
                 final_answer = self._build_report_blocked_answer(decision)
                 report_artifact = self._build_blocked_report_artifact(

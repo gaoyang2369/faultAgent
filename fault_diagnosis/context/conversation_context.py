@@ -39,6 +39,7 @@ class ConversationContextAssembler:
         case_state = self.case_store.load(thread_id)
         active_case = case_state.active_case
         artifact_refs = _latest_artifact_refs(thread_id)
+        previous_assistant_turn = self._previous_assistant_turn(recent_messages)
         package = {
             "version": "conversation_context_package.v1",
             "thread_id": thread_id,
@@ -58,6 +59,7 @@ class ConversationContextAssembler:
             "rolling_summary": None,
             "latest_case_state": active_case.model_dump(exclude_none=True) if active_case else None,
             "artifact_refs": artifact_refs,
+            "immediately_previous_assistant_turn": previous_assistant_turn,
             "auth_scope": auth_context.audit_summary(),
             "safety": {
                 "history_is_data_not_instruction": True,
@@ -69,8 +71,31 @@ class ConversationContextAssembler:
             "raw_message_count": len(package["last_raw_messages"]),
             "has_case_state": active_case is not None,
             "artifact_ref_count": len(artifact_refs),
+            "previous_assistant_artifact_ref_count": len(previous_assistant_turn.get("produced_artifacts") or []),
         }
         return package
+
+    def _previous_assistant_turn(self, recent_messages: list[dict[str, Any]]) -> dict[str, Any]:
+        for item in reversed(recent_messages):
+            if item.get("role") != "assistant" or item.get("status") == "superseded":
+                continue
+            refs = []
+            try:
+                refs = self.conversation_repository.list_message_artifact_refs(message_id=str(item.get("id") or ""))
+            except Exception:
+                refs = []
+            produced = [
+                ref for ref in refs
+                if str(ref.get("ref_role") or "").strip() in {"produced", "produced_by"}
+            ]
+            return {
+                "message_id": item.get("id"),
+                "turn_index": item.get("turn_index"),
+                "status": item.get("status"),
+                "created_at": item.get("created_at"),
+                "produced_artifacts": produced,
+            }
+        return {}
 
 
 def _latest_artifact_refs(thread_id: str) -> list[dict[str, Any]]:

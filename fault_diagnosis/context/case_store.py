@@ -134,6 +134,9 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
     active_asset = _first_non_empty(
         [
             context_resolution.get("active_asset"),
+            payload.get("asset_id"),
+            payload.get("device"),
+            payload.get("device_name"),
             _first_list_item(objects.get("device_ids")),
             request.get("equipment_hint"),
             report_context.get("asset"),
@@ -143,6 +146,7 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
     active_fault_codes = _dedupe(
         [
             *(_as_text_list(context_resolution.get("active_fault_codes"))),
+            *(_as_text_list(payload.get("fault_codes"))),
             *(_as_text_list(objects.get("alarm_codes"))),
             request.get("fault_code_hint"),
             report_context.get("event_code"),
@@ -152,6 +156,8 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
     active_time_window: dict[str, Any] = {}
     if isinstance(decision.get("time_window"), dict):
         active_time_window.update(decision["time_window"])
+    if isinstance(payload.get("data_window"), dict):
+        active_time_window.update(payload["data_window"])
     if request.get("time_range_hint") and "default_strategy" not in active_time_window:
         active_time_window["default_strategy"] = request.get("time_range_hint")
 
@@ -263,9 +269,14 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
             ]
         ),
         latest_sample_time=_first_non_empty(
-            [report_context.get("latest_sample_time"), report_context.get("last_sample_time"), report_context.get("sample_time")]
+            [
+                payload.get("latest_sample_time"),
+                report_context.get("latest_sample_time"),
+                report_context.get("last_sample_time"),
+                report_context.get("sample_time"),
+            ]
         ),
-        sample_count=_as_int(report_context.get("sample_count")),
+        sample_count=_as_int(payload.get("row_count") or report_context.get("sample_count")),
         current_event=current_event,
         key_phenomenon=_first_non_empty(
             [report_context.get("key_phenomenon"), report_context.get("top_finding"), report_context.get("abnormal_summary")]

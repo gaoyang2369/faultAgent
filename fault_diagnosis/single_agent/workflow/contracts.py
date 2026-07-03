@@ -130,6 +130,10 @@ class TaskRoute(BaseModel):
     report_source_mode: str = ""
     report_readiness: dict[str, Any] = Field(default_factory=dict)
     report_blockers: list[str] = Field(default_factory=list)
+    report_candidate_summary: list[dict[str, Any]] = Field(default_factory=list)
+    report_candidate_artifact_count: int = 0
+    selected_artifact_id: str | None = None
+    selected_artifact_type: str | None = None
     action_target: str | None = None
     route_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
     user_goal: str = ""
