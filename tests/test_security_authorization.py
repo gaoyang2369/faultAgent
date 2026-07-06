@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from types import SimpleNamespace
@@ -200,8 +200,8 @@ def test_engineer_asset_scope_allows_registered_aliases() -> None:
 def test_rag_acl_filters_uploaded_documents_by_role() -> None:
     docs = [
         {"preview": "公开手册", "source_type": "knowledge_base", "visibility": "public"},
-        {"preview": "内部复盘", "source_type": "uploaded_pdf", "visibility": "internal"},
-        {"preview": "敏感方案", "source_type": "uploaded_pdf", "visibility": "restricted"},
+        {"preview": "内部复盘", "source_type": "uploaded_file", "visibility": "internal"},
+        {"preview": "敏感方案", "source_type": "uploaded_file", "visibility": "restricted"},
     ]
 
     assert [item["preview"] for item in filter_kb_documents(docs, auth=build_auth_context(role="guest"))] == [
@@ -243,3 +243,4 @@ def test_workorder_service_enforces_http_equivalent_permissions(tmp_path) -> Non
     assert record["status"] == "待派单"
     assert record["created_by"] == "engineer_01"
     assert record["authorized_asset_scope"] == ["J1号机"]
+

@@ -37,7 +37,6 @@ cd /opt/agent
 ```text
 fault_diagnosis/      后端源码
 agent_fronted/        前端源码
-medicineOCR/          OCR 辅助脚本
 pdfs/                 知识库 PDF
 faiss_db/             可选，已有 FAISS 索引
 docs/                 契约文档
@@ -208,7 +207,7 @@ location / {
 agent_fronted/public/reports/      Markdown 报告
 agent_fronted/public/images/       静态图片目录
 trash/run/diagnosis_artifacts/     线程级诊断产物
-trash/run/admin_uploads/           管理员上传 PDF
+trash/run/admin_uploads/           管理员上传知识文件、OCR 产物、校对 Markdown 和 uploaded_file_kb
 trash/run/app-json.log             JSON 日志
 ```
 
@@ -216,6 +215,8 @@ trash/run/app-json.log             JSON 日志
 
 - 启动失败并提示 `SESSION_SECRET`：生产环境必须显式配置固定随机值。
 - 知识库不可用：确认 `faiss_db/` 存在，Ollama 可访问，`EMBEDDING_MODEL` 已下载。
+- 管理员上传图片或扫描 PDF 无法识别：先安装 `requirements-ocr.txt`，并按 PaddlePaddle 官方说明安装匹配 CPU/GPU 的 `paddlepaddle`。CPU 环境可用于小文件验证；生产扫描件建议使用 GPU 环境。
+- 上传知识库不可检索：确认 `UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX=true`、Ollama embedding 服务可访问，并查看 `trash/run/admin_uploads/uploaded_file_kb/kb_meta.json` 中是否有 `vector_error`。
 - SQL 工具不可用：确认 `HOST`、`MYSQL_USER`、`MYSQL_PW`、`PORT`、`DCMA_DB_NAME`。
 - SSE 无输出：确认 Nginx `proxy_buffering off`，并查看 `trash/run/app-json.log`。
 - Langfuse 没有 trace：确认 `AGENT_TRACE_BACKEND=langfuse`，并已配置 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`。

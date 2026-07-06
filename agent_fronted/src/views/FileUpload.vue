@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <el-dialog
     :model-value="modelValue"
     @update:model-value="emit('update:modelValue', $event)"
@@ -405,7 +405,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
-import { adminPdfAPI, documentRecognitionAPI } from '@/services/api'
+import { AdminKnowledgeFileAPI, documentRecognitionAPI } from '@/services/api'
 import { useUserIdentityStore } from '@/stores/userIdentity'
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -470,7 +470,7 @@ type UploadRecord = {
     preview_text?: string
     extraction_mode?: string
     ocr_backend?: string
-    medicine_ocr?: {
+    document_ocr?: {
       configured?: boolean
       available?: boolean
       heavy_model_enabled?: boolean
@@ -571,8 +571,8 @@ const filteredHistoryRecords = computed(() => {
 const savedPdfPreviewStatus = computed(() => {
   const record = activeRecord.value
   if (!record) return '等待上传'
-  if (record.ocrStatus === 'uploaded' || record.ocrStatus === 'extracting_text' || record.ocrStatus === 'processing') {
-    return '文本提取中'
+  if (['uploaded', 'extracting', 'extracting_text', 'ocr_processing', 'processing'].includes(record.ocrStatus)) {
+    return '识别中'
   }
   if (record.ocrStatus === 'needs_heavy_ocr' || record.ocrStatus === 'ocr_model_not_configured') {
     return '需要 OCR'
@@ -664,19 +664,19 @@ const fileSummary = computed(() => {
 const ingestAction = computed(() => {
   const record = activeRecord.value
   if (!record) {
-    return { label: '知识库归档', disabled: true, hint: '请先选择已上传的 PDF 记录。' }
+    return { label: '知识库归档', disabled: true, hint: '请先选择已上传的文件记录。' }
   }
-  if (isIngesting.value || record.kbIngestStatus === 'processing') {
-    return { label: '归档中...', disabled: true, hint: '当前 PDF 正在归档知识库。' }
+  if (isIngesting.value || ['processing', 'indexing'].includes(record.kbIngestStatus)) {
+    return { label: '归档中...', disabled: true, hint: '当前文件正在归档知识库。' }
   }
   if (record.correctionNeedsReingest) {
     return { label: '重新归档', disabled: false, hint: '校正内容已保存，请重新归档后再让 Agent 使用。' }
   }
-  if (record.kbIngestStatus === 'succeeded') {
-    return { label: record.hasCorrection ? '已归档最新' : '已归档', disabled: true, hint: '该 PDF 已归档知识库，Agent 可直接查询。' }
+  if (['succeeded', 'indexed'].includes(record.kbIngestStatus)) {
+    return { label: record.hasCorrection ? '已归档最新' : '已归档', disabled: true, hint: '该文件已归档知识库，Agent 可直接查询。' }
   }
-  if (record.ocrStatus === 'extracting_text' || record.ocrStatus === 'uploaded' || record.ocrStatus === 'processing') {
-    return { label: '文本提取中...', disabled: true, hint: '请等待文本提取完成后再归档。' }
+  if (['extracting', 'extracting_text', 'ocr_processing', 'uploaded', 'processing'].includes(record.ocrStatus)) {
+    return { label: '识别中...', disabled: true, hint: '请等待识别完成后再归档。' }
   }
   if (record.ocrStatus === 'needs_heavy_ocr' || record.ocrStatus === 'ocr_model_not_configured') {
     return { label: '需要 OCR 后归档', disabled: true, hint: '该 PDF 当前文本不足，需要重型 OCR 后才能归档。' }
@@ -684,7 +684,7 @@ const ingestAction = computed(() => {
   if (record.kbIngestStatus === 'failed') {
     return { label: '重试归档', disabled: false, hint: record.kbError || '知识库归档失败，可重试。' }
   }
-  return { label: '知识库归档', disabled: false, hint: '将当前 PDF 正文归档到上传知识库，供 Agent 查询。' }
+  return { label: '知识库归档', disabled: false, hint: '将当前校对内容归档到上传知识库，供 Agent 查询。' }
 })
 
 const markdownStats = computed(() => {
@@ -837,7 +837,7 @@ const statusBadge = computed<{ label: string; tone: StatusTone }>(() => {
     if (record.ocrStatus === 'needs_heavy_ocr' || record.ocrStatus === 'ocr_model_not_configured') {
       return { label: '需处理', tone: 'warning' }
     }
-    if (record.ocrStatus === 'uploaded' || record.ocrStatus === 'extracting_text' || record.ocrStatus === 'processing') {
+    if (['uploaded', 'extracting', 'extracting_text', 'ocr_processing', 'processing'].includes(record.ocrStatus)) {
       return { label: '处理中', tone: 'processing' }
     }
     if (isMarkdownDirty.value) return { label: '已修改', tone: 'warning' }
@@ -854,7 +854,7 @@ const statusBadge = computed<{ label: string; tone: StatusTone }>(() => {
 
 const statusBanner = computed<{ text: string; tone: StatusTone }>(() => {
   if (isUploading.value) return { text: '正在上传文件，请勿重复提交。', tone: 'processing' }
-  if (isRecognizing.value) return { text: '正在调用 OCR 识别，Markdown 返回后会先展示，复原不会阻塞校对。', tone: 'processing' }
+  if (isRecognizing.value) return { text: '正在调用 OCR 识别，Markdown 返回后会展示在校对区。', tone: 'processing' }
   if (isRestoring.value) return { text: '正在进行图片复原；Markdown 已可继续编辑。', tone: 'processing' }
   if (isGeneratingPdf.value) return { text: '正在生成或获取 PDF 结果。', tone: 'processing' }
   if (isSavingCorrection.value) return { text: '正在保存校对内容。', tone: 'processing' }
@@ -874,8 +874,8 @@ const statusBanner = computed<{ text: string; tone: StatusTone }>(() => {
   if (record.ocrStatus === 'needs_heavy_ocr' || record.ocrStatus === 'ocr_model_not_configured') {
     return { text: describeScanHint(record) || describeOcrStatus(record.ocrStatus, record.ocrError), tone: 'warning' }
   }
-  if (record.ocrStatus === 'uploaded' || record.ocrStatus === 'extracting_text' || record.ocrStatus === 'processing') {
-    return { text: '后端正在提取 PDF 文本，完成后会自动刷新 Markdown。', tone: 'processing' }
+  if (['uploaded', 'extracting', 'extracting_text', 'ocr_processing', 'processing'].includes(record.ocrStatus)) {
+    return { text: '后端正在识别文件内容，完成后会自动刷新 Markdown。', tone: 'processing' }
   }
   if (isMarkdownDirty.value) return { text: 'Markdown 已修改，右侧预览已同步更新；保存后可重新归档。', tone: 'warning' }
   if (markdownDraft.value.trim()) return { text: '已获取 Markdown 识别结果，可开始校对。', tone: 'success' }
@@ -1003,8 +1003,8 @@ function selectWorkflowMode(mode: WorkflowMode) {
 
 function hasPendingProcessing(recordsList = records.value) {
   return recordsList.some(record =>
-    ['uploaded', 'extracting_text', 'processing'].includes(record.ocrStatus) ||
-    ['processing'].includes(record.kbIngestStatus)
+    ['uploaded', 'extracting', 'extracting_text', 'ocr_processing', 'processing'].includes(record.ocrStatus) ||
+    ['processing', 'indexing'].includes(record.kbIngestStatus)
   )
 }
 
@@ -1032,7 +1032,7 @@ function refreshStatusPolling() {
 async function refreshRecords(preferredRecordId = '') {
   try {
     const nextRecords = await withTimeout(
-      adminPdfAPI.listRecords(getUploadIdentityContext()),
+      AdminKnowledgeFileAPI.listRecords(getUploadIdentityContext()),
       DETAIL_TIMEOUT_MS,
       '加载上传记录超时，请稍后重试。'
     )
@@ -1094,12 +1094,12 @@ async function handleStartProcess() {
       activeRecordId.value = record.id
       serverPreviewUrl.value = appendUploadIdentityQuery(record.fileUrl)
       resultPdfUrl.value = appendUploadIdentityQuery(recognitionResult.resultPdfUrl || record.fileUrl)
-      fileType.value = 'pdf'
+      fileType.value = processingType
       const detail = await loadRecordDetail(record.id, { forceMarkdown: true })
       hydrateMarkdown(detail, { force: true })
       resultPdfUrl.value = appendUploadIdentityQuery(detail.fileUrl)
       clearLocalSelection({ keepFileType: true, keepWorkflowMode: true })
-      ElMessage.success('PDF 已上传，正在读取识别结果。')
+      ElMessage.success('文件已上传，正在读取识别结果。')
     } else if (recognitionResult.resultPdfUrl) {
       resultPdfUrl.value = appendUploadIdentityQuery(recognitionResult.resultPdfUrl)
     }
@@ -1187,7 +1187,7 @@ async function handleUploadOnly() {
       activeRecordId.value = record.id
       serverPreviewUrl.value = appendUploadIdentityQuery(record.fileUrl)
       resultPdfUrl.value = appendUploadIdentityQuery(uploadResult.resultPdfUrl || record.fileUrl)
-      fileType.value = 'pdf'
+      fileType.value = currentFileType.value || fileType.value
       workflowMode.value = 'upload_only'
       clearLocalSelection({ keepFileType: true, keepWorkflowMode: true })
       ElMessage[uploadResult.duplicate ? 'info' : 'success'](uploadResult.message || '文件已上传。')
@@ -1261,7 +1261,7 @@ async function saveCorrection() {
   isSavingCorrection.value = true
   try {
     const { record: updatedRecord, message } = await withTimeout(
-      adminPdfAPI.saveCorrection(record.id, correctedText, getUploadIdentityContext()),
+      AdminKnowledgeFileAPI.saveCorrection(record.id, correctedText, getUploadIdentityContext()),
       REQUEST_TIMEOUT_MS,
       '保存校对内容超时，请稍后重试。'
     )
@@ -1282,7 +1282,7 @@ async function saveCorrection() {
 
 async function loadRecordDetail(recordId: string, options: { forceMarkdown?: boolean } = {}) {
   const detail = await withTimeout(
-    adminPdfAPI.getRecord(recordId, getUploadIdentityContext()),
+    AdminKnowledgeFileAPI.getRecord(recordId, getUploadIdentityContext()),
     DETAIL_TIMEOUT_MS,
     '加载 PDF 处理详情超时，请稍后重试。'
   )
@@ -1345,7 +1345,7 @@ async function deleteActiveRecord() {
   isDeleting.value = true
   try {
     await withTimeout(
-      adminPdfAPI.deleteRecord(record.id, getUploadIdentityContext()),
+      AdminKnowledgeFileAPI.deleteRecord(record.id, getUploadIdentityContext()),
       REQUEST_TIMEOUT_MS,
       '删除 PDF 记录超时，请稍后刷新状态。'
     )
@@ -1366,7 +1366,7 @@ async function triggerKnowledgeBaseIngest() {
   isIngesting.value = true
   try {
     const { record, scheduled, alreadyIngested, message } = await withTimeout(
-      adminPdfAPI.ingestRecord(activeRecord.value.id, getUploadIdentityContext()),
+      AdminKnowledgeFileAPI.ingestRecord(activeRecord.value.id, getUploadIdentityContext()),
       REQUEST_TIMEOUT_MS,
       '知识库归档请求超时，请稍后刷新状态。'
     )
@@ -1374,7 +1374,7 @@ async function triggerKnowledgeBaseIngest() {
     activeRecordId.value = record.id
     hydrateMarkdown(record)
     if (alreadyIngested) {
-      ElMessage.info(message || '该 PDF 已归档知识库。')
+      ElMessage.info(message || '该文件已归档知识库。')
     } else {
       ElMessage.success(message || (scheduled ? '已开始知识库归档。' : '知识库归档状态已刷新。'))
     }
@@ -1574,8 +1574,10 @@ function formatHistoryTime(timestamp: number) {
 
 function describeOcrStatus(status: string, error = '') {
   if (status === 'uploaded') return '已上传，等待处理'
-  if (status === 'extracting_text' || status === 'processing') return '文本提取中'
-  if (status === 'text_extracted' || status === 'succeeded') return '已提取文本'
+  if (status === 'extracting' || status === 'extracting_text' || status === 'ocr_processing' || status === 'processing') return '识别中'
+  if (status === 'needs_review') return '待校对'
+  if (status === 'reviewed') return '已校对'
+  if (status === 'text_extracted' || status === 'succeeded' || status === 'indexed') return '已提取文本'
   if (status === 'needs_heavy_ocr') return error || '该 PDF 可能是扫描件，需要重型 OCR'
   if (status === 'ocr_model_not_configured') return error || '该 PDF 可能是扫描件，当前未启用重型 OCR 模型'
   if (status === 'ocr_failed') return error ? `OCR 失败：${error}` : 'OCR 失败'
@@ -1584,8 +1586,8 @@ function describeOcrStatus(status: string, error = '') {
 }
 
 function describeKbStatus(status: string, error = '') {
-  if (status === 'processing') return '归档中'
-  if (status === 'succeeded') return '已归档知识库'
+  if (status === 'processing' || status === 'indexing') return '归档中'
+  if (status === 'succeeded' || status === 'indexed') return '已归档知识库'
   if (status === 'failed') return error ? `归档失败：${error}` : '归档失败'
   if (status === 'skipped') return '未归档'
   return '待归档'
@@ -2713,3 +2715,4 @@ button:disabled {
   }
 }
 </style>
+

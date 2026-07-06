@@ -1,4 +1,4 @@
-"""真实依赖健康检查；浅检查不触发 LLM 推理。"""
+﻿"""真实依赖健康检查；浅检查不触发 LLM 推理。"""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from ..config import (
     OLLAMA_BASE_URL,
     SESSION_SECRET_FINGERPRINT,
     SESSION_SECRET_SOURCE,
-    UPLOADED_PDF_KB_ENABLE_VECTOR_INDEX,
+    UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX,
 )
 from ..agent_runtime.error_classification import classify_model_gateway_error, model_error_code
 from ..common.paths import REPORTS_DIR
@@ -318,16 +318,14 @@ def _check_faiss(deep: bool) -> dict[str, Any]:
     )
 
 
-def _check_medicine_ocr() -> dict[str, Any]:
+def _check_document_ocr() -> dict[str, Any]:
     try:
-        from ..integrations.medicine_ocr_runtime import get_medicine_ocr_status
+        from ..integrations.document_ocr_runtime import get_document_ocr_status
 
-        status = get_medicine_ocr_status(load_tested=False)
-        if status["backend_available"] and status["heavy_model_enabled"]:
+        status = get_document_ocr_status(load_tested=False)
+        if status.get("dependencies_ok"):
             result_status = "available"
-        elif status["heavy_model_enabled"] and not status["backend_available"]:
-            result_status = "degraded"
-        elif status["configured"] or status["root_exists"]:
+        elif status.get("paddleocr_available") or status.get("pymupdf_available") or status.get("pillow_available"):
             result_status = "degraded"
         else:
             result_status = "not_configured"
@@ -335,7 +333,7 @@ def _check_medicine_ocr() -> dict[str, Any]:
     except Exception as exc:
         return _check_result(
             "failed",
-            provider="medicine_ocr",
+            provider="document_ocr",
             detail=f"OCR 依赖加载失败：{_redact(exc)}",
         )
 
@@ -367,28 +365,28 @@ def _check_reports_directory() -> dict[str, Any]:
     )
 
 
-def _check_uploaded_pdf_kb() -> dict[str, Any]:
-    from ..knowledge.uploaded_pdf_kb import get_uploaded_pdf_kb_status, has_uploaded_pdf_corpus, has_uploaded_pdf_index
+def _check_uploaded_file_kb() -> dict[str, Any]:
+    from ..knowledge.uploaded_file_kb import get_uploaded_file_kb_status, has_uploaded_file_corpus, has_uploaded_file_index
 
-    status = get_uploaded_pdf_kb_status()
-    corpus_exists = has_uploaded_pdf_corpus()
-    vector_index_exists = has_uploaded_pdf_index()
-    meta_exists = os.path.exists(os.path.join(ADMIN_UPLOAD_DIR, "uploaded_pdf_kb", "kb_meta.json"))
+    status = get_uploaded_file_kb_status()
+    corpus_exists = has_uploaded_file_corpus()
+    vector_index_exists = has_uploaded_file_index()
+    meta_exists = os.path.exists(os.path.join(ADMIN_UPLOAD_DIR, "uploaded_file_kb", "kb_meta.json"))
     mode = str(status.get("mode") or ("faiss" if vector_index_exists else "lexical_corpus" if corpus_exists else "empty"))
     vector_error = _redact(status.get("vector_error", ""))
 
     if vector_index_exists:
         result_status = "available"
-        detail = "上传 PDF 向量索引可用"
+        detail = "上传文件向量索引可用"
     elif corpus_exists:
-        result_status = "degraded" if UPLOADED_PDF_KB_ENABLE_VECTOR_INDEX else "available"
-        detail = "上传 PDF 词法检索兜底可用"
+        result_status = "degraded" if UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX else "available"
+        detail = "上传文件词法检索兜底可用"
     elif meta_exists or mode not in {"empty", "missing"}:
         result_status = "degraded"
-        detail = "上传 PDF 知识库元信息存在，但当前没有可查询索引或词法语料"
+        detail = "上传文件知识库元信息存在，但当前没有可查询索引或词法语料"
     else:
         result_status = "not_configured"
-        detail = "尚未构建上传 PDF 知识库"
+        detail = "尚未构建上传文件知识库"
 
     payload = {
         key: value
@@ -400,7 +398,7 @@ def _check_uploaded_pdf_kb() -> dict[str, Any]:
         **payload,
         configured=meta_exists or corpus_exists or vector_index_exists,
         upload_dir=ADMIN_UPLOAD_DIR,
-        vector_index_enabled=UPLOADED_PDF_KB_ENABLE_VECTOR_INDEX,
+        vector_index_enabled=UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX,
         vector_index_exists=vector_index_exists,
         lexical_corpus_exists=corpus_exists,
         mode=mode,
@@ -443,11 +441,11 @@ def _check_governance_repository() -> dict[str, Any]:
         return _check_result("failed", detail=_redact(exc))
 
 
-def _check_admin_pdf_registry() -> dict[str, Any]:
+def _check_admin_file_registry() -> dict[str, Any]:
     try:
-        from ..repositories.admin_pdf_repository import get_admin_pdf_repository
+        from ..repositories.admin_file_repository import get_admin_file_repository
 
-        payload = get_admin_pdf_repository().health_check()
+        payload = get_admin_file_repository().health_check()
         status = payload.get("status") or "available"
         return _check_result(status, **{key: value for key, value in payload.items() if key != "status"})
     except Exception as exc:
@@ -571,11 +569,11 @@ async def build_dependencies_health(app, deep: bool = True, timeout_seconds: flo
         "faiss": _check_faiss(deep=deep),
         "reports_directory": _check_reports_directory(),
         "governance_repository": _check_governance_repository(),
-        "admin_pdf_registry": _check_admin_pdf_registry(),
-        "uploaded_pdf_kb": _check_uploaded_pdf_kb(),
+        "admin_file_registry": _check_admin_file_registry(),
+        "uploaded_file_kb": _check_uploaded_file_kb(),
         "admin_password": _check_admin_password(),
         "trace_exporter": _check_trace_exporter(),
-        "medicine_ocr": _check_medicine_ocr(),
+        "document_ocr": _check_document_ocr(),
         "mysql": await _check_mysql(timeout_seconds, deep=deep),
         "postgresql": await _check_postgres(app, timeout_seconds, deep=deep),
         "ollama": await _check_ollama(timeout_seconds, deep=deep),
@@ -588,3 +586,4 @@ async def build_dependencies_health(app, deep: bool = True, timeout_seconds: flo
         "timeout_seconds": timeout_seconds,
         "checks": checks,
     }
+

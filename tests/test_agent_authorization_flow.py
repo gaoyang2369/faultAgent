@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -9,8 +9,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from fault_diagnosis import config
-from fault_diagnosis.api import admin_pdfs as admin_pdfs_api
-from fault_diagnosis.api.admin_pdfs import router as admin_pdfs_router
+from fault_diagnosis.api import admin_knowledge_files as admin_knowledge_files_api
+from fault_diagnosis.api.admin_knowledge_files import router as admin_knowledge_files_router
 from fault_diagnosis.api.auth import router as auth_router
 from fault_diagnosis.auth.admin_auth import DEV_AUTH_COOKIE_NAME
 from fault_diagnosis.auth.session_scope import SessionScopeManager
@@ -23,16 +23,16 @@ from fault_diagnosis.single_agent.contracts import SingleAgentDecision
 from fault_diagnosis.single_agent.workflow.nodes import build_permission_check_result
 
 
-class _FakeAdminPdfService:
+class _FakeAdminKnowledgeFileService:
     def list_records(self):
         return {"records": []}
 
     def save_upload(self, *, filename, content_type, content):
-        assert filename == "manual.pdf"
-        assert content_type == "application/pdf"
-        assert content.startswith(b"%PDF")
+        assert filename in {"manual.pdf", "photo.png"}
+        assert content_type in {"application/pdf", "image/png"}
+        assert content.startswith(b"%PDF") or content.startswith(b"\x89PNG")
         return SimpleNamespace(
-            payload={"uploaded": True, "file_name": filename},
+            payload={"uploaded": True, "file_name": filename, "record": {"id": "fake", "file_name": filename}},
             status_code=201,
             process_record_id=None,
         )
@@ -41,11 +41,11 @@ class _FakeAdminPdfService:
 @pytest.fixture()
 def auth_client(monkeypatch) -> TestClient:
     monkeypatch.setattr(config, "DEV_AUTH_ENABLED", True)
-    monkeypatch.setattr(admin_pdfs_api, "_admin_pdf_service", lambda: _FakeAdminPdfService())
+    monkeypatch.setattr(admin_knowledge_files_api, "_knowledge_file_service", lambda: _FakeAdminKnowledgeFileService())
     app = FastAPI()
     app.state.session_scope_manager = SessionScopeManager("authorization-flow-test-secret")
     app.include_router(auth_router)
-    app.include_router(admin_pdfs_router)
+    app.include_router(admin_knowledge_files_router)
     return TestClient(app)
 
 
@@ -111,7 +111,7 @@ def test_dev_login_identity_is_signed_and_frontend_identity_cannot_escalate(auth
     identity = auth_client.get("/auth/identity", params={"user_identity": "管理员"}).json()
     assert identity["role"] == "guest"
     assert identity["is_admin"] is False
-    assert "admin.pdf.manage" not in identity["permissions"]
+    assert "admin.file.manage" not in identity["permissions"]
 
     signed_cookie = auth_client.cookies.get(DEV_AUTH_COOKIE_NAME)
     auth_client.cookies.set(DEV_AUTH_COOKIE_NAME, f"{signed_cookie}tampered")
@@ -203,7 +203,7 @@ def test_guest_cannot_diagnose_generate_report_or_upload_pdf(auth_client: TestCl
 
     _dev_login(auth_client, "guest")
     response = auth_client.post(
-        "/admin/pdfs",
+        "/admin/knowledge-files",
         files={"file": ("manual.pdf", b"%PDF-1.4 guest", "application/pdf")},
     )
     assert response.status_code == 403
@@ -233,7 +233,7 @@ def test_engineer_can_diagnose_assigned_asset_but_not_other_assets() -> None:
     assert unassigned.denied_reason_code == "asset_out_of_scope"
 
 
-def test_admin_can_query_all_assets_and_manage_pdfs(auth_client: TestClient) -> None:
+def test_admin_can_query_all_assets_and_manage_knowledge_files(auth_client: TestClient) -> None:
     admin = build_dev_auth_context("admin")
     authorization = authorize_workflow(admin, _decision("fault_diagnosis", device="J99号机"))
     assert authorization.allowed is True
@@ -241,13 +241,18 @@ def test_admin_can_query_all_assets_and_manage_pdfs(auth_client: TestClient) -> 
 
     identity = _dev_login(auth_client, "admin")
     assert identity["role"] == "admin"
-    assert "admin.pdf.manage" in identity["permissions"]
-    assert auth_client.get("/admin/pdfs").status_code == 200
+    assert "admin.file.manage" in identity["permissions"]
+    assert auth_client.get("/admin/knowledge-files").status_code == 200
     upload = auth_client.post(
-        "/admin/pdfs",
+        "/admin/knowledge-files",
         files={"file": ("manual.pdf", b"%PDF-1.4 admin", "application/pdf")},
     )
     assert upload.status_code == 201
+    image_upload = auth_client.post(
+        "/admin/knowledge-files",
+        files={"file": ("photo.png", b"\x89PNG\r\n\x1a\nadmin", "image/png")},
+    )
+    assert image_upload.status_code == 201
 
 
 @pytest.mark.parametrize("role", ["guest", "engineer", "admin"])
@@ -277,3 +282,6 @@ def test_local_sse_authorization_tool_and_report_contract() -> None:
     assert admin_complete["authorization"]["mode"] == "allow"
     assert "save_report" in admin_tools
     assert admin_complete["report_url"].startswith("/reports/local_dev_report_")
+
+
+

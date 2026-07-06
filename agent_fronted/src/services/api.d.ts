@@ -1,4 +1,4 @@
-// API 服务类型声明文件
+﻿// API 服务类型声明文件
 
 export interface ChatHistoryItem {
   id: string
@@ -162,7 +162,7 @@ export interface AdminIdentityContext {
   userRole?: string
 }
 
-export interface AdminPdfRecord {
+export interface AdminKnowledgeFileRecord {
   id: string
   fileName: string
   fileSize: number
@@ -216,7 +216,7 @@ export interface AdminPdfRecord {
     preview_text?: string
     extraction_mode?: string
     ocr_backend?: string
-    medicine_ocr?: {
+    document_ocr?: {
       configured?: boolean
       available?: boolean
       heavy_model_enabled?: boolean
@@ -333,12 +333,12 @@ export interface AdminAuthAPI {
   logout(): Promise<IdentityResponse>
 }
 
-export interface AdminPdfAPI {
-  listRecords(identityContext?: AdminIdentityContext): Promise<AdminPdfRecord[]>
-  getRecord(recordId: string, identityContext?: AdminIdentityContext): Promise<AdminPdfRecord>
-  uploadFile(file: File, identityContext?: AdminIdentityContext): Promise<{ record: AdminPdfRecord; duplicate?: boolean }>
-  ingestRecord(recordId: string, identityContext?: AdminIdentityContext): Promise<{ record: AdminPdfRecord; scheduled: boolean; alreadyIngested?: boolean; message?: string }>
-  saveCorrection(recordId: string, correctedText: string, identityContext?: AdminIdentityContext): Promise<{ record: AdminPdfRecord; message?: string; next_action?: string }>
+export interface AdminKnowledgeFileAPI {
+  listRecords(identityContext?: AdminIdentityContext): Promise<AdminKnowledgeFileRecord[]>
+  getRecord(recordId: string, identityContext?: AdminIdentityContext): Promise<AdminKnowledgeFileRecord>
+  uploadFile(file: File, identityContext?: AdminIdentityContext): Promise<{ record: AdminKnowledgeFileRecord; duplicate?: boolean }>
+  ingestRecord(recordId: string, identityContext?: AdminIdentityContext): Promise<{ record: AdminKnowledgeFileRecord; scheduled: boolean; alreadyIngested?: boolean; message?: string }>
+  saveCorrection(recordId: string, correctedText: string, identityContext?: AdminIdentityContext): Promise<{ record: AdminKnowledgeFileRecord; message?: string; next_action?: string }>
   deleteRecord(recordId: string, identityContext?: AdminIdentityContext): Promise<{ deleted: boolean; record_id: string }>
 }
 
@@ -348,7 +348,7 @@ export interface DocumentWorkflowResult {
   restoredImageUrl?: string
   resultPdfUrl?: string
   pdfUrl?: string
-  record?: AdminPdfRecord | null
+  record?: AdminKnowledgeFileRecord | null
   fileId?: string
   message?: string
 }
@@ -371,7 +371,8 @@ export interface DocumentRecognitionAPI {
 
 export const chatAPI: ChatAPI
 export const adminAuthAPI: AdminAuthAPI
-export const adminPdfAPI: AdminPdfAPI
+export const AdminKnowledgeFileAPI: AdminKnowledgeFileAPI
 export const documentRecognitionAPI: DocumentRecognitionAPI
 export const BASE_URL: string
 export function resolveBaseUrl(): string
+

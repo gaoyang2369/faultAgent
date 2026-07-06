@@ -1,6 +1,6 @@
-"""持久化 repository 入口。"""
+﻿"""持久化 repository 入口。"""
 
-from .admin_pdf_repository import FileAdminPdfRepository, get_admin_pdf_repository
+from .admin_file_repository import FileAdminKnowledgeFileRepository, get_admin_file_repository
 from .governance_repository import FileGovernanceRepository, sanitize_governance_thread_hint
 from .history_index import (
     FileHistoryIndexRepository,
@@ -12,14 +12,15 @@ from .history_index import (
 )
 
 __all__ = [
-    "FileAdminPdfRepository",
+    "FileAdminKnowledgeFileRepository",
     "FileGovernanceRepository",
     "FileHistoryIndexRepository",
     "MemoryHistoryIndexRepository",
     "configure_history_index_repository",
-    "get_admin_pdf_repository",
+    "get_admin_file_repository",
     "sanitize_governance_thread_hint",
     "get_history_index_repository",
     "record_history_thread",
     "remove_history_thread",
 ]
+

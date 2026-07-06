@@ -1,4 +1,4 @@
-# fault_diagnosis 后端说明
+﻿# fault_diagnosis 后端说明
 
 `fault_diagnosis/` 是 faultAgent 工业故障诊断系统的后端源码根。当前后端主链路是限制型单 Agent：请求理解、上下文解析、GoalSet 构造、任务族与 policy 选择、受限 SQL、知识库检索、诊断分析、可选报告生成、最终回答、诊断 artifact 保存。
 
@@ -11,7 +11,7 @@
 - 提供 HTTP / SSE 接口，管理服务端 session、cookie、thread ownership 和历史记录。
 - 以服务端身份为准进行 RBAC + ABAC 授权，前端传入的 `user_identity` 不参与授权。
 - 调用限制型单 Agent 完成诊断流水线，内部核心链路是 `ResolvedContext -> GoalSet -> task_family -> policy_id -> enabled_nodes/runtime_tools -> readiness/manual_confirmation -> fixed stages -> output/artifact compat projection`。
-- 读 MySQL 运行数据、查本地/上传 PDF 知识库、生成私有 HTML 报告，并保存线程级 diagnosis artifact。
+- 读 MySQL 运行数据、查本地/上传知识文件 知识库、生成私有 HTML 报告，并保存线程级 diagnosis artifact。
 - 对工单和设备动作保持高风险边界：只能给建议、草稿和人工确认要求，不能自动派发工单，不能自动重启、停机、复位或修改参数。
 
 旧任务类型、旧候选任务和旧意图列表只允许作为 SSE、artifact、前端和输出模板的兼容投影存在，不再是内部 policy 或节点启停输入。退役的 shadow/diff/gate 计划字段已退出生产主链路，不应作为当前架构核心理解。
@@ -42,7 +42,7 @@ gunicorn -w 4 -k uvicorn.workers.UvicornWorker fault_diagnosis.app:app --bind 0.
 - MySQL：`HOST`、`PORT`、`MYSQL_PW`、`MYSQL_USER`、`DCMA_DB_NAME` / `DB_NAME`。
 - OpenAI-compatible LLM：`OPENAI_BASE_URL`、`OPENAI_API_KEY`、`MODEL_NAME`、`SINGLE_AGENT_MODEL_TIMEOUT_SECONDS`、`SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS`。
 - Ollama / FAISS / 知识库：`OLLAMA_BASE_URL`、`EMBEDDING_MODEL`、`FAISS_PATH`、`KB_CHUNK_SIZE`、`KB_CHUNK_OVERLAP`、`KB_BATCH_SIZE`、`KB_QUERY_TIMEOUT_SECONDS`、`KB_EMBED_TIMEOUT_SECONDS`、`KB_BUILD_MAX_DOCUMENTS`、`KB_INCREMENTAL_BUILD`、`KB_EMBED_CACHE_PATH`。
-- 上传 PDF / OCR：`ADMIN_UPLOAD_DIR`、`ADMIN_PDF_MAX_FILE_SIZE`、`PDF_TEXT_EXTRACT_BACKEND`、`MEDICINE_OCR_BACKEND`、`MEDICINE_OCR_ENABLE_HEAVY_MODEL`、`MEDICINE_OCR_MODEL_DIR`、`MEDICINE_OCR_DEVICE`、`MEDICINE_OCR_TIMEOUT_SECONDS`、`MEDICINE_OCR_MAX_PAGES`、`MEDICINE_OCR_RENDER_DPI`、`PDF_TEXT_MIN_CHARS`、`PDF_TEXT_PREVIEW_CHARS`、`UPLOADED_PDF_KB_ENABLE_VECTOR_INDEX`、`UPLOADED_PDF_KB_VECTOR_TIMEOUT_SECONDS`。
+- 上传知识文件 / OCR：`ADMIN_UPLOAD_DIR`、`ADMIN_PDF_MAX_FILE_SIZE`、`PDF_TEXT_EXTRACT_BACKEND`、`DOCUMENT_OCR_BACKEND`、`DOCUMENT_OCR_LANG`、`DOCUMENT_OCR_MAX_PAGES`、`DOCUMENT_OCR_RENDER_DPI`、`PDF_TEXT_MIN_CHARS`、`PDF_TEXT_PREVIEW_CHARS`、`UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX`、`UPLOADED_FILE_KB_VECTOR_TIMEOUT_SECONDS`。
 - Artifact backend：`DIAGNOSIS_ARTIFACT_BACKEND=file|memory|postgres`、`DIAGNOSIS_ARTIFACT_DIR`、`DIAGNOSIS_ARTIFACT_TABLE`、`DIAGNOSIS_ARTIFACT_POSTGRES_DSN`。旧 `WORKFLOW_ARTIFACT_*` 仍作为 fallback 读取。
 - PostgreSQL artifact/health：`POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`。
 - Session / auth：`SESSION_SECRET`、`SESSION_SECRET_FILE`、`SESSION_COOKIE_SECURE`、`SESSION_COOKIE_SAMESITE`、`SESSION_COOKIE_DOMAIN`、`SESSION_COOKIE_PATH`、`USER_STORE_PATH`、`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`ALLOW_DEFAULT_ADMIN_PASSWORD`、`ADMIN_AUTH_MAX_AGE`。
@@ -70,7 +70,7 @@ fault_diagnosis/
   diagnosis/              诊断领域合同、artifact store、report mapper、分析 helper
   tools/                  SQL、知识库、报告工具
   knowledge/              FAISS / Ollama / PDF 知识库
-  repositories/           用户、历史、PDF registry、治理和工单持久化
+  repositories/           用户、历史、知识文件 registry、治理和工单持久化
   runtime/                dev mode、session namespace、前端兼容适配
   infrastructure/         app 生命周期、数据库池、模型、CORS、静态资源
   observability/          trace payload、Langfuse / local trace
@@ -116,7 +116,7 @@ fault_diagnosis/
 
 - `GET /health/dependencies`、`GET /health/real`、`GET /health/ocr`
 - `GET /ai/history/{type}`、`GET /ai/history/{type}/{chat_id}`、`DELETE /ai/history/{type}/{chat_id}`、`GET /api/todos/{thread_id}`
-- `GET /admin/pdfs`、`POST /admin/pdfs`、`GET /admin/pdfs/{record_id}`、`GET /admin/pdfs/{record_id}/file`、`POST /admin/pdfs/{record_id}/ingest`、`PATCH /admin/pdfs/{record_id}/correction`、`DELETE /admin/pdfs/{record_id}`
+- `GET /admin/knowledge-files`、`POST /admin/knowledge-files`、`GET /admin/knowledge-files/{record_id}`、`GET /admin/knowledge-files/{record_id}/file`、`POST /admin/knowledge-files/{record_id}/ingest`、`PATCH /admin/knowledge-files/{record_id}/correction`、`DELETE /admin/knowledge-files/{record_id}`
 - `POST /api/governance/save`、`GET /api/governance/list`、`POST /api/governance/ledger`、`GET /api/governance/ledger`、`POST /api/governance/ledger/update`
 - `POST /tts/synthesize`
 - `GET /`
@@ -221,7 +221,7 @@ start -> task_update* -> ping* -> tool_start/tool_end* -> token -> complete
 
 - `guest`：默认只能看 `g120_motor_1` / `real_data_01` 最近窗口、公开知识库、状态类和故障码公开解释；不能生成报告、不能诊断根因、不能生成工单。
 - `engineer`：可在授权设备/表范围内做诊断、报告、工单草稿创建；不能越权查看设备或表。
-- `admin`：可访问全部业务表、报告、上传 PDF 和管理能力。
+- `admin`：可访问全部业务表、报告、上传知识文件 和管理能力。
 
 ## SQL、知识库、报告与外部依赖
 
@@ -236,7 +236,7 @@ SQL：
 
 知识库：
 
-- `query_knowledge_base` 先抽取故障码，在本地 PDF 文本中做精确匹配；不足时再查基础 FAISS 知识库，并合并上传 PDF 知识库结果。
+- `query_knowledge_base` 先抽取故障码，在本地 PDF 文本中做精确匹配；不足时再查基础 FAISS 知识库，并合并上传知识文件 知识库结果。
 - `rag_acl.py` 根据文档 `visibility`、`allowed_roles`、`allowed_asset_ids`、`allowed_systems` 过滤结果。
 - 知识库只提供手册、SOP、故障码解释等证据，不代表实时设备状态；实时状态必须来自 SQL 或其他运行数据证据。
 
@@ -252,7 +252,7 @@ SQL：
 - OpenAI-compatible LLM：请求理解、SQL 规划 fallback、分析和最终回答。
 - Ollama / FAISS：本地 PDF 知识库。
 - PostgreSQL：可选 diagnosis artifact backend。
-- 本地文件系统：报告、artifact、历史索引、用户文件、PDF registry、工单 mock、审计和 trace。
+- 本地文件系统：报告、artifact、历史索引、用户文件、知识文件 registry、工单 mock、审计和 trace。
 
 ## Artifact 与上下文复用
 
@@ -336,3 +336,5 @@ ResolvedContext
   -> EvidenceBundle
   -> output_guardrail
 ```
+
+

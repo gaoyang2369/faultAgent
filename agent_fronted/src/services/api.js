@@ -1,4 +1,4 @@
-export const resolveBaseUrl = () => {
+﻿export const resolveBaseUrl = () => {
   const explicitBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim()
   if (explicitBaseUrl) {
     return explicitBaseUrl.replace(/\/$/, '')
@@ -88,7 +88,7 @@ const normalizeDevLoginPayload = (roleOrPayload = 'guest') => {
   }
 }
 
-const normalizeAdminPdfRecord = (record = {}) => ({
+const normalizeAdminKnowledgeFileRecord = (record = {}) => ({
   id: record.id,
   fileName: record.file_name || record.fileName || '',
   fileSize: Number(record.file_size ?? record.fileSize ?? 0),
@@ -105,7 +105,7 @@ const normalizeAdminPdfRecord = (record = {}) => ({
   agentIngestStatus: record.agent_ingest_status || record.agentIngestStatus || 'pending',
   agentQueryReady: Boolean(record.agent_query_ready ?? record.agentQueryReady ?? false),
   agentQueryable: Boolean(record.agent_queryable ?? record.agentQueryable ?? record.agent_query_ready ?? record.agentQueryReady ?? false),
-  knowledgeSourceType: record.knowledge_source_type || record.knowledgeSourceType || 'uploaded_pdf',
+  knowledgeSourceType: record.knowledge_source_type || record.knowledgeSourceType || 'uploaded_file',
   uploadStatus: record.upload_status || record.uploadStatus || 'uploaded',
   extractStatus: record.extract_status || record.extractStatus || record.ocr_status || record.ocrStatus || 'uploaded',
   lastError: record.last_error || record.lastError || record.kb_error || record.kbError || record.ocr_error || record.ocrError || '',
@@ -136,7 +136,7 @@ const normalizeAdminPdfRecord = (record = {}) => ({
   structuredResult: record.structured_result || record.structuredResult || null,
   fileUrl: record.file_url
     ? (record.file_url.startsWith('http') ? record.file_url : `${BASE_URL}${record.file_url}`)
-    : `${BASE_URL}/admin/pdfs/${encodeURIComponent(record.id || '')}/file`
+    : `${BASE_URL}/admin/knowledge-files/${encodeURIComponent(record.id || '')}/file`
 })
 
 const parseEventPayload = (event, label) => {
@@ -752,43 +752,43 @@ export const adminAuthAPI = {
   }
 }
 
-export const adminPdfAPI = {
+export const AdminKnowledgeFileAPI = {
   async listRecords() {
-    const data = await fetchJsonWithSession(`${BASE_URL}/admin/pdfs`)
+    const data = await fetchJsonWithSession(`${BASE_URL}/admin/knowledge-files`)
     const records = Array.isArray(data?.records) ? data.records : []
-    return records.map(normalizeAdminPdfRecord)
+    return records.map(normalizeAdminKnowledgeFileRecord)
   },
 
   async getRecord(recordId) {
-    const data = await fetchJsonWithSession(`${BASE_URL}/admin/pdfs/${encodeURIComponent(recordId)}`)
-    return normalizeAdminPdfRecord(data || {})
+    const data = await fetchJsonWithSession(`${BASE_URL}/admin/knowledge-files/${encodeURIComponent(recordId)}`)
+    return normalizeAdminKnowledgeFileRecord(data || {})
   },
 
   async uploadFile(file) {
     const formData = new FormData()
     formData.append('file', file)
-    const data = await fetchJsonWithSession(`${BASE_URL}/admin/pdfs`, {
+    const data = await fetchJsonWithSession(`${BASE_URL}/admin/knowledge-files`, {
       method: 'POST',
       body: formData
     })
     return {
       ...data,
-      record: normalizeAdminPdfRecord(data?.record || {})
+      record: normalizeAdminKnowledgeFileRecord(data?.record || {})
     }
   },
 
   async ingestRecord(recordId) {
-    const data = await fetchJsonWithSession(`${BASE_URL}/admin/pdfs/${encodeURIComponent(recordId)}/ingest`, {
+    const data = await fetchJsonWithSession(`${BASE_URL}/admin/knowledge-files/${encodeURIComponent(recordId)}/ingest`, {
       method: 'POST'
     })
     return {
       ...data,
-      record: normalizeAdminPdfRecord(data?.record || {})
+      record: normalizeAdminKnowledgeFileRecord(data?.record || {})
     }
   },
 
   async saveCorrection(recordId, correctedText) {
-    const data = await fetchJsonWithSession(`${BASE_URL}/admin/pdfs/${encodeURIComponent(recordId)}/correction`, {
+    const data = await fetchJsonWithSession(`${BASE_URL}/admin/knowledge-files/${encodeURIComponent(recordId)}/correction`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json'
@@ -799,12 +799,12 @@ export const adminPdfAPI = {
     })
     return {
       ...data,
-      record: normalizeAdminPdfRecord(data?.record || {})
+      record: normalizeAdminKnowledgeFileRecord(data?.record || {})
     }
   },
 
   async deleteRecord(recordId) {
-    return fetchJsonWithSession(`${BASE_URL}/admin/pdfs/${encodeURIComponent(recordId)}`, {
+    return fetchJsonWithSession(`${BASE_URL}/admin/knowledge-files/${encodeURIComponent(recordId)}`, {
       method: 'DELETE'
     })
   }
@@ -845,142 +845,46 @@ const buildMarkdownFromRecord = (record = {}) => {
   return parts.join('\n\n')
 }
 
-const normalizeDocumentWorkflowPayload = (data = {}) => ({
-  markdown: data.markdown || data.markdownContent || data.text || '',
-  originalPreviewUrl: data.original_preview_url || data.originalPreviewUrl || '',
-  restoredImageUrl: data.restored_image_url || data.restoredImageUrl || '',
-  resultPdfUrl: data.pdf_url || data.result_pdf_url || data.resultPdfUrl || '',
-  record: data.record ? normalizeAdminPdfRecord(data.record) : null,
-  fileId: data.file_id || data.fileId || data.record_id || data.recordId || ''
-})
-
 export const documentRecognitionAPI = {
   async uploadOnlyFile(file, identityContext = {}) {
-    if (isPdfFileLike(file)) {
-      const { record, duplicate } = await adminPdfAPI.uploadFile(file, identityContext)
-      return {
-        record,
-        fileId: record.id,
-        resultPdfUrl: record.fileUrl,
-        duplicate,
-        message: duplicate ? '检测到同名同大小文件，已定位到现有服务端记录。' : 'PDF 已上传。'
-      }
-    }
-
-    const formData = new FormData()
-    formData.append('file', file)
-
-    try {
-      const data = await fetchJsonWithSession(`${BASE_URL}/admin/recognition/upload`, {
-        ...withIdentityHeaders({}, identityContext),
-        method: 'POST',
-        body: formData
-      })
-      return normalizeDocumentWorkflowPayload(data)
-    } catch (error) {
-      if (error?.status !== 404) throw error
-
-      // TODO: 后端接入图片仅上传接口后删除该降级分支，并返回 fileId/originalPreviewUrl。
-      return {
-        markdown: '',
-        originalPreviewUrl: '',
-        resultPdfUrl: '',
-        record: null,
-        fileId: '',
-        message: '图片上传接口尚未接入，当前仅完成前端预览与流程选择。'
-      }
+    const { record, duplicate } = await AdminKnowledgeFileAPI.uploadFile(file, identityContext)
+    return {
+      record,
+      markdown: buildMarkdownFromRecord(record),
+      fileId: record.id,
+      originalPreviewUrl: record.fileUrl,
+      resultPdfUrl: isPdfFileLike(file) ? record.fileUrl : '',
+      duplicate,
+      message: duplicate ? '检测到重复文件，已定位到现有服务端记录。' : '文件已上传并开始识别。'
     }
   },
 
   async uploadAndRecognizeFile(file, identityContext = {}) {
-    if (isPdfFileLike(file)) {
-      const { record } = await adminPdfAPI.uploadFile(file, identityContext)
-      const detail = await adminPdfAPI.getRecord(record.id, identityContext)
-      return {
-        markdown: buildMarkdownFromRecord(detail),
-        originalPreviewUrl: detail.fileUrl,
-        resultPdfUrl: detail.fileUrl,
-        record: detail,
-        fileId: detail.id
-      }
-    }
-
-    const formData = new FormData()
-    formData.append('file', file)
-
-    try {
-      const data = await fetchJsonWithSession(`${BASE_URL}/admin/recognition/ocr`, {
-        ...withIdentityHeaders({}, identityContext),
-        method: 'POST',
-        body: formData
-      })
-      return normalizeDocumentWorkflowPayload(data)
-    } catch (error) {
-      if (error?.status !== 404) throw error
-
-      // TODO: 后端接入图片 OCR 后删除该降级分支，并由 /admin/recognition/ocr 返回真实 Markdown。
-      return {
-        markdown: [
-          `# ${file.name}`,
-          '',
-          '## 待识别内容',
-          '后端图片 OCR 接口尚未接入，当前仅保留原图预览与可编辑 Markdown 区域。'
-        ].join('\n'),
-        originalPreviewUrl: '',
-        resultPdfUrl: '',
-        record: null,
-        fileId: ''
-      }
+    const { record } = await AdminKnowledgeFileAPI.uploadFile(file, identityContext)
+    const detail = await AdminKnowledgeFileAPI.getRecord(record.id, identityContext)
+    return {
+      markdown: buildMarkdownFromRecord(detail),
+      originalPreviewUrl: detail.fileUrl,
+      resultPdfUrl: isPdfFileLike(file) ? detail.fileUrl : '',
+      record: detail,
+      fileId: detail.id
     }
   },
 
   async restoreImage(file, identityContext = {}) {
-    const formData = new FormData()
-    formData.append('file', file)
-
-    try {
-      const data = await fetchJsonWithSession(`${BASE_URL}/admin/recognition/restore-image`, {
-        ...withIdentityHeaders({}, identityContext),
-        method: 'POST',
-        body: formData
-      })
-      return normalizeDocumentWorkflowPayload(data)
-    } catch (error) {
-      if (error?.status !== 404) throw error
-
-      // TODO: 后端接入图片复原接口后删除该降级分支，并返回 restoredImageUrl。
-      return {
-        restoredImageUrl: '',
-        message: '图片复原接口尚未接入，可继续使用原图生成 PDF。'
-      }
+    return {
+      restoredImageUrl: '',
+      message: '图片增强已在服务端 OCR 流程中自动执行。'
     }
   },
 
   async generatePdfFromMarkdown(markdown, options = {}, identityContext = {}) {
-    try {
-      const data = await fetchJsonWithSession(`${BASE_URL}/admin/recognition/markdown-to-pdf`, {
-        ...withIdentityHeaders({}, identityContext),
-        method: 'POST',
-        headers: mergeHeaders(withIdentityHeaders({}, identityContext).headers, {
-          'Content-Type': 'application/json'
-        }),
-        body: JSON.stringify({
-          markdown,
-          restored_image_url: options.restoredImageUrl || '',
-          original_file_id: options.originalFileId || '',
-          file_type: options.fileType || ''
-        })
-      })
-      return normalizeDocumentWorkflowPayload(data)
-    } catch (error) {
-      if (error?.status !== 404) throw error
-
-      // TODO: 后端接入 Markdown 转 PDF 接口后删除该降级分支，并返回 pdfUrl。
-      return {
-        pdfUrl: options.fallbackPdfUrl || '',
-        resultPdfUrl: options.fallbackPdfUrl || '',
-        message: 'Markdown 生成 PDF 接口尚未接入。'
-      }
+    return {
+      markdown,
+      pdfUrl: options.fallbackPdfUrl || '',
+      resultPdfUrl: options.fallbackPdfUrl || '',
+      message: '当前流程以 Markdown 校对内容入库，不再生成额外 PDF。'
     }
   }
 }
+

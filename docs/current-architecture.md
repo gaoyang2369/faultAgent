@@ -1,4 +1,4 @@
-# 当前架构总览
+﻿# 当前架构总览
 
 faultAgent 当前是工业设备故障诊断系统，后端源码根是 `fault_diagnosis/`，前端是 `agent_fronted/`。后端主链路已经收敛为限制型单 Agent，不是多 Agent 编排，也不是开放式 autonomous agent loop。
 
@@ -63,7 +63,7 @@ context/         ResolvedContext、CaseState、PendingAction
 diagnosis/       领域合同、artifact store、report mapper
 tools/           SQL、知识库、报告工具
 knowledge/       FAISS / Ollama / PDF 知识库
-repositories/    用户、历史、PDF registry、治理、工单持久化
+repositories/    用户、历史、知识文件 registry、治理、工单持久化
 runtime/         dev mode、session namespace、前端兼容适配
 infrastructure/  app 生命周期、数据库池、模型、CORS、静态资源
 ```
@@ -125,7 +125,7 @@ start
 
 - `guest` 只能做受限状态查询和公开知识库查询，不能生成报告、工单或根因诊断。
 - `engineer` 在授权设备和数据表范围内诊断、报告和创建待派单工单。
-- `admin` 可访问全部业务表、报告和管理员 PDF 能力。
+- `admin` 可访问全部业务表、报告和管理员知识文件能力。
 
 ## 工具与外部依赖
 
@@ -142,7 +142,7 @@ start
 - OpenAI-compatible LLM：请求理解、SQL 规划 fallback、分析和最终回答。
 - Ollama / FAISS：PDF 知识库。
 - PostgreSQL：可选 diagnosis artifact backend。
-- 本地文件系统：报告、artifact、用户文件、历史索引、PDF registry、工单 mock、审计和 trace。
+- 本地文件系统：报告、artifact、用户文件、历史索引、知识文件 registry、工单 mock、审计和 trace。
 
 SQL 当前只执行可安全重写的单表只读查询，白名单表为 `real_data_01`、`real_data_02`、`real_data_03`、`device_alarm`、`device_metric`、`device_fault_data`、`fault_records`。
 
@@ -203,3 +203,4 @@ artifact 支撑这些续问：
 详细后端说明见 [fault_diagnosis/README.md](../fault_diagnosis/README.md)。
 
 详细 Agent 说明见 [fault_diagnosis/single_agent/README.md](../fault_diagnosis/single_agent/README.md)。
+

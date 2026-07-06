@@ -1,0 +1,6 @@
+# Optional OCR dependencies for administrator knowledge-file uploads.
+# Install paddlepaddle separately for your CPU/GPU platform before paddleocr.
+pymupdf==1.26.6
+pillow==12.0.0
+opencv-python-headless==4.12.0.88
+paddleocr==3.3.2

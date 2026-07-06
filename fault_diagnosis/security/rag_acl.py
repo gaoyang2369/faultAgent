@@ -1,4 +1,4 @@
-"""Post-retrieval document filtering before knowledge enters model context."""
+﻿"""Post-retrieval document filtering before knowledge enters model context."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def _metadata(document: Any) -> dict[str, Any]:
 def document_is_visible(document: Any, auth: AuthContext) -> bool:
     metadata = _metadata(document)
     source_type = str(metadata.get("source_type") or "knowledge_base")
-    default_visibility = "internal" if source_type == "uploaded_pdf" else "public"
+    default_visibility = "internal" if source_type == "uploaded_file" else "public"
     visibility = str(metadata.get("visibility") or default_visibility).strip().lower()
     allowed_visibility = set(auth.kb_scopes or KB_VISIBILITY_BY_ROLE[auth.role])
     if visibility not in allowed_visibility:
@@ -53,3 +53,4 @@ def document_is_visible(document: Any, auth: AuthContext) -> bool:
 def filter_kb_documents(docs: list[Any], *, auth: AuthContext, decision: Any = None) -> list[Any]:
     del decision
     return [document for document in docs if document_is_visible(document, auth)]
+

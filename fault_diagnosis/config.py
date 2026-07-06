@@ -1,4 +1,4 @@
-"""故障诊断 Agent 系统的集中配置模块。
+﻿"""故障诊断 Agent 系统的集中配置模块。
 
 所有硬编码值集中于此。非敏感配置使用与原始硬编码一致的默认值，
 敏感配置（数据库密码、API 密钥）仅从 .env 文件加载。
@@ -214,16 +214,14 @@ ADMIN_UPLOAD_DIR = _resolve_project_path(
 )
 ADMIN_PDF_MAX_FILE_SIZE = int(os.getenv("ADMIN_PDF_MAX_FILE_SIZE", str(50 * 1024 * 1024)))
 
-# === PDF / OCR Lightweight Pipeline ===
+# === Uploaded document / OCR pipeline ===
 PDF_TEXT_EXTRACT_BACKEND = _env_choice("PDF_TEXT_EXTRACT_BACKEND", "auto", {"auto", "pypdf_text"})
-MEDICINE_OCR_BACKEND = _env_choice("MEDICINE_OCR_BACKEND", "auto", {"auto", "pypdf_text", "medicine_ocr_local"})
-MEDICINE_OCR_ENABLE_HEAVY_MODEL = _env_bool("MEDICINE_OCR_ENABLE_HEAVY_MODEL", False)
-MEDICINE_OCR_MODEL_DIR = _resolve_optional_project_path(os.getenv("MEDICINE_OCR_MODEL_DIR", ""))
-MEDICINE_OCR_DEVICE = os.getenv("MEDICINE_OCR_DEVICE", "auto").strip().lower() or "auto"
-MEDICINE_OCR_TIMEOUT_SECONDS = int(os.getenv("MEDICINE_OCR_TIMEOUT_SECONDS", "300"))
-MEDICINE_OCR_MAX_PAGES = max(1, int(os.getenv("MEDICINE_OCR_MAX_PAGES", "1")))
-MEDICINE_OCR_RENDER_DPI = max(72, int(os.getenv("MEDICINE_OCR_RENDER_DPI", "120")))
+DOCUMENT_OCR_BACKEND = os.getenv("DOCUMENT_OCR_BACKEND", "auto").strip().lower() or "auto"
+DOCUMENT_OCR_LANG = os.getenv("DOCUMENT_OCR_LANG", "ch").strip() or "ch"
+DOCUMENT_OCR_MAX_PAGES = max(1, int(os.getenv("DOCUMENT_OCR_MAX_PAGES", "20")))
+DOCUMENT_OCR_RENDER_DPI = max(72, int(os.getenv("DOCUMENT_OCR_RENDER_DPI", "180")))
 PDF_TEXT_MIN_CHARS = max(1, int(os.getenv("PDF_TEXT_MIN_CHARS", "100")))
 PDF_TEXT_PREVIEW_CHARS = max(200, int(os.getenv("PDF_TEXT_PREVIEW_CHARS", "4000")))
-UPLOADED_PDF_KB_ENABLE_VECTOR_INDEX = _env_bool("UPLOADED_PDF_KB_ENABLE_VECTOR_INDEX", False)
-UPLOADED_PDF_KB_VECTOR_TIMEOUT_SECONDS = max(1, int(os.getenv("UPLOADED_PDF_KB_VECTOR_TIMEOUT_SECONDS", "8")))
+UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX = _env_bool("UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX", True)
+UPLOADED_FILE_KB_VECTOR_TIMEOUT_SECONDS = max(1, int(os.getenv("UPLOADED_FILE_KB_VECTOR_TIMEOUT_SECONDS", "8")))
+

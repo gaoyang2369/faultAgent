@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useDark, useToggle } from '@vueuse/core'
 import { SunIcon, MoonIcon, CloudArrowUpIcon } from '@heroicons/vue/24/outline'
@@ -547,7 +547,7 @@ const canUploadFile = computed(() => {
         <button
           v-if="canUploadFile"
           class="nav-action-btn upload-nav-btn"
-          title="PDF 上传登记"
+          title="知识文件上传登记"
           @click="openUploadDialog"
         >
           <CloudArrowUpIcon class="nav-button-icon" />
@@ -986,3 +986,4 @@ body {
   }
 }
 </style>
+

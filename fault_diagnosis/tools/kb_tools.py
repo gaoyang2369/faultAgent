@@ -1,4 +1,4 @@
-"""知识库检索工具。"""
+﻿"""知识库检索工具。"""
 
 from __future__ import annotations
 
@@ -199,9 +199,9 @@ def _format_doc_result(doc) -> str:
     metadata = getattr(doc, "metadata", {}) or {}
     source_type = metadata.get("source_type", "knowledge_base")
     file_name = metadata.get("file_name", "")
-    file_id = metadata.get("file_id") or metadata.get("uploaded_pdf_id") or ""
+    file_id = metadata.get("file_id") or metadata.get("uploaded_file_id") or ""
     extract_backend = metadata.get("extract_backend") or metadata.get("ocr_backend") or ""
-    source_label = "上传PDF知识库" if source_type == "uploaded_pdf" else "基础PDF知识库"
+    source_label = "上传文件知识库" if source_type == "uploaded_file" else "基础PDF知识库"
     page_label = metadata.get("page", "未知")
     extra_lines = [f"来源：{source_label}"]
     if file_name:
@@ -252,15 +252,15 @@ def query_knowledge_base(query: str) -> str:
         uploaded_error = ""
         has_base_index = has_knowledge_base_index()
         try:
-            from ..knowledge.uploaded_pdf_kb import (
-                has_uploaded_pdf_corpus,
-                has_uploaded_pdf_index,
-                load_uploaded_pdf_retriever,
-                query_uploaded_pdf_corpus,
+            from ..knowledge.uploaded_file_kb import (
+                has_uploaded_file_corpus,
+                has_uploaded_file_index,
+                load_uploaded_file_retriever,
+                query_uploaded_file_corpus,
             )
 
-            has_uploaded_index = has_uploaded_pdf_index()
-            has_uploaded_corpus = has_uploaded_pdf_corpus()
+            has_uploaded_index = has_uploaded_file_index()
+            has_uploaded_corpus = has_uploaded_file_corpus()
         except Exception:
             has_uploaded_index = False
             has_uploaded_corpus = False
@@ -290,17 +290,18 @@ def query_knowledge_base(query: str) -> str:
 
         if has_uploaded_index:
             try:
-                uploaded_retriever = load_uploaded_pdf_retriever(timeout_seconds=timeout_seconds)
+                uploaded_retriever = load_uploaded_file_retriever(timeout_seconds=timeout_seconds)
                 if uploaded_retriever is not None:
                     uploaded_docs = _invoke_retriever_with_timeout(uploaded_retriever, query, timeout_seconds)
                 else:
-                    uploaded_error = "上传 PDF 知识库索引存在但加载失败。"
+                    uploaded_error = "上传文件知识库索引存在但加载失败。"
             except TimeoutError:
-                uploaded_error = f"超时：上传 PDF 知识库检索超过 {timeout_seconds}s 未返回，请稍后重试。"
+                uploaded_error = f"超时：上传文件知识库检索超过 {timeout_seconds}s 未返回，请稍后重试。"
             except Exception as e:
-                uploaded_error = f"上传 PDF 知识库检索失败：{e}"
-        if has_uploaded_corpus and not uploaded_docs and not base_docs:
-            uploaded_docs = query_uploaded_pdf_corpus(query, limit=3)
+                uploaded_error = f"上传文件知识库检索失败：{e}"
+        if has_uploaded_corpus:
+            corpus_docs = query_uploaded_file_corpus(query, limit=3)
+            uploaded_docs = list(uploaded_docs) + list(corpus_docs)
 
         combined = []
         seen_keys = set()
@@ -339,10 +340,11 @@ def query_knowledge_base(query: str) -> str:
                 file_name = doc.get("file_name", "")
                 file_id = doc.get("file_id", "")
                 rendered.append(
-                    "来源：上传PDF知识库\n"
+                    "来源：上传文件知识库\n"
                     f"来源文件：{doc.get('file_name', '')}\n"
                     f"file_id：{doc.get('file_id', '')}\n"
-                    f"source_type：{doc.get('source_type', 'uploaded_pdf')}\n"
+                    f"source_type：{doc.get('source_type', 'uploaded_file')}\n"
+                    f"mime_type：{doc.get('mime_type', '')}\n"
                     f"extract_backend：{doc.get('extract_backend') or doc.get('ocr_backend', '')}\n"
                     f"corrected：{'true' if doc.get('corrected') else 'false'}\n"
                     f"correction_source：{doc.get('correction_source', '')}\n"
@@ -356,3 +358,4 @@ def query_knowledge_base(query: str) -> str:
         return "\n\n".join(rendered)
     except ImportError:
         return "错误：知识库模块未找到"
+

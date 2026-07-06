@@ -1,4 +1,4 @@
-# 工业设备故障诊断专家系统
+﻿# 工业设备故障诊断专家系统
 
 这是一个面向 DCMA 工业设备的故障诊断 Agent 项目。当前后端已经收敛为限制型单 Agent 主链路：受控地查询设备数据、检索 PDF 知识库、形成诊断结论，并按需生成可视化 HTML 报告。
 
@@ -22,7 +22,7 @@ Vue 3 frontend
 - PDF 知识库：基于 FAISS/Ollama embeddings 查询设备手册和故障码资料。
 - 可视化 HTML 报告：通过 `save_report` 保存到私有报告目录，并经受保护的 `/reports/{filename}` 访问。
 - 会话隔离：服务端 session cookie 管理 thread 归属，忽略不可信的前端身份参数。
-- 管理员 PDF：支持上传 PDF、OCR/解析、校正、归档到上传知识库。
+- 管理员知识文件：支持上传知识文件/图片、文本抽取或本地 OCR、Markdown 校对、归档到上传知识库。
 
 ## 目录结构
 
@@ -41,7 +41,6 @@ Vue 3 frontend
 │   ├── repositories/       # 文件/索引仓储
 │   └── infrastructure/     # lifespan、CORS、模型、数据库池
 ├── agent_fronted/          # Vue 3 前端
-├── medicineOCR/            # OCR 辅助脚本与独立依赖
 ├── pdfs/                   # 知识库 PDF 源文档
 ├── faiss_db/               # FAISS 索引
 ├── docs/                   # 当前态架构与 API/SSE 契约
@@ -157,7 +156,7 @@ python rebuild_kb.py --incremental --no-force-rebuild
 | `/chat/stop` | POST | 停止当前会话中的活跃流 |
 | `/agent/chat` | POST | 语音网关兼容 JSON 接口 |
 | `/ai/history/{type}` | GET | 当前 session 历史列表 |
-| `/admin/pdfs` | GET/POST | 管理员 PDF 列表/上传 |
+| `/admin/knowledge-files` | GET/POST | 管理员知识文件 列表/上传 |
 | `/health/dependencies` | GET | 依赖健康检查 |
 | `/reports/{filename}` | GET | 受保护的报告访问 |
 
@@ -188,3 +187,4 @@ scripts/auth_acceptance_test.sh
 ```
 
 如需在非 `LOCAL_DEV_MODE` 的开发进程中单独开放开发身份接口，可设置 `ENABLE_DEV_AUTH=true`。`POST /auth/dev-login` 仅在这两个开关之一启用且 `APP_ENV` 不是生产环境时可用；生产环境固定返回 404。
+

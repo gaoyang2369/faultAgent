@@ -1,10 +1,11 @@
-"""管理员 PDF 上传记录的轻量运行态存储。"""
+﻿"""管理员知识文件 上传记录的轻量运行态存储。"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -14,18 +15,46 @@ from ..config import ADMIN_PDF_MAX_FILE_SIZE, ADMIN_UPLOAD_DIR
 
 
 _FILES_DIR = os.path.join(ADMIN_UPLOAD_DIR, "files")
+_RENDERED_PAGES_DIR = os.path.join(ADMIN_UPLOAD_DIR, "rendered_pages")
+_PREPROCESSED_DIR = os.path.join(ADMIN_UPLOAD_DIR, "preprocessed")
 _OCR_RESULTS_DIR = os.path.join(ADMIN_UPLOAD_DIR, "ocr_results")
 _STRUCTURED_RESULTS_DIR = os.path.join(ADMIN_UPLOAD_DIR, "structured_results")
 _KB_DOCS_DIR = os.path.join(ADMIN_UPLOAD_DIR, "kb_docs")
+_REVIEWED_DOCS_DIR = os.path.join(ADMIN_UPLOAD_DIR, "reviewed_docs")
 _CORRECTIONS_DIR = os.path.join(ADMIN_UPLOAD_DIR, "corrections")
 _RECORDS_FILE = os.path.join(ADMIN_UPLOAD_DIR, "records.json")
 _STORE_LOCK = threading.Lock()
-_TERMINAL_OCR_STATUSES = {"text_extracted", "needs_heavy_ocr", "ocr_model_not_configured", "ocr_failed", "failed"}
-_TERMINAL_KB_STATUSES = {"succeeded", "failed", "skipped"}
+_SUPPORTED_UPLOAD_TYPES = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+_TERMINAL_OCR_STATUSES = {
+    "needs_review",
+    "reviewed",
+    "indexed",
+    "text_extracted",
+    "needs_heavy_ocr",
+    "ocr_model_not_configured",
+    "ocr_failed",
+    "failed",
+}
+_TERMINAL_KB_STATUSES = {"succeeded", "indexed", "failed", "skipped"}
 
 
 def _ensure_store_ready() -> None:
-    for path in (_FILES_DIR, _OCR_RESULTS_DIR, _STRUCTURED_RESULTS_DIR, _KB_DOCS_DIR, _CORRECTIONS_DIR):
+    for path in (
+        _FILES_DIR,
+        _RENDERED_PAGES_DIR,
+        _PREPROCESSED_DIR,
+        _OCR_RESULTS_DIR,
+        _STRUCTURED_RESULTS_DIR,
+        _KB_DOCS_DIR,
+        _REVIEWED_DOCS_DIR,
+        _CORRECTIONS_DIR,
+    ):
         os.makedirs(path, exist_ok=True)
 
 
@@ -58,7 +87,7 @@ def _write_records_unlocked(records: list[dict]) -> None:
 
 
 def _normalize_file_name(file_name: str) -> str:
-    return Path(file_name or "upload.pdf").name.strip() or "upload.pdf"
+    return Path(file_name or "upload.bin").name.strip() or "upload.bin"
 
 
 def _normalize_content_type(content_type: str | None) -> str:
@@ -71,17 +100,17 @@ def _derive_agent_ingest_status(record: dict) -> str:
     ocr_status = (record.get("ocr_status") or "").strip()
     if _correction_needs_reingest(record):
         return "stale"
-    if kb_status == "succeeded":
+    if kb_status in {"succeeded", "indexed"}:
         return "completed"
-    if kb_status == "processing":
+    if kb_status in {"processing", "indexing"}:
         return "processing"
     if kb_status == "failed":
         return "failed"
     if ocr_status in {"needs_heavy_ocr", "ocr_model_not_configured"}:
         return ocr_status
-    if ocr_status == "text_extracted":
+    if ocr_status in {"needs_review", "reviewed", "text_extracted"}:
         return "pending"
-    if ocr_status in {"extracting_text", "processing"}:
+    if ocr_status in {"extracting", "extracting_text", "ocr_processing", "processing"}:
         return "extracting_text"
     return "pending"
 
@@ -91,7 +120,7 @@ def _last_error(record: dict) -> str:
 
 
 def _has_correction(record: dict) -> bool:
-    return bool(record.get("correction_file") or record.get("corrected_at"))
+    return bool(record.get("reviewed_file") or record.get("correction_file") or record.get("corrected_at"))
 
 
 def _correction_needs_reingest(record: dict) -> bool:
@@ -101,11 +130,11 @@ def _correction_needs_reingest(record: dict) -> bool:
     ingested_at = int(record.get("correction_ingested_at") or 0)
     if corrected_at and corrected_at > ingested_at:
         return True
-    return (record.get("kb_ingest_status") or "").strip() != "succeeded"
+    return (record.get("kb_ingest_status") or "").strip() not in {"succeeded", "indexed"}
 
 
 def _agent_queryable(record: dict) -> bool:
-    return (record.get("kb_ingest_status") or "").strip() == "succeeded" and not _correction_needs_reingest(record)
+    return (record.get("kb_ingest_status") or "").strip() in {"succeeded", "indexed"} and not _correction_needs_reingest(record)
 
 
 def _status_node(
@@ -136,12 +165,12 @@ def _build_status_timeline(record: dict) -> list[dict]:
     ocr_error = record.get("ocr_error")
     kb_error = record.get("kb_error")
 
-    text_done = ocr_status in {"text_extracted", "succeeded"}
-    extracting = ocr_status in {"uploaded", "extracting_text", "processing", ""}
+    text_done = ocr_status in {"needs_review", "reviewed", "text_extracted", "succeeded", "indexed"}
+    extracting = ocr_status in {"uploaded", "extracting", "extracting_text", "ocr_processing", "processing", ""}
     needs_ocr = ocr_status in {"needs_heavy_ocr", "ocr_model_not_configured"}
     ocr_failed = ocr_status in {"ocr_failed", "failed"}
-    kb_processing = kb_status == "processing"
-    kb_done = kb_status == "succeeded"
+    kb_processing = kb_status in {"processing", "indexing"}
+    kb_done = kb_status in {"succeeded", "indexed"}
     kb_failed = kb_status == "failed"
     kb_waiting = text_done and kb_status in {"pending", ""}
     has_correction = _has_correction(record)
@@ -202,9 +231,9 @@ def _build_status_timeline(record: dict) -> list[dict]:
                 "needs_heavy_ocr",
                 "需要重型 OCR",
                 (
-                    "该 PDF 可能是扫描件，需要重型 OCR 后才能读取正文。"
+                    "该文件 可能是扫描件，需要重型 OCR 后才能读取正文。"
                     if ocr_status == "needs_heavy_ocr"
-                    else "该 PDF 可能是扫描件，当前未启用重型 OCR 模型。"
+                    else "该文件 可能是扫描件，当前未启用重型 OCR 模型。"
                 ),
                 "current",
                 timestamp=processed_at or updated_at,
@@ -257,7 +286,7 @@ def _build_status_timeline(record: dict) -> list[dict]:
         _status_node(
             "kb_ingesting",
             "知识库归档中",
-            "正在将该 PDF 正文写入上传知识库。" if kb_processing else "尚未开始归档。",
+            "正在将该文件 正文写入上传知识库。" if kb_processing else "尚未开始归档。",
             "current" if kb_processing else ("done" if kb_done else "failed" if kb_failed else "pending"),
             timestamp=updated_at if kb_processing or kb_failed else None,
             error=kb_error if kb_failed else None,
@@ -269,9 +298,9 @@ def _build_status_timeline(record: dict) -> list[dict]:
             _status_node(
                 "kb_failed",
                 "重新归档失败" if has_correction else "归档失败",
-                "校正内容重新归档失败，Agent 暂不可查询该 PDF。"
+                "校正内容重新归档失败，Agent 暂不可查询该文件。"
                 if has_correction
-                else "知识库归档失败，Agent 暂不可查询该 PDF。",
+                else "知识库归档失败，Agent 暂不可查询该文件。",
                 "failed",
                 timestamp=processed_at or updated_at,
                 error=kb_error,
@@ -285,9 +314,9 @@ def _build_status_timeline(record: dict) -> list[dict]:
             (
                 "校正内容已归档到上传知识库。"
                 if has_correction and kb_done and not correction_stale
-                else "该 PDF 已归档到上传知识库。"
+                else "该文件 已归档到上传知识库。"
                 if kb_done
-                else "该 PDF 尚未归档到知识库。"
+                else "该文件 尚未归档到知识库。"
             ),
             "done" if kb_done and not correction_stale else ("failed" if kb_failed else "pending"),
             timestamp=correction_ingested_at if has_correction and kb_done else processed_at if kb_done else None,
@@ -299,11 +328,11 @@ def _build_status_timeline(record: dict) -> list[dict]:
             "agent_queryable",
             "Agent 可查询",
             (
-                "已归档，Agent 可以基于校正后的 PDF 回答问题。"
+                "已归档，Agent 可以基于校正后的文件内容 回答问题。"
                 if _agent_queryable(record) and has_correction
-                else "已归档，Agent 可以基于该 PDF 回答问题。"
+                else "已归档，Agent 可以基于该文件 回答问题。"
                 if _agent_queryable(record)
-                else "Agent 还不能基于该 PDF 回答问题。"
+                else "Agent 还不能基于该文件 回答问题。"
             ),
             "done" if _agent_queryable(record) else ("failed" if kb_failed else "pending"),
             timestamp=correction_ingested_at if has_correction and _agent_queryable(record) else processed_at if _agent_queryable(record) else None,
@@ -318,14 +347,20 @@ def _default_status_label(record: dict) -> str:
     kb_status = (record.get("kb_ingest_status") or "").strip()
     if _correction_needs_reingest(record):
         return "已保存校正，等待重新归档"
-    if _has_correction(record) and kb_status == "succeeded":
-        return "校正内容已归档，Agent 可查询"
-    if kb_status == "succeeded":
+    if _has_correction(record) and kb_status in {"succeeded", "indexed"}:
+        return "确认内容已归档，Agent 可查询"
+    if kb_status in {"succeeded", "indexed"}:
         return "已归档知识库，Agent 可查询"
     if kb_status == "failed":
         return "知识库归档失败"
-    if kb_status == "processing":
+    if kb_status in {"processing", "indexing"}:
         return "知识库归档中"
+    if ocr_status == "reviewed":
+        return "已确认内容，等待归档知识库"
+    if ocr_status == "needs_review":
+        return "已识别文本，等待管理员校对"
+    if ocr_status in {"extracting", "ocr_processing"}:
+        return "OCR 识别中"
     if ocr_status == "extracting_text":
         return "文本提取中"
     if ocr_status == "text_extracted":
@@ -344,6 +379,8 @@ def _default_status_label(record: dict) -> str:
 def _normalize_record(record: dict) -> dict:
     normalized = dict(record)
     normalized.setdefault("file_type", "application/pdf")
+    normalized.setdefault("mime_type", normalized.get("file_type", "application/pdf"))
+    normalized.setdefault("file_kind", "pdf" if normalized.get("file_type") == "application/pdf" else "image")
     normalized.setdefault("ocr_status", "uploaded")
     normalized.setdefault("ocr_error", None)
     normalized.setdefault("ocr_backend", None)
@@ -354,6 +391,7 @@ def _normalize_record(record: dict) -> dict:
     normalized.setdefault("kb_document_id", None)
     normalized.setdefault("kb_index_mode", "")
     normalized.setdefault("kb_source_file", None)
+    normalized.setdefault("reviewed_file", normalized.get("correction_file"))
     normalized.setdefault("correction_file", None)
     normalized.setdefault("corrected_at", None)
     normalized.setdefault("correction_source", None)
@@ -388,7 +426,7 @@ def _build_public_record(record: dict, include_details: bool = False) -> dict:
         "file_type": normalized["file_type"],
         "uploaded_at": normalized["uploaded_at"],
         "status_label": normalized.get("status_label") or _default_status_label(normalized),
-        "file_url": f"/admin/pdfs/{normalized['id']}/file",
+        "file_url": f"/admin/knowledge-files/{normalized['id']}/file",
         "ocr_status": normalized["ocr_status"],
         "ocr_error": normalized["ocr_error"],
         "ocr_backend": normalized["ocr_backend"],
@@ -399,7 +437,7 @@ def _build_public_record(record: dict, include_details: bool = False) -> dict:
         "agent_ingest_status": normalized["agent_ingest_status"],
         "agent_query_ready": _agent_queryable(normalized),
         "agent_queryable": _agent_queryable(normalized),
-        "knowledge_source_type": "uploaded_pdf",
+        "knowledge_source_type": "uploaded_file",
         "upload_status": "uploaded",
         "extract_status": normalized["ocr_status"],
         "last_error": _last_error(normalized),
@@ -435,9 +473,10 @@ def _build_public_record(record: dict, include_details: bool = False) -> dict:
             kb_text = ""
         payload["kb_text"] = kb_text
         payload["kb_markdown"] = kb_text
-        correction_file = normalized.get("correction_file")
+        correction_file = normalized.get("reviewed_file") or normalized.get("correction_file")
         if correction_file:
-            correction_path = _controlled_path("corrections", correction_file)
+            folder = "reviewed_docs" if normalized.get("reviewed_file") else "corrections"
+            correction_path = _controlled_path(folder, correction_file)
             try:
                 with open(correction_path, "r", encoding="utf-8") as handle:
                     payload["correction_text"] = handle.read()
@@ -448,7 +487,7 @@ def _build_public_record(record: dict, include_details: bool = False) -> dict:
         payload["next_action"] = (
             "请重新执行知识库归档，Agent 才会使用校正后的内容。"
             if _correction_needs_reingest(normalized)
-            else "当前 PDF 可用于 Agent 查询。"
+            else "当前文件可用于 Agent 查询。"
             if _agent_queryable(normalized)
             else "请等待文本提取完成后执行知识库归档。"
         )
@@ -463,33 +502,38 @@ def validate_pdf_upload(
 ) -> tuple[str, str]:
     normalized_name = _normalize_file_name(file_name)
     normalized_type = _normalize_content_type(content_type)
+    suffix = Path(normalized_name).suffix.lower()
 
-    if not normalized_name.lower().endswith(".pdf"):
-        raise ValueError("仅支持上传 PDF 文件。")
-    if normalized_type not in {"application/pdf", "application/octet-stream"}:
-        raise ValueError("仅支持上传 PDF 文件。")
+    if suffix not in _SUPPORTED_UPLOAD_TYPES:
+        raise ValueError("仅支持上传文件、PNG、JPG、JPEG、WEBP 文件。")
+    expected_type = _SUPPORTED_UPLOAD_TYPES[suffix]
+    allowed_types = {expected_type, "application/octet-stream"}
+    if suffix in {".jpg", ".jpeg"}:
+        allowed_types.add("image/jpg")
+    if normalized_type not in allowed_types:
+        raise ValueError("仅支持上传文件、PNG、JPG、JPEG、WEBP 文件。")
     if content_size <= 0:
         raise ValueError("上传文件为空。")
     if content_size > ADMIN_PDF_MAX_FILE_SIZE:
-        raise ValueError("PDF 文件过大，单文件最多 50MB。")
-    if content_prefix is not None and not content_prefix.lstrip().startswith(b"%PDF-"):
+        raise ValueError("文件过大，单文件最多 50MB。")
+    if suffix == ".pdf" and content_prefix is not None and not content_prefix.lstrip().startswith(b"%PDF-"):
         raise ValueError("文件头校验失败，仅支持上传标准 PDF 文件。")
 
-    return normalized_name, normalized_type
+    return normalized_name, expected_type if normalized_type == "application/octet-stream" else normalized_type
 
 
-def list_pdf_records_raw() -> list[dict]:
+def list_file_records_raw() -> list[dict]:
     with _STORE_LOCK:
         records = [_normalize_record(record) for record in _read_records_unlocked()]
     records.sort(key=lambda item: item.get("uploaded_at", 0), reverse=True)
     return records
 
 
-def list_pdf_records() -> list[dict]:
-    return [_build_public_record(record) for record in list_pdf_records_raw()]
+def list_file_records() -> list[dict]:
+    return [_build_public_record(record) for record in list_file_records_raw()]
 
 
-def save_pdf_record(file_name: str, content_type: str | None, content: bytes) -> tuple[dict, bool]:
+def save_file_record(file_name: str, content_type: str | None, content: bytes) -> tuple[dict, bool]:
     normalized_name, normalized_type = validate_pdf_upload(
         file_name,
         content_type,
@@ -511,7 +555,8 @@ def save_pdf_record(file_name: str, content_type: str | None, content: bytes) ->
                 return _build_public_record(existing), True
 
         record_id = uuid4().hex
-        stored_name = f"{record_id}.pdf"
+        suffix = Path(normalized_name).suffix.lower()
+        stored_name = f"{record_id}{suffix}"
         stored_path = _controlled_path("files", stored_name)
         with open(stored_path, "wb") as handle:
             handle.write(content)
@@ -521,8 +566,10 @@ def save_pdf_record(file_name: str, content_type: str | None, content: bytes) ->
             "file_name": normalized_name,
             "file_size": len(content),
             "file_type": normalized_type,
+            "mime_type": normalized_type,
+            "file_kind": "pdf" if suffix == ".pdf" else "image",
             "uploaded_at": int(time.time() * 1000),
-            "status_label": "已上传，等待文本提取",
+            "status_label": "已上传，等待识别",
             "stored_name": stored_name,
             "file_hash": file_hash,
             "ocr_status": "uploaded",
@@ -536,6 +583,7 @@ def save_pdf_record(file_name: str, content_type: str | None, content: bytes) ->
             "kb_index_mode": "",
             "agent_ingest_status": "pending",
             "kb_source_file": None,
+            "reviewed_file": None,
             "correction_file": None,
             "corrected_at": None,
             "correction_source": None,
@@ -551,20 +599,20 @@ def save_pdf_record(file_name: str, content_type: str | None, content: bytes) ->
         return _build_public_record(record), False
 
 
-def get_pdf_record(record_id: str) -> dict | None:
-    records = list_pdf_records_raw()
+def get_file_record(record_id: str) -> dict | None:
+    records = list_file_records_raw()
     for record in records:
         if record.get("id") == record_id:
             return record
     return None
 
 
-def get_pdf_record_public(record_id: str) -> dict | None:
-    record = get_pdf_record(record_id)
+def get_file_record_public(record_id: str) -> dict | None:
+    record = get_file_record(record_id)
     return _build_public_record(record, include_details=True) if record else None
 
 
-def update_pdf_record_fields(record_id: str, **fields) -> dict | None:
+def update_file_record_fields(record_id: str, **fields) -> dict | None:
     updated_record: dict | None = None
     with _STORE_LOCK:
         records = _read_records_unlocked()
@@ -585,7 +633,7 @@ def update_pdf_record_fields(record_id: str, **fields) -> dict | None:
     return updated_record
 
 
-def save_pdf_processing_artifacts(
+def save_file_processing_artifacts(
     record_id: str,
     *,
     raw_text: str,
@@ -608,7 +656,7 @@ def save_pdf_processing_artifacts(
         with open(_controlled_path("kb_docs", kb_source_file), "w", encoding="utf-8") as handle:
             handle.write(kb_markdown)
 
-    return update_pdf_record_fields(
+    return update_file_record_fields(
         record_id,
         ocr_result_file=ocr_result_file,
         structured_result_file=structured_result_file,
@@ -617,12 +665,12 @@ def save_pdf_processing_artifacts(
     )
 
 
-def save_pdf_user_correction(record_id: str, corrected_text: str) -> dict | None:
+def save_file_user_correction(record_id: str, corrected_text: str) -> dict | None:
     normalized_text = (corrected_text or "").strip()
     if not normalized_text:
         raise ValueError("校正内容不能为空。")
 
-    record = get_pdf_record(record_id)
+    record = get_file_record(record_id)
     if not record:
         return None
 
@@ -630,7 +678,7 @@ def save_pdf_user_correction(record_id: str, corrected_text: str) -> dict | None
     corrected_at = int(time.time() * 1000)
     correction_version = int(record.get("correction_version") or 0) + 1
     _ensure_store_ready()
-    with open(_controlled_path("corrections", correction_file), "w", encoding="utf-8") as handle:
+    with open(_controlled_path("reviewed_docs", correction_file), "w", encoding="utf-8") as handle:
         handle.write(normalized_text)
 
     structured_result_file = record.get("structured_result_file")
@@ -646,11 +694,13 @@ def save_pdf_user_correction(record_id: str, corrected_text: str) -> dict | None
         with open(structured_path, "w", encoding="utf-8") as handle:
             json.dump(structured_payload, handle, ensure_ascii=False, indent=2)
 
-    return update_pdf_record_fields(
+    return update_file_record_fields(
         record_id,
+        ocr_status="reviewed",
+        reviewed_file=correction_file,
         correction_file=correction_file,
         corrected_at=corrected_at,
-        correction_source="user",
+        correction_source="admin_review",
         correction_version=correction_version,
         correction_preview=normalized_text[:4000],
         kb_ingest_status="pending",
@@ -658,12 +708,12 @@ def save_pdf_user_correction(record_id: str, corrected_text: str) -> dict | None
         kb_document_id=None,
         kb_index_mode="",
         correction_ingested_at=None,
-        status_label="已保存校正，等待重新归档",
+        status_label="已确认内容，等待知识库归档",
     )
 
 
-def get_pdf_file_path(record_id: str) -> tuple[str, dict] | None:
-    record = get_pdf_record(record_id)
+def get_uploaded_file_path(record_id: str) -> tuple[str, dict] | None:
+    record = get_file_record(record_id)
     if not record:
         return None
     stored_name = record.get("stored_name")
@@ -689,7 +739,7 @@ def _safe_remove(path: str | None) -> None:
             pass
 
 
-def delete_pdf_record(record_id: str) -> bool:
+def delete_file_record(record_id: str) -> bool:
     files_to_remove: list[str] = []
     deleted = False
 
@@ -704,6 +754,7 @@ def delete_pdf_record(record_id: str) -> bool:
                     ("ocr_results", "ocr_result_file"),
                     ("structured_results", "structured_result_file"),
                     ("kb_docs", "kb_source_file"),
+                    ("reviewed_docs", "reviewed_file"),
                     ("corrections", "correction_file"),
                 ):
                     file_name = str(record.get(field_name, "")).strip()
@@ -716,20 +767,10 @@ def delete_pdf_record(record_id: str) -> bool:
 
     for path in files_to_remove:
         _safe_remove(path)
+    for folder_name in ("rendered_pages", "preprocessed"):
+        folder_path = _controlled_path(folder_name, record_id)
+        if os.path.isdir(folder_path):
+            shutil.rmtree(folder_path, ignore_errors=True)
     return deleted
 
 
-def get_admin_pdf_repository():
-    """兼容入口：repository 已迁移到 `fault_diagnosis.repositories.admin_pdf_repository`。"""
-
-    from .admin_pdf_repository import get_admin_pdf_repository as _get_admin_pdf_repository
-
-    return _get_admin_pdf_repository()
-
-
-def __getattr__(name: str):
-    if name == "FileAdminPdfRepository":
-        from .admin_pdf_repository import FileAdminPdfRepository
-
-        return FileAdminPdfRepository
-    raise AttributeError(name)

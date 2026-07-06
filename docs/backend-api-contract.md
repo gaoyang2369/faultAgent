@@ -1,4 +1,4 @@
-# 后端 API 契约
+﻿# 后端 API 契约
 
 本文记录当前 FastAPI 后端对浏览器前端、语音网关和运维脚本暴露的 HTTP API。实现可以重构，但路径、方法、cookie 行为、权限边界和主要响应外壳不能在没有迁移方案的情况下改变。
 
@@ -85,17 +85,17 @@
 - `update` 不允许把状态改成派发或执行类状态；派发和执行需要独立审批系统。
 - 工程师只能操作授权设备范围内的工单；管理员可查看全部。
 
-## 管理员 PDF
+## 管理员知识文件
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 | --- | --- | --- | --- | --- |
-| `GET` | `/admin/pdfs` | 列出 PDF 上传记录 | admin cookie | `{ records: [...] }` |
-| `POST` | `/admin/pdfs` | 上传 PDF 并登记 | multipart: `file` | 新文件 201，重复文件 200 |
-| `GET` | `/admin/pdfs/{record_id}` | 获取单条记录详情 | admin cookie | record 对象 |
-| `GET` | `/admin/pdfs/{record_id}/file` | 内联读取原 PDF | admin cookie | `application/pdf` 文件 |
-| `POST` | `/admin/pdfs/{record_id}/ingest` | 归档到上传知识库 | admin cookie | `{ record, scheduled, already_ingested, message }` |
-| `PATCH` | `/admin/pdfs/{record_id}/correction` | 保存人工校正文本 | JSON: `corrected_text` 或 `correction_text` | `{ record, message, next_action }` |
-| `DELETE` | `/admin/pdfs/{record_id}` | 删除记录及文件 | admin cookie | `{ deleted: true, record_id }` |
+| `GET` | `/admin/knowledge-files` | 列出知识文件上传记录 | admin cookie | `{ records: [...] }` |
+| `POST` | `/admin/knowledge-files` | 上传知识文件并登记 | multipart: `file` | 新文件 201，重复文件 200 |
+| `GET` | `/admin/knowledge-files/{record_id}` | 获取单条记录详情 | admin cookie | record 对象 |
+| `GET` | `/admin/knowledge-files/{record_id}/file` | 内联读取原文件 | admin cookie | 原文件 MIME 类型 |
+| `POST` | `/admin/knowledge-files/{record_id}/ingest` | 归档到上传知识库 | admin cookie | `{ record, scheduled, already_ingested, message }` |
+| `PATCH` | `/admin/knowledge-files/{record_id}/correction` | 保存人工校正文本 | JSON: `corrected_text` 或 `correction_text` | `{ record, message, next_action }` |
+| `DELETE` | `/admin/knowledge-files/{record_id}` | 删除记录及文件 | admin cookie | `{ deleted: true, record_id }` |
 
 ## 治理快照与台账
 
@@ -124,3 +124,4 @@
 - `/reports/{filename}` 仍执行报告权限校验。
 - 历史、Todo、PDF 文件、工单读取继续执行 session/admin/resource 过滤。
 - SSE 事件字段满足 [sse-event-contract.md](./sse-event-contract.md)。
+

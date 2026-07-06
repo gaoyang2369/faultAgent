@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <el-dialog
     :model-value="modelValue"
     @update:model-value="emit('update:modelValue', $event)"
@@ -10,14 +10,14 @@
     <template #header>
       <div class="dialog-title">
         <span>管理员登录</span>
-        <small>用于测试 PDF 上传与管理链路</small>
+        <small>用于测试 知识文件上传与管理链路</small>
       </div>
     </template>
 
     <div class="auth-panel">
       <div v-if="isAdmin" class="identity-card success">
         <strong>{{ displayName }}</strong>
-        <p>当前已获得管理员身份，可直接进入 PDF 上传登记。</p>
+        <p>当前已获得管理员身份，可直接进入 知识文件上传登记。</p>
       </div>
 
       <template v-else>
@@ -56,7 +56,7 @@
           class="primary-btn"
           @click="emit('open-upload')"
         >
-          打开 PDF 上传
+          打开 知识文件上传
         </button>
         <button
           v-else
@@ -285,3 +285,4 @@ button:disabled {
   cursor: not-allowed;
 }
 </style>
+

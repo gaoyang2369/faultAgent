@@ -1,4 +1,4 @@
-"""管理员上传 PDF 的独立知识库索引。"""
+﻿"""管理员上传知识文件的独立知识库索引。"""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from ..repositories.admin_pdf_registry_storage import list_pdf_records_raw
+from ..repositories.admin_file_registry_storage import list_file_records_raw
 from ..config import (
     ADMIN_UPLOAD_DIR,
     KB_CHUNK_OVERLAP,
     KB_CHUNK_SIZE,
-    UPLOADED_PDF_KB_ENABLE_VECTOR_INDEX,
-    UPLOADED_PDF_KB_VECTOR_TIMEOUT_SECONDS,
+    UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX,
+    UPLOADED_FILE_KB_VECTOR_TIMEOUT_SECONDS,
 )
 from .base import (
     _assign_chunk_ids,
@@ -25,7 +25,7 @@ from .base import (
     _ingest_documents_with_retry,
 )
 
-_UPLOADED_KB_ROOT = os.path.join(ADMIN_UPLOAD_DIR, "uploaded_pdf_kb")
+_UPLOADED_KB_ROOT = os.path.join(ADMIN_UPLOAD_DIR, "uploaded_file_kb")
 _UPLOADED_KB_INDEX_DIR = os.path.join(_UPLOADED_KB_ROOT, "faiss")
 _UPLOADED_KB_META_FILE = os.path.join(_UPLOADED_KB_ROOT, "kb_meta.json")
 _UPLOADED_KB_CORPUS_FILE = os.path.join(_UPLOADED_KB_ROOT, "corpus.json")
@@ -35,15 +35,22 @@ def _ensure_parent_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
-def _clear_uploaded_pdf_index() -> None:
+def _clear_uploaded_file_index() -> None:
     if os.path.exists(_UPLOADED_KB_ROOT):
         shutil.rmtree(_UPLOADED_KB_ROOT, ignore_errors=True)
 
 
 def _record_kb_source_path(record: dict) -> str:
+    reviewed_file = str(record.get("reviewed_file", "")).strip()
+    if reviewed_file:
+        reviewed_path = os.path.join(ADMIN_UPLOAD_DIR, "reviewed_docs", reviewed_file)
+        if os.path.exists(reviewed_path):
+            return reviewed_path
     correction_file = str(record.get("correction_file", "")).strip()
     if correction_file:
-        correction_path = os.path.join(ADMIN_UPLOAD_DIR, "corrections", correction_file)
+        correction_path = os.path.join(ADMIN_UPLOAD_DIR, "reviewed_docs", correction_file)
+        if not os.path.exists(correction_path):
+            correction_path = os.path.join(ADMIN_UPLOAD_DIR, "corrections", correction_file)
         if os.path.exists(correction_path):
             return correction_path
     kb_source_file = record.get("kb_source_file", "")
@@ -51,16 +58,16 @@ def _record_kb_source_path(record: dict) -> str:
 
 
 def _record_is_corrected(record: dict) -> bool:
-    return bool(str(record.get("correction_file", "")).strip())
+    return bool(str(record.get("reviewed_file") or record.get("correction_file") or "").strip())
 
 
 def _active_kb_records(records: list[dict] | None = None) -> list[dict]:
-    source_records = records if records is not None else list_pdf_records_raw()
+    source_records = records if records is not None else list_file_records_raw()
     active_records: list[dict] = []
     for record in source_records:
-        if record.get("ocr_status") not in {"text_extracted", "succeeded"} and not _record_is_corrected(record):
+        if record.get("ocr_status") not in {"needs_review", "reviewed", "text_extracted", "succeeded", "indexed"} and not _record_is_corrected(record):
             continue
-        if record.get("kb_ingest_status") not in {"processing", "succeeded"}:
+        if record.get("kb_ingest_status") not in {"processing", "indexing", "succeeded", "indexed"}:
             continue
         kb_source_path = _record_kb_source_path(record)
         if not os.path.exists(kb_source_path):
@@ -69,18 +76,18 @@ def _active_kb_records(records: list[dict] | None = None) -> list[dict]:
     return active_records
 
 
-def has_uploaded_pdf_index() -> bool:
+def has_uploaded_file_index() -> bool:
     return os.path.exists(os.path.join(_UPLOADED_KB_INDEX_DIR, "index.faiss")) and os.path.exists(
         os.path.join(_UPLOADED_KB_INDEX_DIR, "index.pkl")
     )
 
 
-def has_uploaded_pdf_corpus() -> bool:
+def has_uploaded_file_corpus() -> bool:
     return os.path.exists(_UPLOADED_KB_CORPUS_FILE)
 
 
-def load_uploaded_pdf_vector_store(timeout_seconds: int | None = None):
-    if not has_uploaded_pdf_index():
+def load_uploaded_file_vector_store(timeout_seconds: int | None = None):
+    if not has_uploaded_file_index():
         return None
     embeddings_model = _get_cached_embeddings_model(
         _UPLOADED_KB_INDEX_DIR,
@@ -93,8 +100,8 @@ def load_uploaded_pdf_vector_store(timeout_seconds: int | None = None):
     )
 
 
-def load_uploaded_pdf_retriever(timeout_seconds: int | None = None):
-    vector_store = load_uploaded_pdf_vector_store(timeout_seconds=timeout_seconds)
+def load_uploaded_file_retriever(timeout_seconds: int | None = None):
+    vector_store = load_uploaded_file_vector_store(timeout_seconds=timeout_seconds)
     return vector_store.as_retriever(search_kwargs={"k": 3}) if vector_store is not None else None
 
 
@@ -116,7 +123,7 @@ def _write_corpus(active_records: list[dict], output_path: str) -> list[dict]:
             {
                 "id": record["id"],
                 "file_name": record.get("file_name", ""),
-                "source_type": "uploaded_pdf",
+                "source_type": "uploaded_file",
                 "visibility": str(record.get("visibility") or "internal"),
                 "allowed_roles": record.get("allowed_roles") or ["engineer", "admin"],
                 "allowed_systems": record.get("allowed_systems") or [],
@@ -124,7 +131,9 @@ def _write_corpus(active_records: list[dict], output_path: str) -> list[dict]:
                 "sensitivity": str(record.get("sensitivity") or "normal"),
                 "extract_backend": record.get("ocr_backend", ""),
                 "file_id": record["id"],
+                "mime_type": record.get("file_type") or record.get("mime_type", ""),
                 "ocr_backend": record.get("ocr_backend", ""),
+                "reviewed": corrected,
                 "corrected": corrected,
                 "correction_source": record.get("correction_source", "") if corrected else "",
                 "correction_version": record.get("correction_version", 0) if corrected else 0,
@@ -138,8 +147,8 @@ def _write_corpus(active_records: list[dict], output_path: str) -> list[dict]:
     return corpus
 
 
-def query_uploaded_pdf_corpus(query: str, limit: int = 3) -> list[dict]:
-    if not has_uploaded_pdf_corpus():
+def query_uploaded_file_corpus(query: str, limit: int = 3) -> list[dict]:
+    if not has_uploaded_file_corpus():
         return []
     try:
         with open(_UPLOADED_KB_CORPUS_FILE, "r", encoding="utf-8") as handle:
@@ -177,15 +186,17 @@ def query_uploaded_pdf_corpus(query: str, limit: int = 3) -> list[dict]:
                 "score": score,
                 "file_name": item.get("file_name", ""),
                 "preview": preview,
-                "source_type": item.get("source_type", "uploaded_pdf"),
+                "source_type": item.get("source_type", "uploaded_file"),
                 "visibility": item.get("visibility", "internal"),
                 "allowed_roles": item.get("allowed_roles") or ["engineer", "admin"],
                 "allowed_systems": item.get("allowed_systems") or [],
                 "allowed_asset_ids": item.get("allowed_asset_ids") or [],
                 "sensitivity": item.get("sensitivity", "normal"),
                 "file_id": item.get("file_id", ""),
+                "mime_type": item.get("mime_type", ""),
                 "extract_backend": item.get("extract_backend", ""),
                 "ocr_backend": item.get("ocr_backend", ""),
+                "reviewed": bool(item.get("reviewed", item.get("corrected", False))),
                 "corrected": bool(item.get("corrected", False)),
                 "correction_source": item.get("correction_source", ""),
                 "correction_version": item.get("correction_version", 0),
@@ -195,10 +206,10 @@ def query_uploaded_pdf_corpus(query: str, limit: int = 3) -> list[dict]:
     return scored[:limit]
 
 
-def rebuild_uploaded_pdf_knowledge_base(records: list[dict] | None = None) -> dict:
+def rebuild_uploaded_file_knowledge_base(records: list[dict] | None = None) -> dict:
     active_records = _active_kb_records(records)
     if not active_records:
-        _clear_uploaded_pdf_index()
+        _clear_uploaded_file_index()
         return {
             "record_count": 0,
             "chunk_count": 0,
@@ -220,17 +231,19 @@ def rebuild_uploaded_pdf_knowledge_base(records: list[dict] | None = None) -> di
                 page_content=content,
                 metadata={
                     "source": kb_source_path,
-                    "source_type": "uploaded_pdf",
+                    "source_type": "uploaded_file",
                     "visibility": str(record.get("visibility") or "internal"),
                     "allowed_roles": record.get("allowed_roles") or ["engineer", "admin"],
                     "allowed_systems": record.get("allowed_systems") or [],
                     "allowed_asset_ids": record.get("allowed_asset_ids") or [],
                     "sensitivity": str(record.get("sensitivity") or "normal"),
                     "extract_backend": record.get("ocr_backend", ""),
-                    "uploaded_pdf_id": record["id"],
+                    "uploaded_file_id": record["id"],
                     "file_id": record["id"],
+                    "mime_type": record.get("file_type") or record.get("mime_type", ""),
                     "ocr_backend": record.get("ocr_backend", ""),
                     "file_name": record.get("file_name", ""),
+                    "reviewed": corrected,
                     "corrected": corrected,
                     "correction_source": record.get("correction_source", "") if corrected else "",
                     "correction_version": record.get("correction_version", 0) if corrected else 0,
@@ -256,6 +269,8 @@ def rebuild_uploaded_pdf_knowledge_base(records: list[dict] | None = None) -> di
     )
     chunks = splitter.split_documents(documents)
     _assign_chunk_ids(chunks)
+    for chunk in chunks:
+        chunk.metadata["chunk_id"] = chunk.metadata.get("kb_chunk_id", "")
 
     os.makedirs(_UPLOADED_KB_ROOT, exist_ok=True)
     corpus = _write_corpus(active_records, _UPLOADED_KB_CORPUS_FILE)
@@ -268,18 +283,18 @@ def rebuild_uploaded_pdf_knowledge_base(records: list[dict] | None = None) -> di
     if os.path.exists(_UPLOADED_KB_INDEX_DIR):
         shutil.rmtree(_UPLOADED_KB_INDEX_DIR, ignore_errors=True)
 
-    if UPLOADED_PDF_KB_ENABLE_VECTOR_INDEX:
+    if UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX:
         os.makedirs(temp_root, exist_ok=True)
         temp_index_dir = os.path.join(temp_root, "faiss")
         os.makedirs(temp_index_dir, exist_ok=True)
         try:
             embeddings_model = _get_cached_embeddings_model(
                 temp_index_dir,
-                timeout_seconds=UPLOADED_PDF_KB_VECTOR_TIMEOUT_SECONDS,
+                timeout_seconds=UPLOADED_FILE_KB_VECTOR_TIMEOUT_SECONDS,
             )
             db = _ingest_documents_with_retry(None, chunks, embeddings_model)
             if db is None:
-                raise RuntimeError("上传 PDF 知识库构建失败。")
+                raise RuntimeError("上传文件知识库构建失败。")
             db.save_local(temp_index_dir)
             os.makedirs(_UPLOADED_KB_ROOT, exist_ok=True)
             shutil.move(temp_index_dir, _UPLOADED_KB_INDEX_DIR)
@@ -310,11 +325,11 @@ def rebuild_uploaded_pdf_knowledge_base(records: list[dict] | None = None) -> di
     }
 
 
-def reset_uploaded_pdf_knowledge_base() -> None:
-    _clear_uploaded_pdf_index()
+def reset_uploaded_file_knowledge_base() -> None:
+    _clear_uploaded_file_index()
 
 
-def get_uploaded_pdf_kb_status() -> dict:
+def get_uploaded_file_kb_status() -> dict:
     if not os.path.exists(_UPLOADED_KB_META_FILE):
         return {
             "exists": False,
@@ -325,6 +340,7 @@ def get_uploaded_pdf_kb_status() -> dict:
             payload = json.load(handle)
     except Exception:
         payload = {}
-    payload["exists"] = has_uploaded_pdf_index()
+    payload["exists"] = has_uploaded_file_index()
     payload["path"] = _UPLOADED_KB_INDEX_DIR
     return payload
+

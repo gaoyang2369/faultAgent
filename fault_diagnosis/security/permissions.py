@@ -1,4 +1,4 @@
-"""Central role permissions and effective resource-scope construction."""
+﻿"""Central role permissions and effective resource-scope construction."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ DATA_REPORT_READ_ALL = "data.report.read_all"
 KB_PUBLIC_READ = "kb.public.read"
 KB_INTERNAL_READ = "kb.internal.read"
 KB_RESTRICTED_READ = "kb.restricted.read"
-ADMIN_PDF_MANAGE = "admin.pdf.manage"
+ADMIN_FILE_MANAGE = "admin.file.manage"
 ADMIN_AUDIT_READ = "admin.audit.read"
 
 AUTHORIZED_BUSINESS_TABLES = [
@@ -109,7 +109,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
             KB_PUBLIC_READ,
             KB_INTERNAL_READ,
             KB_RESTRICTED_READ,
-            ADMIN_PDF_MANAGE,
+            ADMIN_FILE_MANAGE,
             ADMIN_AUDIT_READ,
         }
     ),
@@ -238,3 +238,4 @@ def build_dev_auth_context(
         session_id=session_id,
         auth_method="dev-login",
     )
+

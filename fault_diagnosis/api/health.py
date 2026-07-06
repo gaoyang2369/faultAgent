@@ -1,4 +1,4 @@
-"""健康检查相关 HTTP 路由。"""
+﻿"""健康检查相关 HTTP 路由。"""
 
 import time
 
@@ -55,13 +55,13 @@ async def health_dependencies(request: Request, deep: bool = True):
 async def health_ocr():
     """返回 OCR provider 的轻量可用性探测结果，不执行模型加载。"""
     try:
-        from ..integrations.medicine_ocr_runtime import get_medicine_ocr_status
+        from ..integrations.document_ocr_runtime import get_document_ocr_status
 
-        return get_medicine_ocr_status(load_tested=False)
+        return get_document_ocr_status(load_tested=False)
     except Exception as exc:
         return {
             "status": "failed",
-            "provider": "medicine_ocr",
+            "provider": "document_ocr",
             "detail": f"OCR 依赖加载失败：{str(exc)[:300]}",
         }
 
@@ -88,3 +88,4 @@ async def health_real(request: Request, deep: bool = True):
         duration_ms=round((time.monotonic() - started_at) * 1000, 1),
     )
     return payload
+

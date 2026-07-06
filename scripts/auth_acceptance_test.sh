@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
@@ -118,12 +118,14 @@ for role in guest engineer admin; do
   stream_case "$role" action '重启 J1号机'
 done
 
-guest_pdf_status="$(curl --silent --noproxy '*' --output /dev/null --write-out '%{http_code}' \
-  --cookie "$TMP_DIR/guest.cookies" "$BASE_URL/admin/pdfs")"
-admin_pdf_status="$(curl --silent --noproxy '*' --output /dev/null --write-out '%{http_code}' \
-  --cookie "$TMP_DIR/admin.cookies" "$BASE_URL/admin/pdfs")"
-test "$guest_pdf_status" = "403"
-test "$admin_pdf_status" = "200"
-echo '[PASS] guest 禁止 PDF 管理，admin 允许 PDF 管理'
+guest_file_status="$(curl --silent --noproxy '*' --output /dev/null --write-out '%{http_code}' \
+  --cookie "$TMP_DIR/guest.cookies" "$BASE_URL/admin/knowledge-files")"
+admin_file_status="$(curl --silent --noproxy '*' --output /dev/null --write-out '%{http_code}' \
+  --cookie "$TMP_DIR/admin.cookies" "$BASE_URL/admin/knowledge-files")"
+test "$guest_file_status" = "403"
+test "$admin_file_status" = "200"
+echo '[PASS] guest 禁止 知识文件管理，admin 允许 知识文件管理'
 
 echo '权限验收全部通过。'
+
+
