@@ -134,6 +134,9 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
     active_asset = _first_non_empty(
         [
             context_resolution.get("active_asset"),
+            payload.get("asset_id"),
+            payload.get("device"),
+            payload.get("device_name"),
             _first_list_item(objects.get("device_ids")),
             request.get("equipment_hint"),
             report_context.get("asset"),
@@ -143,6 +146,7 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
     active_fault_codes = _dedupe(
         [
             *(_as_text_list(context_resolution.get("active_fault_codes"))),
+            *(_as_text_list(payload.get("fault_codes"))),
             *(_as_text_list(objects.get("alarm_codes"))),
             request.get("fault_code_hint"),
             report_context.get("event_code"),
@@ -152,15 +156,21 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
     active_time_window: dict[str, Any] = {}
     if isinstance(decision.get("time_window"), dict):
         active_time_window.update(decision["time_window"])
+    if isinstance(payload.get("data_window"), dict):
+        active_time_window.update(payload["data_window"])
     if request.get("time_range_hint") and "default_strategy" not in active_time_window:
         active_time_window["default_strategy"] = request.get("time_range_hint")
 
     latest_evidence_bundle_id = _first_non_empty(
         [
+            payload.get("evidence_bundle_id"),
             evidence_bundle.get("bundle_id"),
             context_resolution.get("last_evidence_bundle_id"),
         ]
     )
+    sql_artifact = payload.get("sql_artifact") if isinstance(payload.get("sql_artifact"), dict) else {}
+    analysis_artifact = payload.get("analysis_artifact") if isinstance(payload.get("analysis_artifact"), dict) else {}
+    reportable = payload.get("reportable") is True and _has_reportable_material(payload)
     latest_report_id = _first_non_empty(
         [
             report_artifact.get("report_url"),
@@ -259,9 +269,14 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
             ]
         ),
         latest_sample_time=_first_non_empty(
-            [report_context.get("latest_sample_time"), report_context.get("last_sample_time"), report_context.get("sample_time")]
+            [
+                payload.get("latest_sample_time"),
+                report_context.get("latest_sample_time"),
+                report_context.get("last_sample_time"),
+                report_context.get("sample_time"),
+            ]
         ),
-        sample_count=_as_int(report_context.get("sample_count")),
+        sample_count=_as_int(payload.get("row_count") or report_context.get("sample_count")),
         current_event=current_event,
         key_phenomenon=_first_non_empty(
             [report_context.get("key_phenomenon"), report_context.get("top_finding"), report_context.get("abnormal_summary")]
@@ -281,6 +296,17 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
             ]
         ),
         evidence_freshness=evidence_freshness,
+        reportable=reportable,
+        report_blockers=_as_text_list(payload.get("report_blockers")),
+        source_table=_first_non_empty([payload.get("source_table"), sql_artifact.get("source_table")]),
+        sql_artifact_id=_first_non_empty([payload.get("sql_artifact_id"), sql_artifact.get("artifact_id"), latest_artifact_id]),
+        analysis_artifact_id=_first_non_empty([payload.get("analysis_artifact_id"), analysis_artifact.get("artifact_id"), latest_artifact_id]),
+        evidence_bundle_id=_first_non_empty([payload.get("evidence_bundle_id"), latest_evidence_bundle_id]),
+        data_window=(
+            payload.get("data_window")
+            if isinstance(payload.get("data_window"), dict)
+            else active_time_window
+        ),
     )
 
 
@@ -301,17 +327,28 @@ def _pending_actions_from_payload(
 ) -> list[PendingAction]:
     if not workorder:
         return []
-    status = str(workorder.get("status") or "").strip()
-    if not (workorder.get("need_workorder") or status):
+    pending = workorder.get("pending_action")
+    if isinstance(pending, dict):
+        try:
+            return [PendingAction.model_validate(pending)]
+        except Exception:
+            return []
+    lifecycle = str(workorder.get("lifecycle_status") or "").strip()
+    if lifecycle != "recommended_draft":
         return []
     required = ["latest_realtime_status"] if evidence_freshness == "stale" else []
     return [
         PendingAction(
-            action_type="workorder_decision",
-            status=status or "pending",
+            action_type="workorder_draft",
+            status="pending",
             artifact_id=latest_artifact_id,
             reason=str(workorder.get("reason") or ""),
             required_evidence=required,
+            source_diagnosis_artifact_id=workorder.get("source_diagnosis_artifact_id") or latest_artifact_id,
+            recommendation_artifact_id=latest_artifact_id,
+            source_report_artifact_id=workorder.get("source_report_artifact_id"),
+            required_role="engineer",
+            stale_refresh_required=evidence_freshness == "stale",
         )
     ]
 
@@ -320,6 +357,26 @@ def _contains_stale_marker(value: Any) -> bool:
     text = str(value or "")
     lowered = text.lower()
     return any(marker in text or marker.lower() in lowered for marker in _STALE_MARKERS)
+
+
+def _has_reportable_material(payload: dict[str, Any]) -> bool:
+    if payload.get("reportable_payload") not in (None, "", [], {}):
+        return True
+    if payload.get("operation_report_payload") not in (None, "", [], {}):
+        return True
+    if payload.get("chart_payload") not in (None, "", [], {}):
+        return True
+    rows = payload.get("normalized_rows")
+    if isinstance(rows, list) and rows:
+        return True
+    materials = payload.get("report_materials") if isinstance(payload.get("report_materials"), dict) else {}
+    rows = materials.get("normalized_rows")
+    if isinstance(rows, list) and rows:
+        return True
+    evidence_bundle = payload.get("evidence_bundle") if isinstance(payload.get("evidence_bundle"), dict) else {}
+    evidence_items = evidence_bundle.get("evidence_items")
+    claims = evidence_bundle.get("claims")
+    return bool((isinstance(evidence_items, list) and evidence_items) or (isinstance(claims, list) and claims))
 
 
 def _flatten_context(value: Any) -> dict[str, Any]:

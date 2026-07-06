@@ -375,6 +375,17 @@ export const normalizeChatMessage = (message = {}) => {
   const analysisArtifact = message.analysisArtifact || message.analysis_artifact || null
   const reportArtifact = message.reportArtifact || message.report_artifact || null
   const workorderDecision = message.workorderDecision || message.workorder_decision || null
+  const workorderDraft = message.workorderDraft || message.workorder_draft || null
+  const producedArtifacts = Array.isArray(message.producedArtifacts)
+    ? message.producedArtifacts
+    : Array.isArray(message.produced_artifacts)
+      ? message.produced_artifacts
+      : []
+  const referencedArtifacts = Array.isArray(message.referencedArtifacts)
+    ? message.referencedArtifacts
+    : Array.isArray(message.referenced_artifacts)
+      ? message.referenced_artifacts
+      : []
   const uiPayload = message.uiPayload || message.ui_payload || null
   const traceId = message.traceId || message.trace_id || message.trace?.trace_id || null
   const requestId = message.requestId || message.request_id || message.trace?.request_id || null
@@ -395,6 +406,12 @@ export const normalizeChatMessage = (message = {}) => {
     reportArtifact,
     workorderDecision,
     workorder_decision: workorderDecision,
+    workorderDraft,
+    workorder_draft: workorderDraft,
+    producedArtifacts,
+    produced_artifacts: producedArtifacts,
+    referencedArtifacts,
+    referenced_artifacts: referencedArtifacts,
     uiPayload,
     ui_payload: uiPayload,
     traceId,
@@ -431,7 +448,7 @@ export const isRenderableChatMessage = (message = {}) => {
     return true
   }
 
-  if (normalized.workorderDecision) {
+  if (normalized.workorderDecision || normalized.workorderDraft) {
     return true
   }
 

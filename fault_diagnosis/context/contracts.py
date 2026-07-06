@@ -28,6 +28,14 @@ class PendingAction(BaseModel):
     artifact_id: str | None = None
     reason: str = ""
     required_evidence: list[str] = Field(default_factory=list)
+    source_diagnosis_artifact_id: str | None = None
+    recommendation_artifact_id: str | None = None
+    source_report_artifact_id: str | None = None
+    required_role: str = "engineer"
+    stale_refresh_required: bool = False
+    expires_at: str | None = None
+    source_hash: str | None = None
+    consumed_by_artifact_id: str | None = None
 
 
 class CaseState(BaseModel):
@@ -62,6 +70,15 @@ class CaseState(BaseModel):
     available_followups: list[str] = Field(default_factory=list)
     unresolved_questions: list[str] = Field(default_factory=list)
     evidence_freshness: str = "unknown"
+    reportable: bool = False
+    report_source_mode: str = ""
+    report_readiness: dict[str, Any] = Field(default_factory=dict)
+    report_blockers: list[str] = Field(default_factory=list)
+    source_table: str | None = None
+    sql_artifact_id: str | None = None
+    analysis_artifact_id: str | None = None
+    evidence_bundle_id: str | None = None
+    data_window: dict[str, Any] = Field(default_factory=dict)
     projection_warnings: list[str] = Field(default_factory=list)
     source: str = "artifact_projection"
 
@@ -114,6 +131,14 @@ class ResolvedContext(BaseModel):
     last_report_url: str | None = None
     evidence_mode: str = "collect_new"
     should_refresh_runtime_data: bool = False
+    report_source_mode: str = ""
+    report_readiness: dict[str, Any] = Field(default_factory=dict)
+    report_blockers: list[str] = Field(default_factory=list)
+    report_candidate_summary: list[dict[str, Any]] = Field(default_factory=list)
+    report_candidate_artifact_count: int = 0
+    selected_artifact_id: str | None = None
+    selected_artifact_type: str | None = None
+    conversation_context_signals_summary: dict[str, Any] = Field(default_factory=dict)
 
     def legacy_context_resolution(self) -> dict[str, Any]:
         """Return the dict shape expected by existing routes, tests and payloads."""
@@ -139,6 +164,16 @@ class ResolvedContext(BaseModel):
             "stale_evidence": self.stale_evidence,
             "missing_context": list(self.missing_context),
             "context_resolution_reason": self.context_resolution_reason,
+            "evidence_mode": self.evidence_mode,
+            "should_refresh_runtime_data": self.should_refresh_runtime_data,
+            "report_source_mode": self.report_source_mode,
+            "report_readiness": self.report_readiness,
+            "report_blockers": list(self.report_blockers),
+            "report_candidate_summary": self.report_candidate_summary,
+            "report_candidate_artifact_count": self.report_candidate_artifact_count,
+            "selected_artifact_id": self.selected_artifact_id,
+            "selected_artifact_type": self.selected_artifact_type,
+            "conversation_context_signals_summary": self.conversation_context_signals_summary,
         }
 
 
@@ -165,6 +200,12 @@ def summarize_resolved_context(value: Any) -> dict[str, Any]:
                 "action_type": item.get("action_type"),
                 "status": item.get("status"),
                 "artifact_id": item.get("artifact_id"),
+                "source_diagnosis_artifact_id": item.get("source_diagnosis_artifact_id"),
+                "recommendation_artifact_id": item.get("recommendation_artifact_id"),
+                "source_report_artifact_id": item.get("source_report_artifact_id"),
+                "required_role": item.get("required_role"),
+                "stale_refresh_required": bool(item.get("stale_refresh_required", False)),
+                "source_hash": item.get("source_hash"),
                 "required_evidence_count": len(item.get("required_evidence") or []),
             }
             for item in pending_actions
@@ -174,6 +215,11 @@ def summarize_resolved_context(value: Any) -> dict[str, Any]:
         "stale_evidence": bool(data.get("stale_evidence")),
         "missing_context": list(data.get("missing_context") or []),
         "context_resolution_reason": str(data.get("context_resolution_reason") or ""),
+        "conversation_context_signals_summary": (
+            data.get("conversation_context_signals_summary")
+            if isinstance(data.get("conversation_context_signals_summary"), dict)
+            else {}
+        ),
         "candidates_count": candidate_counts,
         "source": data.get("source"),
         "used_active_asset": data.get("used_active_asset"),
@@ -183,6 +229,20 @@ def summarize_resolved_context(value: Any) -> dict[str, Any]:
         summary["should_refresh_runtime_data"] = bool(data.get("should_refresh_runtime_data"))
     if data.get("evidence_mode"):
         summary["evidence_mode"] = data.get("evidence_mode")
+    if data.get("report_source_mode"):
+        summary["report_source_mode"] = data.get("report_source_mode")
+    if isinstance(data.get("report_readiness"), dict):
+        summary["report_readiness"] = data.get("report_readiness")
+    if data.get("report_blockers"):
+        summary["report_blockers"] = list(data.get("report_blockers") or [])
+    if data.get("report_candidate_summary"):
+        summary["report_candidate_summary"] = list(data.get("report_candidate_summary") or [])
+    if data.get("report_candidate_artifact_count") is not None:
+        summary["report_candidate_artifact_count"] = int(data.get("report_candidate_artifact_count") or 0)
+    if data.get("selected_artifact_id"):
+        summary["selected_artifact_id"] = data.get("selected_artifact_id")
+    if data.get("selected_artifact_type"):
+        summary["selected_artifact_type"] = data.get("selected_artifact_type")
     return summary
 
 

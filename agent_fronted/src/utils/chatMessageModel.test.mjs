@@ -145,4 +145,37 @@ assert.equal(artifactOnlyMessage.uiPayload.type, 'diagnosis_card')
 assert.equal(artifactOnlyMessage.ui_payload.device_label, 'G120电机1')
 assert.equal(isRenderableChatMessage(artifactOnlyMessage), true)
 
+const draftOnlyMessage = normalizeChatMessage({
+  role: 'assistant',
+  content: '',
+  workorder_draft: {
+    draft_id: 'WOD-ABC',
+    status: 'pending_verification'
+  },
+  produced_artifacts: [
+    {
+      artifact_id: 'WOD-ABC',
+      artifact_type: 'workorder_draft',
+      created_in_current_turn: true,
+      display_policy: 'show_card'
+    }
+  ],
+  referenced_artifacts: [
+    {
+      artifact_id: '/reports/old.html',
+      artifact_type: 'report',
+      created_in_current_turn: false,
+      display_policy: 'hide_card'
+    }
+  ],
+  ui_payload: {
+    type: 'workorder_card'
+  }
+})
+
+assert.equal(draftOnlyMessage.workorderDraft.draft_id, 'WOD-ABC')
+assert.equal(draftOnlyMessage.producedArtifacts[0].artifact_type, 'workorder_draft')
+assert.equal(draftOnlyMessage.referencedArtifacts[0].artifact_type, 'report')
+assert.equal(isRenderableChatMessage(draftOnlyMessage), true)
+
 console.log('chatMessageModel checks passed')

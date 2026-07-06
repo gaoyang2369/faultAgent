@@ -282,6 +282,8 @@ POLICIES_BY_ID: dict[str, WorkflowPolicy] = {
             "analysis": True,
             "resolution_recommendation": True,
             "workorder_decision": "conditional",
+            "create_workorder_draft": "conditional",
+            "dispatch_workorder": "conditional",
             "report": False,
             "audit_log": True,
         },
@@ -358,6 +360,9 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
                 ],
                 "plan_mode": route.plan_mode,
                 "evidence_mode": route.evidence_mode,
+                "report_source_mode": route.report_source_mode,
+                "report_readiness": route.report_readiness,
+                "report_blockers": route.report_blockers,
             },
         )
     node_names = set(policy.enabled_nodes)
@@ -386,11 +391,47 @@ def build_workflow_plan(route: TaskRoute, *, needs_report: bool = False) -> Work
             ],
             "plan_mode": route.plan_mode,
             "evidence_mode": route.evidence_mode,
+            "report_source_mode": route.report_source_mode,
+            "report_readiness": route.report_readiness,
+            "report_blockers": route.report_blockers,
         },
     )
 
 
 def _nodes_for_plan_mode(route: TaskRoute) -> dict[str, bool] | None:
+    if route.plan_mode == "report_from_artifact":
+        return {
+            "sql": False,
+            "knowledge": False,
+            "analysis": False,
+            "resolution_recommendation": False,
+            "workorder_decision": False,
+            "report": True,
+            "evidence_validation": False,
+            "output_guardrail": True,
+        }
+    if route.plan_mode == "report_refresh_sql":
+        return {
+            "sql": True,
+            "knowledge": False,
+            "analysis": True,
+            "resolution_recommendation": False,
+            "workorder_decision": False,
+            "report": True,
+            "evidence_validation": True,
+            "output_guardrail": True,
+        }
+    if route.plan_mode == "clarify_context" and route.report_source_mode in {"blocked_missing_context", "ambiguous"}:
+        return {
+            "sql": False,
+            "knowledge": False,
+            "analysis": False,
+            "resolution_recommendation": False,
+            "workorder_decision": False,
+            "report": False,
+            "evidence_validation": False,
+            "output_guardrail": False,
+        }
     if route.plan_mode == "workorder_decision_from_artifact":
         return {
             "permission_check": True,
@@ -400,6 +441,8 @@ def _nodes_for_plan_mode(route: TaskRoute) -> dict[str, bool] | None:
             "analysis": False,
             "resolution_recommendation": False,
             "workorder_decision": True,
+            "create_workorder_draft": False,
+            "dispatch_workorder": False,
             "report": False,
             "evidence_validation": True,
             "output_guardrail": True,
@@ -414,6 +457,8 @@ def _nodes_for_plan_mode(route: TaskRoute) -> dict[str, bool] | None:
             "analysis": False,
             "resolution_recommendation": False,
             "workorder_decision": True,
+            "create_workorder_draft": False,
+            "dispatch_workorder": False,
             "report": False,
             "evidence_validation": True,
             "output_guardrail": True,
@@ -500,7 +545,13 @@ def resolve_nodes_from_goals(route: TaskRoute) -> set[str]:
         goals.intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"})
         or route.action_target == "workorder"
     ) and (route.flags.get("need_workorder_decision") or route.action_target == "workorder"):
-        nodes.update({"permission_check", "risk_check", "workorder_decision", "audit_log"})
+        nodes.update({"permission_check", "risk_check", "audit_log"})
+    if "decide_workorder" in goals:
+        nodes.add("workorder_decision")
+    if "create_workorder_draft" in goals:
+        nodes.add("create_workorder_draft")
+    if "dispatch_workorder" in goals:
+        nodes.add("dispatch_workorder")
     return nodes
 
 
@@ -543,6 +594,10 @@ def _resolve_node(
         return bool(flags.get("need_resolution") or flags.get("need_analysis"))
     if node_name == "workorder_decision":
         return bool(flags.get("need_workorder_decision") and (route.has_device_context() or route.referenced_artifact_id))
+    if node_name == "create_workorder_draft":
+        return bool("create_workorder_draft" in set(goal_types(route)) and route.action_target == "workorder")
+    if node_name == "dispatch_workorder":
+        return bool("dispatch_workorder" in set(goal_types(route)) and route.action_target == "workorder")
     if node_name in {"permission_check", "risk_check", "audit_log"}:
         return bool(flags.get(f"need_{node_name}") or route.action_target == "workorder")
     if node_name == "report":

@@ -27,6 +27,9 @@ _ACTION_KEYWORDS = (
     "关闭告警",
     "屏蔽告警",
     "确认创建工单",
+    "我要生成工单",
+    "那就生成",
+    "现在生成",
     "创建工单草稿",
     "生成工单草稿",
     "确认派发",
@@ -48,7 +51,20 @@ _WORKORDER_DECISION_KEYWORDS = (
     "是否派人处理",
     "要不要派人",
 )
-_CREATE_WORKORDER_DRAFT_KEYWORDS = ("生成工单草稿", "创建工单草稿", "待确认工单草稿", "工单草稿")
+_CREATE_WORKORDER_DRAFT_KEYWORDS = (
+    "我要生成工单",
+    "确认生成",
+    "确认创建",
+    "创建工单",
+    "生成工单",
+    "那就生成",
+    "现在生成",
+    "生成吧",
+    "生成工单草稿",
+    "创建工单草稿",
+    "待确认工单草稿",
+    "工单草稿",
+)
 _DISPATCH_WORKORDER_KEYWORDS = ("直接派发", "派给维修", "下发工单", "派发工单", "确认派发", "派单")
 _HEALTH_KEYWORDS = ("健康", "风险", "劣化", "趋势", "预测", "评分", "寿命")
 _ALARM_KEYWORDS = ("故障码", "告警码", "报警码", "告警", "报警", "异常码")
@@ -157,6 +173,20 @@ def route_task(
         referenced_case_id=resolved_context_payload.get("referenced_case_id")
         or resolved_context_payload.get("active_case_id"),
         should_refresh_runtime_data=bool(resolved_context_payload.get("should_refresh_runtime_data")),
+        report_source_mode=str(resolved_context_payload.get("report_source_mode") or ""),
+        report_readiness=(
+            resolved_context_payload.get("report_readiness")
+            if isinstance(resolved_context_payload.get("report_readiness"), dict)
+            else {}
+        ),
+        report_blockers=[str(item) for item in (resolved_context_payload.get("report_blockers") or []) if str(item)],
+        report_candidate_summary=[
+            item for item in (resolved_context_payload.get("report_candidate_summary") or [])
+            if isinstance(item, dict)
+        ],
+        report_candidate_artifact_count=int(resolved_context_payload.get("report_candidate_artifact_count") or 0),
+        selected_artifact_id=resolved_context_payload.get("selected_artifact_id"),
+        selected_artifact_type=resolved_context_payload.get("selected_artifact_type"),
         action_target=action_target,
         route_confidence=confidence,
         user_goal=str(payload.get("analysis_goal") or normalized or task_key),
@@ -231,10 +261,10 @@ def _legacy_goal_hints(
         intents.append("action_request")
     if _has_any(compact, _DISPATCH_WORKORDER_KEYWORDS):
         intents.append("dispatch_workorder")
-    elif _has_any(compact, _CREATE_WORKORDER_DRAFT_KEYWORDS):
-        intents.append("create_workorder_draft")
     elif _has_any(compact, _WORKORDER_DECISION_KEYWORDS):
         intents.append("workorder_decision")
+    elif _has_any(compact, _CREATE_WORKORDER_DRAFT_KEYWORDS):
+        intents.append("create_workorder_draft")
     if requested_output == "report" or report_from_previous_artifact:
         intents.append("report_generation")
     if task_key == "permission_scope_query":
@@ -277,9 +307,18 @@ def _apply_goal_flags(flags: dict[str, bool], goals: list[str], objects: Workflo
         flags["need_report"] = True
     if "decide_workorder" in goal_set:
         flags["need_workorder_decision"] = True
-    if goal_set.intersection({"create_workorder_draft", "dispatch_workorder"}):
+    if "create_workorder_draft" in goal_set:
         flags.update(
-            need_workorder_decision=True,
+            need_create_workorder_draft=True,
+            need_workorder_decision=False,
+            need_permission_check=True,
+            need_risk_check=True,
+            may_involve_write_action=True,
+        )
+    if "dispatch_workorder" in goal_set:
+        flags.update(
+            need_dispatch_workorder=True,
+            need_workorder_decision=False,
             need_permission_check=True,
             need_risk_check=True,
             may_involve_write_action=True,
@@ -450,8 +489,13 @@ def _subgoals(
         builders.extend([
             ("permission_check", True, []),
             ("risk_check", True, []),
-            ("workorder_decision", True, [] if objects.device_ids else ["device_id"]),
         ])
+    if "decide_workorder" in goal_set:
+        builders.append(("workorder_decision", True, [] if objects.device_ids else ["device_id"]))
+    if "create_workorder_draft" in goal_set:
+        builders.append(("create_workorder_draft", True, []))
+    if "dispatch_workorder" in goal_set:
+        builders.append(("dispatch_workorder", True, []))
     if not builders:
         builders.append(("check_current_status", True, [] if objects.device_ids else ["device_id"]))
     return [
@@ -512,7 +556,7 @@ def _action_type(text: str) -> str | None:
         ("update_config", ("修改", "改成", "阈值", "参数")),
         ("acknowledge_alarm", ("确认告警",)),
         ("close_alarm", ("关闭告警", "屏蔽告警")),
-        ("create_workorder", ("创建工单", "生成工单")),
+        ("create_workorder_draft", _CREATE_WORKORDER_DRAFT_KEYWORDS),
         ("dispatch_workorder", ("派发工单", "派单", "直接派发")),
     ]
     for action_type, keywords in mapping:

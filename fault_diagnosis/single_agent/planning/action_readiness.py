@@ -10,7 +10,7 @@ from ..workflow.axes import goal_types, requests_action_or_workorder
 
 WORKORDER_ACTION_READINESS_SCHEMA_VERSION = "workorder_action_readiness.v2"
 
-ActionType = Literal["workorder_decision", "workorder_draft", "device_action", "unknown"]
+ActionType = Literal["workorder_decision", "workorder_draft", "workorder_dispatch", "device_action", "unknown"]
 
 
 class WorkorderActionReadiness(BaseModel):
@@ -42,6 +42,8 @@ def build_workorder_action_readiness(*, decision: Any) -> WorkorderActionReadine
     blockers: list[str] = []
     if action_type == "unknown":
         blockers.append("not_workorder_or_action")
+    if action_type == "workorder_dispatch":
+        blockers.append("workorder_dispatch_requires_external_approval")
     if action_type == "device_action":
         blockers.append("device_action_direct_execution_denied")
     if context.get("relation_to_previous") == "ambiguous" or getattr(decision, "relation_to_previous", "") == "ambiguous":
@@ -57,7 +59,7 @@ def build_workorder_action_readiness(*, decision: Any) -> WorkorderActionReadine
     if stale_refresh_required:
         blockers.append("stale_refresh_required")
     return WorkorderActionReadiness(
-        ready_for_draft=action_type in {"workorder_decision", "workorder_draft"} and not blockers,
+        ready_for_draft=action_type == "workorder_draft" and not blockers,
         action_type=action_type,
         requires_human_confirmation=action_type != "unknown",
         stale_refresh_required=stale_refresh_required,
@@ -98,6 +100,8 @@ def classify_action_type(decision: Any) -> ActionType:
     )
     if any(word in text for word in ("reset", "restart", "stop", "shutdown", "parameter", "config", "复位", "重启", "停机", "关闭", "参数", "配置", "修改")):
         return "device_action"
+    if "dispatch_workorder" in goals:
+        return "workorder_dispatch"
     if "create_workorder_draft" in goals:
         return "workorder_draft"
     if "decide_workorder" in goals or str(getattr(decision, "action_target", "") or "") == "workorder":
@@ -114,6 +118,8 @@ def _missing_evidence(decision: Any, *, action_type: ActionType, stale_refresh_r
         required = {"diagnosis_summary", "severity_or_status_level", "key_evidence", "recommended_action_policy"}
         satisfied = set(_strings(getattr(decision, "satisfied_evidence", []) or []))
         missing.extend(sorted(required - satisfied))
+    if action_type == "workorder_dispatch":
+        missing.extend(["latest_realtime_status", "external_human_approval"])
     if action_type == "device_action":
         missing.extend(["human_approval", "safe_state", "execution_permission"])
     if stale_refresh_required:

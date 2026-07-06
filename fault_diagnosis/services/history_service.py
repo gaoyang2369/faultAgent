@@ -6,8 +6,10 @@ from typing import Any
 
 from ..runtime.dev_mode import get_dev_messages, get_dev_todos_payload, list_dev_threads
 from ..common.logger import get_logger
+from ..repositories.conversation_store import get_conversation_repository, messages_to_history_payload
 from ..repositories.history_index import get_history_index_repository
 from ..common.utils import sanitize_chat_history_messages, summarize_identifier_for_log
+from ..diagnosis.artifact_store import get_thread_artifact
 
 
 def summarize_session_id(session_id: str | None) -> str:
@@ -104,6 +106,90 @@ def filter_todos_by_status(todos: list[dict], status: str | None) -> list[dict]:
     return todos
 
 
+def _artifact_payload(envelope: Any) -> dict[str, Any]:
+    payload = getattr(envelope, "payload", None)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _artifact_report_url(payload: dict[str, Any]) -> str | None:
+    report_artifact = payload.get("report_artifact")
+    if not isinstance(report_artifact, dict):
+        return None
+    return _first_text(report_artifact.get("report_url"), report_artifact.get("report_filename")) or None
+
+
+def build_artifact_history_messages(thread_id: str, envelope: Any) -> list[dict[str, Any]]:
+    """从线程级 artifact 恢复前端可见历史消息。"""
+    if not envelope:
+        return []
+
+    payload = _artifact_payload(envelope)
+    request_payload = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+    request_content = _first_text(
+        request_payload.get("user_message"),
+        payload.get("user_message"),
+        getattr(envelope, "request_summary", ""),
+    )
+    assistant_content = _first_text(
+        payload.get("grounded_final_content"),
+        payload.get("final_content"),
+        getattr(envelope, "final_answer", ""),
+    )
+    timestamp = _first_text(getattr(envelope, "created_at", ""), payload.get("timestamp"))
+
+    messages: list[dict[str, Any]] = []
+    if request_content:
+        messages.append({
+            "role": "user",
+            "content": request_content,
+            "timestamp": timestamp,
+        })
+    if assistant_content:
+        messages.append({
+            "role": "assistant",
+            "content": assistant_content,
+            "timestamp": timestamp,
+            "isMarkdown": True,
+            "streamState": "completed",
+            "statusText": "回复完成",
+            "thread_id": thread_id,
+            "threadId": thread_id,
+            "workflow_type": getattr(envelope, "workflow_type", None),
+            "report_filename": getattr(envelope, "report_filename", None),
+            "report_url": _artifact_report_url(payload),
+            "sql_artifact": payload.get("sql_artifact"),
+            "knowledge_artifact": payload.get("knowledge_artifact"),
+            "analysis_artifact": payload.get("analysis_artifact"),
+            "report_artifact": payload.get("report_artifact"),
+            "workorder_decision": payload.get("workorder_decision"),
+            "artifact": envelope.model_dump(exclude_none=True) if hasattr(envelope, "model_dump") else None,
+        })
+    sanitized = sanitize_chat_history_messages(messages)
+    return sanitized if isinstance(sanitized, list) else []
+
+
+def load_artifact_history_messages(thread_id: str, *, logger=None) -> list[dict[str, Any]]:
+    """读取线程级 artifact，并转换为 history 接口可返回的消息列表。"""
+    try:
+        return build_artifact_history_messages(thread_id, get_thread_artifact(thread_id))
+    except Exception as exc:
+        if logger:
+            logger.warning(
+                "从线程 artifact 恢复历史消息失败",
+                chat_id=summarize_thread_id(thread_id),
+                error=str(exc),
+            )
+        return []
+
+
 class HistoryService:
     """封装历史会话和 Todo 查询用例。"""
 
@@ -125,6 +211,10 @@ class HistoryService:
             history_index_repository
             or getattr(app.state, "history_index_repository", None)
             or get_history_index_repository()
+        )
+        self.conversation_repository = (
+            getattr(app.state, "conversation_repository", None)
+            or get_conversation_repository()
         )
         self._log = logger or get_logger("services.history")
 
@@ -155,6 +245,12 @@ class HistoryService:
             return self._history_list_payload(history_type, thread_ids, paged_response, limit, cursor, keyword)
 
         try:
+            db_thread_ids = self.conversation_repository.list_thread_ids(session_id=self.session_id)
+            if db_thread_ids:
+                owned_db_thread_ids = self.session_manager.filter_owned_thread_ids(self.session_id, db_thread_ids)
+                self._log_history_list_returned(history_type, owned_db_thread_ids, paged_response)
+                return self._history_list_payload(history_type, owned_db_thread_ids, paged_response, limit, cursor, keyword)
+
             indexed_thread_ids = self.history_index_repository.list_thread_ids(session_id=self.session_id)
             owned_chat_ids = self.session_manager.filter_owned_thread_ids(self.session_id, indexed_thread_ids)
             self._log_history_list_returned(history_type, owned_chat_ids, paged_response)
@@ -204,8 +300,43 @@ class HistoryService:
             )
             return messages
 
+        try:
+            stored_messages = self.conversation_repository.list_messages(thread_id=resolved_chat_id)
+            if stored_messages:
+                history_messages = messages_to_history_payload(stored_messages)
+                sanitized_messages = sanitize_chat_history_messages(history_messages)
+                if isinstance(sanitized_messages, list) and sanitized_messages:
+                    self._record_history_thread(history_type, resolved_chat_id)
+                    self._log.info(
+                        "从 conversation DB 返回对话历史详情",
+                        history_type=history_type,
+                        session_id=summarize_session_id(self.session_id),
+                        chat_id=summarize_thread_id(resolved_chat_id),
+                        message_count=len(sanitized_messages),
+                    )
+                    return sanitized_messages
+        except Exception as exc:
+            self._log.warning(
+                "读取 conversation DB 历史详情失败，回退旧历史来源",
+                history_type=history_type,
+                session_id=summarize_session_id(self.session_id),
+                chat_id=summarize_thread_id(resolved_chat_id),
+                error=str(exc),
+            )
+
         checkpointer = getattr(self.app.state, "checkpointer", None)
         if not checkpointer or not hasattr(checkpointer, "aget"):
+            artifact_messages = load_artifact_history_messages(resolved_chat_id, logger=self._log)
+            if artifact_messages:
+                self._record_history_thread(history_type, resolved_chat_id)
+                self._log.info(
+                    "从线程 artifact 返回对话历史详情",
+                    history_type=history_type,
+                    session_id=summarize_session_id(self.session_id),
+                    chat_id=summarize_thread_id(resolved_chat_id),
+                    message_count=len(artifact_messages),
+                )
+                return artifact_messages
             self._log.info(
                 "未配置历史 checkpoint，返回空对话历史",
                 history_type=history_type,
@@ -221,6 +352,10 @@ class HistoryService:
             if checkpoint and checkpoint.get("channel_values"):
                 messages = checkpoint["channel_values"].get("messages", [])
                 sanitized_messages = sanitize_chat_history_messages(messages)
+                if not sanitized_messages:
+                    artifact_messages = load_artifact_history_messages(resolved_chat_id, logger=self._log)
+                    if artifact_messages:
+                        return artifact_messages
                 self._record_history_thread(history_type, resolved_chat_id)
                 self._log.info(
                     "返回对话历史详情",
@@ -239,7 +374,7 @@ class HistoryService:
                 message_count=0,
                 checkpoint_hit=False,
             )
-            return []
+            return load_artifact_history_messages(resolved_chat_id, logger=self._log)
         except Exception as exc:
             self._log.warning(
                 "获取对话历史失败",
@@ -248,7 +383,7 @@ class HistoryService:
                 chat_id=summarize_thread_id(resolved_chat_id),
                 error=str(exc),
             )
-            return []
+            return load_artifact_history_messages(resolved_chat_id, logger=self._log)
 
     async def delete_history(self, *, history_type: str, chat_id: str) -> dict | None:
         self._log.info(
@@ -286,6 +421,16 @@ class HistoryService:
             return {"deleted": True, "server_deleted": True, "thread_id": chat_id}
 
         try:
+            try:
+                self.conversation_repository.soft_delete_thread(thread_id=resolved_chat_id)
+            except Exception as conversation_error:
+                self._log.warning(
+                    "软删除 conversation DB 对话失败",
+                    history_type=history_type,
+                    session_id=summarize_session_id(self.session_id),
+                    chat_id=summarize_thread_id(resolved_chat_id),
+                    error=str(conversation_error),
+                )
             checkpointer = getattr(self.app.state, "checkpointer", None)
             if checkpointer and hasattr(checkpointer, "adelete_thread"):
                 await checkpointer.adelete_thread(resolved_chat_id)

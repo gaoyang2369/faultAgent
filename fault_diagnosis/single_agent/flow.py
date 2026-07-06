@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, AsyncGenerator
@@ -27,6 +28,7 @@ from .planning import (
     summarize_manual_confirmation_requirement,
     summarize_workorder_action_readiness,
 )
+from .reporting.source_resolution import build_report_readiness, find_referenced_artifact
 from .workflow.nodes import (
     build_audit_log_result,
     build_permission_check_result,
@@ -34,6 +36,8 @@ from .workflow.nodes import (
     build_risk_check_result,
     workflow_node_enabled,
 )
+from .workflow.axes import goal_types
+from .workorder_drafts import build_pending_workorder_draft_action
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -296,6 +300,57 @@ class SingleAgentFlowMixin:
                 ),
             )
             self._configure_workflow_tasks(decision)
+            if decision.report_source_mode:
+                planning_snapshot_summary = self._report_planning_snapshot_summary(decision)
+                _log.info(
+                    f"report_handoff planning_snapshot {json.dumps(planning_snapshot_summary, ensure_ascii=False, default=str)}",
+                    thread_id=self.thread_id,
+                    trace_id=self.trace_id,
+                    **planning_snapshot_summary,
+                )
+            if decision.report_source_mode in {"blocked_missing_context", "ambiguous"}:
+                final_answer = self._build_report_blocked_answer(decision)
+                report_artifact = self._build_blocked_report_artifact(
+                    ";".join(decision.report_blockers or [decision.report_source_mode])
+                )
+                stage_started = self._start_stage("final_answer", "报告生成前置条件不足，直接澄清")
+                self._finish_stage("final_answer", stage_started, message="报告生成已阻塞")
+                self.trace.finish(status="completed", final_answer=final_answer)
+                yield encode_sse_event("token", {"type": "token", "content": final_answer}, trace_id=self.trace_id)
+                token_count += 1
+                event_count += 1
+                self._finish_open_stage_observations(status="completed")
+                self._finalize_trace_run(
+                    status="completed",
+                    final_answer=final_answer,
+                    metadata={
+                        "event_count": event_count,
+                        "token_count": token_count,
+                        "decision": decision.model_dump(),
+                        "task_family": decision.task_family,
+                        "readiness": {
+                            "diagnosis": decision.diagnosis_readiness,
+                            "workorder_action": decision.workorder_action_readiness,
+                            "report": decision.report_readiness,
+                        },
+                        "manual_confirmation": decision.manual_confirmation,
+                        "report_filename": report_artifact.report_filename,
+                    },
+                )
+                yield encode_sse_event(
+                    "complete",
+                    build_direct_complete_payload(
+                        thread_id=self.thread_id,
+                        trace_id=self.trace_id,
+                        request_id=self.request_id,
+                        final_answer=final_answer,
+                        decision=decision,
+                        trace=self.trace,
+                        event_count=event_count,
+                    ),
+                    trace_id=self.trace_id,
+                )
+                return
             task_frame = self._build_workflow_task_update_frame(current_stage="initialize_evidence_bundle")
             if task_frame:
                 yield task_frame
@@ -362,6 +417,200 @@ class SingleAgentFlowMixin:
                     yield self._build_cancel_complete_frame()
                     return
 
+            current_goal_types = set(goal_types(decision))
+            if workflow_node_enabled(decision, "dispatch_workorder"):
+                stage_started = self._start_stage("dispatch_workorder", "输出派发边界和外部审批要求")
+                final_answer, workorder_suggestion = self.build_dispatch_workorder_boundary()
+                self._finish_stage("dispatch_workorder", stage_started, status="warning", message=workorder_suggestion.reason)
+                task_frame = self._build_workflow_task_update_frame(completed_stage="dispatch_workorder")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
+                sql_artifact = self._build_skipped_sql_artifact("派发请求不执行 SQL；派发前需由外部审批入口刷新状态")
+                knowledge_artifact = self._build_skipped_knowledge_artifact("派发请求不检索知识库")
+                analysis_artifact = self._build_analysis_artifact_from_payload(
+                    {"conclusion": workorder_suggestion.reason, "recommendations": ["刷新当前状态", "进入外部人工审批入口"]}
+                )
+                report_artifact = self._build_skipped_report_artifact()
+                stage_started = self._start_stage("evidence_validation", "校验派发边界输出")
+                self.evidence_bundle = build_evidence_bundle(
+                    trace_id=self.trace_id,
+                    request=request,
+                    decision=decision,
+                    sql_artifact=sql_artifact,
+                    knowledge_artifact=knowledge_artifact,
+                    analysis_artifact=analysis_artifact,
+                    workorder_suggestion=workorder_suggestion,
+                    report_artifact=report_artifact,
+                    structured_analysis_artifact=None,
+                )
+                self._record_artifact("evidence_bundle", self.evidence_bundle, stage="evidence_validation")
+                self._finish_stage("evidence_validation", stage_started, message="派发边界证据链已生成")
+                stage_started = self._start_stage("save_artifact", "保存派发边界产物")
+                saved_envelope = self.save_artifact_envelope(
+                    request,
+                    sql_artifact,
+                    knowledge_artifact,
+                    analysis_artifact,
+                    workorder_suggestion,
+                    report_artifact,
+                    final_answer,
+                    decision,
+                    evidence_bundle=self.evidence_bundle,
+                    output_guardrail={},
+                    workflow_artifacts={
+                        "authorization": self.authorization_decision.model_dump(),
+                        "permission_check": permission_check_result,
+                        "risk_check": risk_check_result,
+                        "manual_confirmation": decision.manual_confirmation,
+                    },
+                )
+                self._finish_stage("save_artifact", stage_started, message="派发边界产物已保存")
+                yield encode_sse_event("token", {"type": "token", "content": final_answer}, trace_id=self.trace_id)
+                token_count += 1
+                event_count += 1
+                self.trace.finish(status="completed", final_answer=final_answer)
+                self._finish_open_stage_observations(status="completed")
+                self._finalize_trace_run(
+                    status="completed",
+                    final_answer=final_answer,
+                    metadata={
+                        "event_count": event_count,
+                        "token_count": token_count,
+                        "decision": decision.model_dump(),
+                        "task_family": decision.task_family,
+                        "manual_confirmation": decision.manual_confirmation,
+                    },
+                )
+                complete_payload = build_diagnosis_complete_payload(
+                    thread_id=self.thread_id,
+                    trace_id=self.trace_id,
+                    request_id=self.request_id,
+                    final_answer=final_answer,
+                    decision=decision,
+                    sql_artifact=sql_artifact,
+                    knowledge_artifact=knowledge_artifact,
+                    analysis_artifact=analysis_artifact,
+                    permission_check_result=permission_check_result,
+                    risk_check_result=risk_check_result,
+                    resolution_recommendation={},
+                    audit_log_result={},
+                    workorder_suggestion=workorder_suggestion,
+                    report_artifact=report_artifact,
+                    evidence_bundle=self.evidence_bundle,
+                    output_guardrail={},
+                    saved_envelope=saved_envelope,
+                    trace=self.trace,
+                    todos=self._current_workflow_todos_payload(status_hint="本轮回答已完成").get("todos", []),
+                    event_count=event_count,
+                )
+                yield encode_sse_event("complete", complete_payload, trace_id=self.trace_id)
+                return
+
+            if workflow_node_enabled(decision, "create_workorder_draft"):
+                stage_started = self._start_stage("create_workorder_draft", "基于待确认动作生成工单草稿 artifact")
+                (
+                    final_answer,
+                    workorder_suggestion,
+                    workorder_draft,
+                    referenced_envelope,
+                    sql_artifact,
+                    knowledge_artifact,
+                    analysis_artifact,
+                    report_artifact,
+                ) = await self.create_workorder_draft_from_previous_artifact()
+                self._finish_stage(
+                    "create_workorder_draft",
+                    stage_started,
+                    message=workorder_draft.draft_id if workorder_draft else workorder_suggestion.reason,
+                )
+                task_frame = self._build_workflow_task_update_frame(completed_stage="create_workorder_draft")
+                if task_frame:
+                    yield task_frame
+                    event_count += 1
+                stage_started = self._start_stage("evidence_validation", "复用上一轮证据链并校验工单草稿")
+                self.evidence_bundle = build_evidence_bundle(
+                    trace_id=self.trace_id,
+                    request=request,
+                    decision=decision,
+                    sql_artifact=sql_artifact,
+                    knowledge_artifact=knowledge_artifact,
+                    analysis_artifact=analysis_artifact,
+                    workorder_suggestion=workorder_suggestion,
+                    report_artifact=report_artifact,
+                    structured_analysis_artifact=None,
+                )
+                self.evidence_bundle.artifacts["referenced_artifact_id"] = decision.referenced_artifact_id
+                self.evidence_bundle.artifacts["referenced_thread_artifact_created_at"] = referenced_envelope.created_at
+                if workorder_draft:
+                    self.evidence_bundle.artifacts["workorder_draft_id"] = workorder_draft.draft_id
+                self._record_artifact("evidence_bundle", self.evidence_bundle, stage="evidence_validation")
+                self._finish_stage("evidence_validation", stage_started, message="工单草稿证据链校验完成")
+                stage_started = self._start_stage("save_artifact", "保存工单草稿产物与证据链")
+                saved_envelope = self.save_artifact_envelope(
+                    request,
+                    sql_artifact,
+                    knowledge_artifact,
+                    analysis_artifact,
+                    workorder_suggestion,
+                    report_artifact,
+                    final_answer,
+                    decision,
+                    evidence_bundle=self.evidence_bundle,
+                    output_guardrail={},
+                    workflow_artifacts={
+                        "authorization": self.authorization_decision.model_dump(),
+                        "permission_check": permission_check_result,
+                        "risk_check": risk_check_result,
+                        "referenced_artifact": referenced_envelope.model_dump(exclude_none=True),
+                        "manual_confirmation": decision.manual_confirmation,
+                    },
+                    workorder_draft=workorder_draft,
+                )
+                self._finish_stage("save_artifact", stage_started, message="工单草稿产物已保存")
+                yield encode_sse_event("token", {"type": "token", "content": final_answer}, trace_id=self.trace_id)
+                token_count += 1
+                event_count += 1
+                self.trace.finish(status="completed", final_answer=final_answer)
+                self._finish_open_stage_observations(status="completed")
+                self._finalize_trace_run(
+                    status="completed",
+                    final_answer=final_answer,
+                    metadata={
+                        "event_count": event_count,
+                        "token_count": token_count,
+                        "decision": decision.model_dump(),
+                        "task_family": decision.task_family,
+                        "manual_confirmation": decision.manual_confirmation,
+                        "workorder_draft_id": workorder_draft.draft_id if workorder_draft else None,
+                    },
+                )
+                complete_payload = build_diagnosis_complete_payload(
+                    thread_id=self.thread_id,
+                    trace_id=self.trace_id,
+                    request_id=self.request_id,
+                    final_answer=final_answer,
+                    decision=decision,
+                    sql_artifact=sql_artifact,
+                    knowledge_artifact=knowledge_artifact,
+                    analysis_artifact=analysis_artifact,
+                    permission_check_result=permission_check_result,
+                    risk_check_result=risk_check_result,
+                    resolution_recommendation={},
+                    audit_log_result={},
+                    workorder_suggestion=workorder_suggestion,
+                    report_artifact=report_artifact,
+                    workorder_draft=workorder_draft,
+                    evidence_bundle=self.evidence_bundle,
+                    output_guardrail={},
+                    saved_envelope=saved_envelope,
+                    trace=self.trace,
+                    todos=self._current_workflow_todos_payload(status_hint="本轮回答已完成").get("todos", []),
+                    event_count=event_count,
+                )
+                yield encode_sse_event("complete", complete_payload, trace_id=self.trace_id)
+                return
+
             if decision.plan_mode == "workorder_decision_from_artifact" and workflow_node_enabled(decision, "workorder_decision"):
                 stage_started = self._start_stage("workorder_decision", "基于当前线程已有诊断结果判断是否建议生成工单")
                 async for chunk in self.stream_workorder_decision_from_previous_artifact():
@@ -403,6 +652,19 @@ class SingleAgentFlowMixin:
                 )
                 self.evidence_bundle.artifacts["referenced_artifact_id"] = decision.referenced_artifact_id
                 self.evidence_bundle.artifacts["referenced_thread_artifact_created_at"] = referenced_envelope.created_at
+                if workorder_suggestion.lifecycle_status == "recommended_draft" and not workorder_suggestion.pending_action:
+                    pending = build_pending_workorder_draft_action(
+                        thread_id=self.thread_id,
+                        suggestion=workorder_suggestion,
+                        source_diagnosis_artifact_id=workorder_suggestion.source_diagnosis_artifact_id
+                        or self.evidence_bundle.bundle_id,
+                        source_report_artifact_id=workorder_suggestion.source_report_artifact_id
+                        or report_artifact.report_url
+                        or report_artifact.report_filename,
+                        recommendation_artifact_id=self.trace_id,
+                        stale_refresh_required=bool(decision.resolved_context.get("stale_evidence")),
+                    )
+                    workorder_suggestion.pending_action = pending.model_dump(exclude_none=True)
                 access_metadata = {
                     "role": self.auth_context.role,
                     "asset_scope": list(self.auth_context.asset_scope),
@@ -564,8 +826,64 @@ class SingleAgentFlowMixin:
                 return
 
             if decision.report_from_previous_artifact:
+                referenced_artifact = find_referenced_artifact(self.thread_id, decision.referenced_artifact_id)
+                decision.report_readiness = build_report_readiness(
+                    decision=decision,
+                    referenced_artifact=referenced_artifact,
+                )
+                if not decision.report_readiness.get("passed") or referenced_artifact is None:
+                    decision.report_blockers = list(
+                        dict.fromkeys(
+                            [
+                                *list(decision.report_blockers or []),
+                                *list((decision.report_readiness or {}).get("blockers", []) or []),
+                            ]
+                        )
+                    )
+                    final_answer = self._build_report_blocked_answer(decision)
+                    report_artifact = self._build_blocked_report_artifact(
+                        ";".join(decision.report_blockers or ["report_readiness_failed"])
+                    )
+                    stage_started = self._start_stage("final_answer", "报告材料不足，生成澄清提示")
+                    self._finish_stage("final_answer", stage_started, message="报告生成已阻塞")
+                    self.trace.finish(status="completed", final_answer=final_answer)
+                    self._finish_open_stage_observations(status="completed")
+                    self._finalize_trace_run(
+                        status="completed",
+                        final_answer=final_answer,
+                        metadata={
+                            "event_count": event_count,
+                            "token_count": token_count,
+                            "decision": decision.model_dump(),
+                            "task_family": decision.task_family,
+                            "readiness": {
+                                "diagnosis": decision.diagnosis_readiness,
+                                "workorder_action": decision.workorder_action_readiness,
+                                "report": decision.report_readiness,
+                            },
+                            "manual_confirmation": decision.manual_confirmation,
+                            "report_filename": report_artifact.report_filename,
+                        },
+                    )
+                    yield encode_sse_event("token", {"type": "token", "content": final_answer}, trace_id=self.trace_id)
+                    token_count += 1
+                    event_count += 1
+                    yield encode_sse_event(
+                        "complete",
+                        build_direct_complete_payload(
+                            thread_id=self.thread_id,
+                            trace_id=self.trace_id,
+                            request_id=self.request_id,
+                            final_answer=final_answer,
+                            decision=decision,
+                            trace=self.trace,
+                            event_count=event_count,
+                        ),
+                        trace_id=self.trace_id,
+                    )
+                    return
                 stage_started = self._start_stage("report", "基于当前线程已有结果生成报告")
-                async for chunk in self.stream_report_from_previous_artifact():
+                async for chunk in self.stream_report_from_previous_artifact(decision, referenced_artifact):
                     yield chunk
                     event_count += 1
                 final_answer, report_artifact = self._last_step_result
@@ -773,20 +1091,43 @@ class SingleAgentFlowMixin:
                 return
 
             if workflow_node_enabled(decision, "report"):
-                stage_started = self._start_stage("report", "生成可视化 HTML 报告")
-                async for chunk in self.stream_report_step(
-                    request,
-                    sql_artifact,
-                    knowledge_artifact,
-                    analysis_artifact,
-                    workorder_suggestion,
-                    current_time,
-                ):
-                    yield chunk
-                    event_count += 1
-                report_artifact = self._last_step_result
-                self._finish_stage("report", stage_started, message=report_artifact.save_result)
-                task_frame = self._build_workflow_task_update_frame(completed_stage="report")
+                referenced_artifact = find_referenced_artifact(self.thread_id, decision.referenced_artifact_id)
+                decision.report_readiness = build_report_readiness(
+                    decision=decision,
+                    sql_artifact=sql_artifact,
+                    referenced_artifact=referenced_artifact,
+                )
+                if decision.report_readiness.get("passed"):
+                    stage_started = self._start_stage("report", "生成可视化 HTML 报告")
+                    async for chunk in self.stream_report_step(
+                        request,
+                        sql_artifact,
+                        knowledge_artifact,
+                        analysis_artifact,
+                        workorder_suggestion,
+                        current_time,
+                    ):
+                        yield chunk
+                        event_count += 1
+                    report_artifact = self._last_step_result
+                    self._finish_stage("report", stage_started, message=report_artifact.save_result)
+                    task_frame = self._build_workflow_task_update_frame(completed_stage="report")
+                else:
+                    decision.report_blockers = list(
+                        dict.fromkeys(
+                            [
+                                *list(decision.report_blockers or []),
+                                *list((decision.report_readiness or {}).get("blockers", []) or []),
+                            ]
+                        )
+                    )
+                    stage_started = self._start_stage("report", "报告材料不足，跳过报告生成")
+                    report_artifact = self._build_blocked_report_artifact(
+                        ";".join(decision.report_blockers or ["report_readiness_failed"])
+                    )
+                    self._record_artifact("report", report_artifact, stage="report")
+                    self._finish_stage("report", stage_started, status="skipped", message=report_artifact.save_result)
+                    task_frame = self._build_workflow_task_update_frame(skipped_stage="report")
                 if task_frame:
                     yield task_frame
                     event_count += 1
@@ -814,6 +1155,18 @@ class SingleAgentFlowMixin:
                 report_artifact=report_artifact,
                 structured_analysis_artifact=getattr(self, "_last_structured_analysis", None),
             )
+            if workorder_suggestion.lifecycle_status == "recommended_draft":
+                workorder_suggestion.source_diagnosis_artifact_id = self.evidence_bundle.bundle_id
+                workorder_suggestion.source_report_artifact_id = report_artifact.report_url or report_artifact.report_filename
+                pending = build_pending_workorder_draft_action(
+                    thread_id=self.thread_id,
+                    suggestion=workorder_suggestion,
+                    source_diagnosis_artifact_id=self.evidence_bundle.bundle_id,
+                    source_report_artifact_id=workorder_suggestion.source_report_artifact_id,
+                    recommendation_artifact_id=self.trace_id,
+                    stale_refresh_required=bool(decision.resolved_context.get("stale_evidence")),
+                )
+                workorder_suggestion.pending_action = pending.model_dump(exclude_none=True)
             access_metadata = {
                 "role": self.auth_context.role,
                 "asset_scope": list(self.auth_context.asset_scope),

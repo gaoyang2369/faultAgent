@@ -76,6 +76,7 @@ async def token_stream_events(
     history_messages: list[Any] | None = None,
     replace_history: bool = False,
     auth_context: AuthContext | None = None,
+    conversation_context: dict[str, Any] | None = None,
     complete_payload_enricher=None,
 ) -> AsyncGenerator[str, None]:
     """聊天 SSE 兼容入口：dev mock 或限制型单 Agent。"""
@@ -112,6 +113,7 @@ async def token_stream_events(
             stream_id=stream_id,
             trace_id=trace_id,
             auth_context=auth_context,
+            conversation_context=conversation_context,
         )
         async for chunk in single_agent.stream_events(
             app,

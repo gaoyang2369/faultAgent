@@ -73,11 +73,51 @@ def test_stale_workorder_depends_on_refresh_goal_id() -> None:
         route_hint={"legacy_candidates": ["workorder_decision"]},
     )
 
-    refresh = _goal(goal_set, "refresh_current_status")
     workorder = _goal(goal_set, "decide_workorder")
-    assert workorder.depends_on == [refresh.goal_id]
     assert "latest_realtime_status" in workorder.required_evidence
     assert workorder.risk_level == "requires_confirmation"
+    assert "refresh_current_status" not in _goal_types(goal_set)
+
+
+def test_workorder_confirmation_builds_create_draft_goal_from_pending_action() -> None:
+    goal_set = build_goal_set(
+        message="那就生成吧",
+        payload={},
+        resolved_context=ResolvedContext(
+            relation_to_previous="action_followup",
+            referenced_artifact_id="eb_J1",
+            inherited_slots={"device": "J1", "evidence_bundle": "eb_J1"},
+            pending_actions=[
+                {
+                    "action_type": "workorder_draft",
+                    "status": "pending",
+                    "source_diagnosis_artifact_id": "eb_J1",
+                    "source_hash": "hash_1",
+                }
+            ],
+        ),
+        route_hint={},
+    )
+
+    assert _goal_types(goal_set) == ["create_workorder_draft"]
+    assert _goal(goal_set, "create_workorder_draft").expected_output == "workorder_draft"
+
+
+def test_workorder_dispatch_builds_dispatch_goal() -> None:
+    goal_set = build_goal_set(
+        message="派发工单",
+        payload={},
+        resolved_context=ResolvedContext(
+            relation_to_previous="action_followup",
+            referenced_artifact_id="eb_J1",
+            inherited_slots={"device": "J1"},
+        ),
+        route_hint={"legacy_candidates": ["dispatch_workorder"]},
+    )
+
+    assert _goal_types(goal_set) == ["dispatch_workorder"]
+    assert _goal(goal_set, "dispatch_workorder").expected_output == "dispatch_boundary"
+    assert _goal(goal_set, "dispatch_workorder").risk_level == "high_risk"
 
 
 def test_report_handoff_builds_generate_report_goal() -> None:
@@ -141,6 +181,20 @@ def test_workflow_policy_consumes_goals() -> None:
 
     assert plan.policy.policy_id == "action_request_v1"
     assert plan.resolved_nodes["workorder_decision"] is True
+
+
+def test_workflow_policy_enables_create_draft_node() -> None:
+    route = TaskRoute(
+        task_family="action_or_workorder",
+        action_target="workorder",
+        goal_set={"goals": [{"goal_id": "goal_1_create_workorder_draft", "goal_type": "create_workorder_draft"}]},
+        objects={"device_ids": ["J1"]},
+        flags={"need_create_workorder_draft": True},
+    )
+    plan = build_workflow_plan(route)
+
+    assert plan.resolved_nodes["create_workorder_draft"] is True
+    assert plan.resolved_nodes.get("workorder_decision") is not True
 
 
 def test_goals_are_policy_inputs_without_legacy_task_fallback() -> None:

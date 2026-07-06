@@ -40,6 +40,36 @@
       </ol>
     </div>
 
+    <div v-if="workOrderDraftVisible" class="diagnosis-card__workorder">
+      <div class="diagnosis-card__section-title">工单草稿</div>
+      <div class="diagnosis-card__workorder-box">
+        <div class="diagnosis-card__workorder-head">
+          <div>
+            <div class="diagnosis-card__workorder-status">草稿 {{ workOrderDraftId }}</div>
+            <div v-if="workOrderDraftWarning" class="diagnosis-card__workorder-reason">{{ workOrderDraftWarning }}</div>
+          </div>
+        </div>
+        <div class="diagnosis-card__workorder-grid">
+          <div>
+            <span>工单类型</span>
+            <strong>{{ workOrderDraftType }}</strong>
+          </div>
+          <div>
+            <span>优先级</span>
+            <strong>{{ workOrderDraftPriority }}</strong>
+          </div>
+          <div>
+            <span>建议处理角色</span>
+            <strong>{{ workOrderDraftAssignee }}</strong>
+          </div>
+          <div>
+            <span>状态</span>
+            <strong>{{ workOrderDraftStatus }}</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="workOrderVisible" class="diagnosis-card__workorder">
       <div class="diagnosis-card__section-title">工单建议</div>
       <div class="diagnosis-card__workorder-box" :class="{ 'is-muted': !workOrderNeed }">
@@ -316,6 +346,26 @@ const workOrderDecision = computed(() => pickObject(
   props.message?.scenario_result?.payload?.workorder_decision
 ))
 
+const workOrderDraft = computed(() => pickObject(
+  props.message?.workorderDraft,
+  props.message?.workorder_draft,
+  props.message?.artifact?.payload?.workorder_draft,
+  props.message?.workflowResult?.payload?.workorder_draft,
+  props.message?.workflow_result?.payload?.workorder_draft
+))
+
+const producedArtifacts = computed(() => Array.isArray(props.message?.producedArtifacts)
+  ? props.message.producedArtifacts
+  : Array.isArray(props.message?.produced_artifacts)
+    ? props.message.produced_artifacts
+    : [])
+
+const shouldShowArtifactCard = (artifactType) => producedArtifacts.value.some((item) => (
+  item?.artifact_type === artifactType &&
+  item?.created_in_current_turn === true &&
+  item?.display_policy === 'show_card'
+))
+
 const isRawSqlTupleText = (value) => /^\(?\d+,\s*['"]?\d{4}-\d{2}-\d{2}/.test(cleanText(value)) || /\),\s*\(\d+,\s*['"]?\d{4}-\d{2}-\d{2}/.test(cleanText(value))
 const basisItems = computed(() => toList(analysisArtifact.value?.basis).filter((item) => !isRawSqlTupleText(item)))
 const causeItems = computed(() => toList(analysisArtifact.value?.probable_causes))
@@ -341,14 +391,18 @@ const evidenceText = computed(() => [
 ].filter(Boolean).join(' '))
 
 const hasCard = computed(() => Boolean(
-  ['status_card', 'diagnosis_card', 'report_status'].includes(uiPayload.value?.type) &&
-  (uiPayload.value?.type !== 'report_status' || uiPayload.value?.report_generated === true) &&
-  analysisArtifact.value &&
   (
-    conclusion.value ||
-    basisItems.value.length ||
-    recommendations.value.length ||
-    causeItems.value.length
+    ['status_card', 'diagnosis_card', 'report_status', 'workorder_card'].includes(uiPayload.value?.type) &&
+    (uiPayload.value?.type !== 'report_status' || uiPayload.value?.report_generated === true) &&
+    (analysisArtifact.value || workOrderDraft.value || workOrderDecision.value) &&
+    (
+      conclusion.value ||
+      basisItems.value.length ||
+      recommendations.value.length ||
+      causeItems.value.length ||
+      workOrderDraftVisible.value ||
+      workOrderVisible.value
+    )
   )
 ))
 
@@ -479,7 +533,12 @@ const actionItems = computed(() => recommendations.value.slice(0, 5).map((item, 
   }
 }))
 
-const workOrderVisible = computed(() => Boolean(workOrderDecision.value))
+const workOrderLifecycle = computed(() => cleanText(workOrderDecision.value?.lifecycle_status || workOrderDecision.value?.lifecycleStatus))
+const workOrderVisible = computed(() => Boolean(
+  workOrderDecision.value &&
+  workOrderLifecycle.value !== 'not_evaluated' &&
+  !workOrderDraftVisible.value
+))
 const workOrderNeed = computed(() => Boolean(workOrderDecision.value?.need_workorder ?? workOrderDecision.value?.needWorkorder))
 const workOrderReason = computed(() => cleanText(workOrderDecision.value?.reason))
 const workOrderType = computed(() => cleanText(workOrderDecision.value?.workorder_type || workOrderDecision.value?.workorderType || '运行异常排查'))
@@ -496,6 +555,13 @@ const workOrderFaultCode = computed(() => cleanText(workOrderDecision.value?.fau
 const workOrderEvidenceItems = computed(() => toList(workOrderDecision.value?.key_evidence || workOrderDecision.value?.keyEvidence).slice(0, 6))
 const workOrderStepItems = computed(() => toList(workOrderDecision.value?.processing_steps || workOrderDecision.value?.processingSteps).slice(0, 8))
 const workOrderAcceptanceItems = computed(() => toList(workOrderDecision.value?.acceptance_criteria || workOrderDecision.value?.acceptanceCriteria).slice(0, 6))
+const workOrderDraftVisible = computed(() => Boolean(workOrderDraft.value && shouldShowArtifactCard('workorder_draft')))
+const workOrderDraftId = computed(() => cleanText(workOrderDraft.value?.draft_id || workOrderDraft.value?.draftId || '未编号'))
+const workOrderDraftType = computed(() => cleanText(workOrderDraft.value?.workorder_type || workOrderDraft.value?.workorderType || '运行异常确认工单'))
+const workOrderDraftPriority = computed(() => cleanText(workOrderDraft.value?.priority || 'P2'))
+const workOrderDraftAssignee = computed(() => cleanText(workOrderDraft.value?.recommended_assignee_role || workOrderDraft.value?.recommendedAssigneeRole || '电气维护人员'))
+const workOrderDraftStatus = computed(() => cleanText(workOrderDraft.value?.status || 'draft'))
+const workOrderDraftWarning = computed(() => cleanText(workOrderDraft.value?.stale_warning || workOrderDraft.value?.staleWarning || '草稿已创建，不会自动派发。派发前需要刷新当前状态和人工审批。'))
 const normalizeTaskMappings = (value) => {
   if (!Array.isArray(value)) return []
   const seen = new Set()

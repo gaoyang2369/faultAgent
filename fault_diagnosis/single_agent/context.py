@@ -29,6 +29,8 @@ def apply_context_resolution(
     message: str,
     state: ConversationDiagnosisState | None,
     auth_context: AuthContext | None = None,
+    conversation_context: dict[str, Any] | None = None,
+    recent_context_signals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fill missing slots from the active case and return legacy resolution dict."""
 
@@ -39,6 +41,8 @@ def apply_context_resolution(
         auth_context=auth_context or build_auth_context(role="admin"),
         current_payload=payload,
         state=state,
+        conversation_context=conversation_context,
+        recent_context_signals=recent_context_signals,
     )
     return resolved.legacy_context_resolution()
 

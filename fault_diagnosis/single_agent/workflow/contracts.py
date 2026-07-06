@@ -24,7 +24,14 @@ TaskFamilySource = Literal[
 SubgoalStatus = Literal["ready", "blocked", "skipped"]
 RiskLevel = Literal["read_only", "requires_confirmation", "write_action", "high_risk"]
 GoalRiskLevel = Literal["read_only", "requires_confirmation", "high_risk"]
-GoalExpectedOutput = Literal["answer", "report", "workorder_decision", "clarification"]
+GoalExpectedOutput = Literal[
+    "answer",
+    "report",
+    "workorder_decision",
+    "workorder_draft",
+    "dispatch_boundary",
+    "clarification",
+]
 GoalSource = Literal["explicit_user_request", "inferred_from_context", "compatibility_projection"]
 NodeSetting = bool | Literal["conditional"]
 GOAL_SET_SCHEMA_VERSION = "goal_set.v1"
@@ -120,6 +127,13 @@ class TaskRoute(BaseModel):
     satisfied_evidence: list[str] = Field(default_factory=list)
     missing_or_stale_evidence: list[str] = Field(default_factory=list)
     should_refresh_runtime_data: bool = False
+    report_source_mode: str = ""
+    report_readiness: dict[str, Any] = Field(default_factory=dict)
+    report_blockers: list[str] = Field(default_factory=list)
+    report_candidate_summary: list[dict[str, Any]] = Field(default_factory=list)
+    report_candidate_artifact_count: int = 0
+    selected_artifact_id: str | None = None
+    selected_artifact_type: str | None = None
     action_target: str | None = None
     route_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
     user_goal: str = ""

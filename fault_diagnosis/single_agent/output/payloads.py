@@ -12,6 +12,7 @@ from ...diagnosis.contracts import (
     KnowledgeStepArtifact,
     ReportStepArtifact,
     SqlStepArtifact,
+    WorkOrderDraftArtifact,
     WorkOrderSuggestion,
 )
 from ...context import summarize_resolved_context
@@ -154,6 +155,15 @@ def build_report_handoff_complete_payload(
         "workorder_action_readiness": workorder_action_readiness,
         "manual_confirmation": manual_confirmation,
         "authorization": decision.authorization,
+        "report_artifact": report_artifact.model_dump(exclude_none=True),
+        "produced_artifacts": _report_handoff_produced_artifacts(
+            decision=decision,
+            report_artifact=report_artifact,
+        ),
+        "referenced_artifacts": _referenced_artifacts(
+            decision=decision,
+            report_artifact=report_artifact,
+        ),
         "ui_payload": build_ui_payload(decision=decision, report_artifact=report_artifact),
         "todos": todos,
         "workflow_route": {
@@ -206,6 +216,7 @@ def build_diagnosis_complete_payload(
     audit_log_result: dict[str, Any],
     workorder_suggestion: WorkOrderSuggestion,
     report_artifact: ReportStepArtifact,
+    workorder_draft: WorkOrderDraftArtifact | None = None,
     evidence_bundle: EvidenceBundle | None,
     output_guardrail: dict[str, Any],
     rendered_answer: Any | None = None,
@@ -251,7 +262,17 @@ def build_diagnosis_complete_payload(
         "resolution_recommendation": resolution_recommendation,
         "audit_log": audit_log_result,
         "workorder_decision": workorder_suggestion.model_dump(exclude_none=True),
+        "workorder_draft": workorder_draft.model_dump(exclude_none=True) if workorder_draft else None,
         "report_artifact": report_artifact.model_dump(exclude_none=True),
+        "produced_artifacts": _produced_artifacts(
+            decision=decision,
+            saved_envelope=saved_envelope,
+            report_artifact=report_artifact,
+            workorder_suggestion=workorder_suggestion,
+            workorder_draft=workorder_draft,
+            evidence_bundle=evidence_bundle,
+        ),
+        "referenced_artifacts": _referenced_artifacts(decision=decision, report_artifact=report_artifact),
         "ui_payload": build_ui_payload(
             decision=decision,
             sql_artifact=sql_artifact,
@@ -311,6 +332,151 @@ def build_diagnosis_complete_payload(
     return complete_payload
 
 
+def _artifact_item(
+    *,
+    artifact_id: str,
+    artifact_type: str,
+    role: str,
+    created_in_current_turn: bool,
+    display_policy: str,
+    source_artifact_id: str | None = None,
+    title: str = "",
+    url: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "artifact_id": artifact_id,
+        "artifact_type": artifact_type,
+        "role": role,
+        "created_in_current_turn": created_in_current_turn,
+        "display_policy": display_policy,
+        "source_artifact_id": source_artifact_id,
+        "title": title,
+        "url": url,
+    }
+
+
+def _produced_artifacts(
+    *,
+    decision: SingleAgentDecision,
+    saved_envelope: DiagnosisArtifactEnvelope,
+    report_artifact: ReportStepArtifact,
+    workorder_suggestion: WorkOrderSuggestion,
+    workorder_draft: WorkOrderDraftArtifact | None,
+    evidence_bundle: EvidenceBundle | None,
+) -> list[dict[str, Any]]:
+    items = [
+        _artifact_item(
+            artifact_id=saved_envelope.created_at,
+            artifact_type="diagnosis",
+            role="produced",
+            created_in_current_turn=True,
+            display_policy="hide_card",
+            title=saved_envelope.request_summary,
+        )
+    ]
+    if evidence_bundle is not None:
+        items.append(
+            _artifact_item(
+                artifact_id=evidence_bundle.bundle_id,
+                artifact_type="evidence_bundle",
+                role="produced",
+                created_in_current_turn=True,
+                display_policy="hide_card",
+                title="证据链",
+            )
+        )
+    if report_artifact.success and (decision.requested_output == "report" or "generate_report" in str(decision.goal_set)):
+        report_item = _report_artifact_item(report_artifact, source_artifact_id=saved_envelope.created_at)
+        if report_item:
+            items.append(report_item)
+    if workorder_suggestion.lifecycle_status == "recommended_draft":
+        items.append(
+            _artifact_item(
+                artifact_id=workorder_suggestion.pending_action.get("source_hash") if isinstance(workorder_suggestion.pending_action, dict) else saved_envelope.created_at,
+                artifact_type="workorder_recommendation",
+                role="produced",
+                created_in_current_turn=True,
+                display_policy="hide_card",
+                source_artifact_id=workorder_suggestion.source_diagnosis_artifact_id,
+                title=workorder_suggestion.title or "工单建议",
+            )
+        )
+    if workorder_draft is not None:
+        items.append(
+            _artifact_item(
+                artifact_id=workorder_draft.draft_id,
+                artifact_type="workorder_draft",
+                role="produced",
+                created_in_current_turn=True,
+                display_policy="show_card",
+                source_artifact_id=workorder_draft.source_diagnosis_artifact_id,
+                title=workorder_draft.title or "工单草稿",
+            )
+        )
+    return items
+
+
+def _report_handoff_produced_artifacts(
+    *,
+    decision: SingleAgentDecision,
+    report_artifact: ReportStepArtifact,
+) -> list[dict[str, Any]]:
+    report_item = _report_artifact_item(report_artifact, source_artifact_id=decision.referenced_artifact_id)
+    return [report_item] if report_item else []
+
+
+def _report_artifact_item(
+    report_artifact: ReportStepArtifact,
+    *,
+    source_artifact_id: str | None,
+) -> dict[str, Any] | None:
+    if not report_artifact.success:
+        return None
+    report_id = report_artifact.report_url or report_artifact.report_filename or ""
+    if not report_id:
+        return None
+    return _artifact_item(
+        artifact_id=report_id,
+        artifact_type="report",
+        role="produced",
+        created_in_current_turn=True,
+        display_policy="show_card",
+        source_artifact_id=source_artifact_id,
+        title=report_artifact.report_title or "报告结果",
+        url=report_artifact.report_url,
+    )
+
+
+def _referenced_artifacts(*, decision: SingleAgentDecision, report_artifact: ReportStepArtifact) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    referenced_id = str(decision.referenced_artifact_id or "").strip()
+    if referenced_id:
+        items.append(
+            _artifact_item(
+                artifact_id=referenced_id,
+                artifact_type="diagnosis",
+                role="referenced",
+                created_in_current_turn=False,
+                display_policy="hide_card",
+                title="上一轮诊断产物",
+            )
+        )
+    if not report_artifact.success and report_artifact.report_url:
+        items.append(
+            _artifact_item(
+                artifact_id=report_artifact.report_url,
+                artifact_type="report",
+                role="referenced",
+                created_in_current_turn=False,
+                display_policy="hide_card",
+                source_artifact_id=referenced_id or None,
+                title="上一轮报告",
+                url=report_artifact.report_url,
+            )
+        )
+    return items
+
+
 def build_ui_payload(
     *,
     decision: SingleAgentDecision,
@@ -339,6 +505,15 @@ def build_ui_payload(
         ui_type = "access_denied"
     elif _is_compat_task(decision, "knowledge_qa"):
         ui_type = "knowledge_card"
+    elif str(decision.task_family or "") == "action_or_workorder":
+        ui_type = "workorder_card"
+    elif str(getattr(decision, "report_source_mode", "") or "") in {"blocked_missing_context", "ambiguous"}:
+        ui_type = "report_blocked"
+    elif _is_compat_task(decision, "report_generation") and not (
+        getattr(report_artifact, "success", False)
+        or (getattr(decision, "report_readiness", {}) or {}).get("passed")
+    ):
+        ui_type = "report_blocked"
     elif _is_compat_task(decision, "report_generation"):
         ui_type = "report_status"
     elif data_state in {"out_of_scope", "blocked", "empty"} or auth_mode == "degrade":

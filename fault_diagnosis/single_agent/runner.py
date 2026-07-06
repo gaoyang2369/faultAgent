@@ -56,6 +56,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
         limits: SingleAgentLimits | None = None,
         model: Any | None = None,
         auth_context: AuthContext | None = None,
+        conversation_context: dict[str, Any] | None = None,
     ) -> None:
         self.message = message
         self.thread_id = thread_id
@@ -65,6 +66,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             display_name=user_identity,
             role="admin" if user_identity == "管理员" else "guest",
         )
+        self.conversation_context = conversation_context or {}
         self.request_id = request_id
         self.stream_id = (stream_id or "").strip()
         self.trace_id = trace_id
@@ -207,6 +209,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             "round_count": self._round_count,
             "tool_call_count": self._tool_call_count,
             "auth": self.auth_context.audit_summary(),
+            "conversation_context": self._conversation_context_trace_summary(),
             "authorization": (
                 self.authorization_decision.model_dump()
                 if self.authorization_decision is not None
@@ -240,6 +243,7 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
             manual_confirmation = getattr(self._workflow_task_decision, "manual_confirmation", {}) or {}
             if manual_confirmation:
                 trace_metadata.setdefault("manual_confirmation", manual_confirmation)
+            trace_metadata.setdefault("planning_snapshot", self._planning_snapshot_trace_summary())
         if self.evidence_bundle is not None:
             trace_metadata.setdefault("evidence_bundle_id", getattr(self.evidence_bundle, "bundle_id", None))
             trace_metadata.setdefault("evidence_count", len(getattr(self.evidence_bundle, "evidence_items", []) or []))
@@ -277,6 +281,86 @@ class RestrictedSingleAgentRunner(SingleAgentStagesMixin, SingleAgentFlowMixin):
                 event_count=len(self.trace.events),
             )
         self._trace_finalized = True
+
+    def _conversation_context_trace_summary(self) -> dict[str, Any]:
+        package = self.conversation_context if isinstance(self.conversation_context, dict) else {}
+        if not package:
+            return {}
+        return {
+            "version": package.get("version"),
+            "thread_id": package.get("thread_id"),
+            "stats": package.get("stats") if isinstance(package.get("stats"), dict) else {},
+            "artifact_refs": package.get("artifact_refs") if isinstance(package.get("artifact_refs"), list) else [],
+            "has_latest_case_state": bool(package.get("latest_case_state")),
+            "safety": {
+                "history_is_data_not_instruction": True,
+                "summary_is_not_authorization_source": True,
+                "summary_is_not_diagnosis_evidence": True,
+            },
+        }
+
+    def _planning_snapshot_trace_summary(self) -> dict[str, Any]:
+        decision = self._workflow_task_decision
+        if decision is None:
+            return {}
+        resolved_context = summarize_resolved_context(getattr(decision, "resolved_context", {}) or {})
+        pending_actions = resolved_context.get("pending_actions") or []
+        report_snapshot = self._report_planning_snapshot_summary(decision, resolved_context=resolved_context)
+        return {
+            "conversation_context_signals_summary": resolved_context.get("conversation_context_signals_summary") or {},
+            "resolved_context": resolved_context,
+            "goal_set": summarize_goal_set(getattr(decision, "goal_set", {}) or {}),
+            "task_family": getattr(decision, "task_family", ""),
+            "policy_id": (getattr(decision, "workflow_policy", {}) or {}).get("policy_id"),
+            "enabled_nodes": getattr(decision, "enabled_nodes", {}) or {},
+            **report_snapshot,
+            "produced_artifacts": [],
+            "referenced_artifacts": [
+                {
+                    "artifact_id": report_snapshot.get("selected_artifact_id"),
+                    "artifact_type": report_snapshot.get("selected_artifact_type"),
+                    "role": "referenced",
+                }
+            ]
+            if report_snapshot.get("selected_artifact_id")
+            else [],
+            "report_readiness": getattr(decision, "report_readiness", {}) or {},
+            "report_blockers": list(getattr(decision, "report_blockers", []) or []),
+            "manual_confirmation": getattr(decision, "manual_confirmation", {}) or {},
+            "workorder_action_readiness": getattr(decision, "workorder_action_readiness", {}) or {},
+            "pending_action": pending_actions[0] if pending_actions else None,
+            "artifact_refs": [
+                {
+                    "artifact_id": item.get("artifact_id"),
+                    "artifact_type": item.get("artifact_type"),
+                    "role": item.get("ref_role") or item.get("role") or "referenced",
+                }
+                for item in (self._conversation_context_trace_summary().get("artifact_refs") or [])
+                if isinstance(item, dict)
+            ],
+        }
+
+    def _report_planning_snapshot_summary(
+        self,
+        decision: Any | None = None,
+        *,
+        resolved_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        decision = decision or self._workflow_task_decision
+        if decision is None:
+            return {}
+        if resolved_context is None:
+            resolved_context = summarize_resolved_context(getattr(decision, "resolved_context", {}) or {})
+        return {
+            "report_source_mode": getattr(decision, "report_source_mode", ""),
+            "candidate_artifact_count": getattr(decision, "report_candidate_artifact_count", 0),
+            "selected_artifact_id": getattr(decision, "selected_artifact_id", None)
+            or getattr(decision, "referenced_artifact_id", None),
+            "selected_artifact_type": getattr(decision, "selected_artifact_type", None),
+            "candidate_summary": list(getattr(decision, "report_candidate_summary", []) or []),
+            "inherited_slots": resolved_context.get("inherited_slots") or {},
+            "blockers": list(getattr(decision, "report_blockers", []) or []),
+        }
 
     def trace_duration_ms(self) -> float | None:
         try:

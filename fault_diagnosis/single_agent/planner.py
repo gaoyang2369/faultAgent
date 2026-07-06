@@ -20,6 +20,7 @@ from .planning import (
     summarize_manual_confirmation_requirement,
     summarize_workorder_action_readiness,
 )
+from .reporting.source_resolution import apply_report_source_decision, resolve_report_source
 from .workflow import summarize_goal_set
 
 
@@ -58,6 +59,13 @@ class PlanSnapshot(BaseModel):
     planned_tool_arguments_preview: dict[str, Any] = Field(default_factory=dict)
     blocked_reason: str = ""
     authorization: dict[str, Any] = Field(default_factory=dict)
+    report_source_mode: str = ""
+    report_readiness: dict[str, Any] = Field(default_factory=dict)
+    report_blockers: list[str] = Field(default_factory=list)
+    report_candidate_summary: list[dict[str, Any]] = Field(default_factory=list)
+    report_candidate_artifact_count: int = 0
+    selected_artifact_id: str | None = None
+    selected_artifact_type: str | None = None
 
 
 def build_plan_snapshot(
@@ -66,6 +74,7 @@ def build_plan_snapshot(
     thread_id: str,
     user_identity: str,
     auth_context: AuthContext,
+    conversation_context: dict[str, Any] | None = None,
 ) -> PlanSnapshot:
     """Build a deterministic goal-native plan snapshot without side effects."""
 
@@ -79,8 +88,22 @@ def build_plan_snapshot(
         auth_context=auth_context,
         current_payload=payload,
         state=conversation_state,
+        conversation_context=conversation_context,
     )
-    report_from_previous_artifact = resolved_context.relation_to_previous == "report_handoff"
+    report_source = resolve_report_source(
+        thread_id=thread_id,
+        message=normalized_message,
+        auth_context=auth_context,
+        current_payload=payload,
+        resolved_context=resolved_context,
+        conversation_context=conversation_context,
+    )
+    apply_report_source_decision(
+        resolved_context=resolved_context,
+        current_payload=payload,
+        decision=report_source,
+    )
+    report_from_previous_artifact = report_source.mode == "reuse_artifact"
     if report_from_previous_artifact:
         payload["needs_report"] = True
     request = build_request_from_payload(
@@ -147,6 +170,13 @@ def build_plan_snapshot(
             "missing_or_stale_evidence": decision.missing_or_stale_evidence,
             "should_refresh_runtime_data": decision.should_refresh_runtime_data,
             "evidence_mode": decision.evidence_mode,
+            "report_source_mode": decision.report_source_mode,
+            "report_readiness": decision.report_readiness,
+            "report_blockers": list(decision.report_blockers or []),
+            "report_candidate_summary": list(decision.report_candidate_summary or []),
+            "report_candidate_artifact_count": decision.report_candidate_artifact_count,
+            "selected_artifact_id": decision.selected_artifact_id,
+            "selected_artifact_type": decision.selected_artifact_type,
         },
         confidence=float(decision.route_confidence or 0.0),
         skip_reasons=skip_reasons,
@@ -157,6 +187,13 @@ def build_plan_snapshot(
         planned_tool_arguments_preview=_planned_tool_arguments_preview(decision),
         blocked_reason=_blocked_reason(decision, auth_payload),
         authorization=auth_payload,
+        report_source_mode=decision.report_source_mode,
+        report_readiness=decision.report_readiness,
+        report_blockers=list(decision.report_blockers or []),
+        report_candidate_summary=list(decision.report_candidate_summary or []),
+        report_candidate_artifact_count=decision.report_candidate_artifact_count,
+        selected_artifact_id=decision.selected_artifact_id,
+        selected_artifact_type=decision.selected_artifact_type,
     )
 
 
@@ -169,6 +206,13 @@ def _workflow_route_payload(decision: Any, goal_set_summary: dict[str, Any]) -> 
         "relation_to_previous": decision.relation_to_previous,
         "plan_mode": decision.plan_mode,
         "evidence_mode": decision.evidence_mode,
+        "report_source_mode": getattr(decision, "report_source_mode", ""),
+        "report_readiness": getattr(decision, "report_readiness", {}) or {},
+        "report_blockers": list(getattr(decision, "report_blockers", []) or []),
+        "report_candidate_summary": list(getattr(decision, "report_candidate_summary", []) or []),
+        "report_candidate_artifact_count": getattr(decision, "report_candidate_artifact_count", 0),
+        "selected_artifact_id": getattr(decision, "selected_artifact_id", None),
+        "selected_artifact_type": getattr(decision, "selected_artifact_type", None),
         "action_target": decision.action_target,
         "objects": decision.objects,
         "time_window": decision.time_window,

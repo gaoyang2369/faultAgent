@@ -69,6 +69,10 @@ def _sql_model(sql_artifact: dict[str, Any]) -> SqlStepArtifact:
         result_preview=str(sql_artifact.get("result_preview") or ""),
         raw_output=str(sql_artifact.get("raw_output") or sql_artifact.get("result_preview") or ""),
         error=sql_artifact.get("error"),
+        row_count=sql_artifact.get("row_count"),
+        parse_status=str(sql_artifact.get("parse_status") or ""),
+        source_table=str(sql_artifact.get("source_table") or ""),
+        data_state=str(sql_artifact.get("data_state") or "ok"),
     )
 
 
@@ -143,6 +147,20 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
     payload = envelope.payload or {}
     request = payload.get("request") or {}
     report_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    reportable_payload = payload.get("reportable_payload")
+    if isinstance(reportable_payload, dict) and reportable_payload.get("operation_report_payload"):
+        mapped = dict(reportable_payload)
+        mapped.setdefault("title", "DCMA 运行诊断报告")
+        mapped.setdefault("report_filename", _build_report_filename("dcma_report_generation_reuse", envelope.thread_id))
+        mapped.setdefault("chart_payload", payload.get("chart_payload") or "")
+        return mapped
+    if payload.get("operation_report_payload"):
+        return {
+            "title": "DCMA 运行诊断报告",
+            "report_filename": _build_report_filename("dcma_report_generation_reuse", envelope.thread_id),
+            "chart_payload": payload.get("chart_payload") or "",
+            "operation_report_payload": payload.get("operation_report_payload"),
+        }
 
     if artifact_type == DiagnosisArtifactType.FAULT_DIAGNOSIS.value:
         sql_artifact = payload.get("sql_artifact") or {}
@@ -170,8 +188,10 @@ def map_artifact_to_report_payload(envelope: DiagnosisArtifactEnvelope) -> dict[
             ),
         }
 
-    if artifact_type == DiagnosisArtifactType.STATUS_INSPECTION.value:
+    if artifact_type in {DiagnosisArtifactType.STATUS_INSPECTION.value, DiagnosisArtifactType.STATUS_QUERY.value}:
         sql_artifact = payload.get("sql_artifact") or {}
+        if payload.get("normalized_rows") and not sql_artifact.get("raw_output"):
+            sql_artifact = {**sql_artifact, "raw_output": json.dumps(payload.get("normalized_rows"), ensure_ascii=False)}
         knowledge_artifact = payload.get("knowledge_artifact") or {}
         inspection_artifact = payload.get("inspection_artifact") or {}
         report_filename = _build_report_filename("dcma_report_generation_inspection", envelope.thread_id)

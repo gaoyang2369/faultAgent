@@ -243,8 +243,39 @@ export const useChatStream = ({
   const serializeMessagesForCache = () =>
     currentMessages.value
       .filter(message => !message?.cacheHint)
-      .filter(message => isRenderableMessage(message))
       .map(message => normalizeMessageForView(message))
+      .filter(message => {
+        if (message.role !== 'assistant') {
+          return isRenderableMessage(message)
+        }
+        if (!message.isStreaming) {
+          return isRenderableMessage(message)
+        }
+        if (String(message.content || '').trim()) {
+          return isRenderableMessage(message)
+        }
+        return Boolean(
+          message.chartData ||
+          message.imageUrl ||
+          message.analysisArtifact ||
+          message.sqlArtifact ||
+          message.knowledgeArtifact ||
+          message.workorderDecision ||
+          (Array.isArray(message.toolEvents) && message.toolEvents.length > 0) ||
+          (Array.isArray(message.toolLifecycleLedger) && message.toolLifecycleLedger.length > 0) ||
+          (message.taskSnapshot && Array.isArray(message.taskSnapshot.todos) && message.taskSnapshot.todos.length > 0)
+        )
+      })
+
+  const restoreMessagesForView = (messages: Message[] = []) =>
+    messages
+      .map(normalizeMessageForView)
+      .filter(message => {
+        if (message.role === 'assistant' && message.isStreaming && !String(message.content || '').trim()) {
+          return false
+        }
+        return isRenderableMessage(message)
+      })
 
   const persistConversationCache = (
     threadId: string | null | undefined,
@@ -337,8 +368,8 @@ export const useChatStream = ({
   }
 
   const startNewChat = async () => {
-    activeRequestVersion += 1
     closeActiveStream('interrupted')
+    activeRequestVersion += 1
     localCacheOnly.value = false
     currentChatId.value = null
     currentMessages.value = []
@@ -359,9 +390,7 @@ export const useChatStream = ({
     }
 
     localCacheOnly.value = true
-    currentMessages.value = cachedConversation.messages
-      .map(normalizeMessageForView)
-      .filter(message => isRenderableMessage(message))
+    currentMessages.value = restoreMessagesForView(cachedConversation.messages)
     assignTodosState(cachedConversation.todos || [], cachedConversation.summary || null)
     ensureChatHistoryItem(chatId, 'local-cache')
     if (fallbackReason) {
@@ -375,8 +404,8 @@ export const useChatStream = ({
     if (!chatId) return
     if (deletedChatIds.has(chatId)) return
 
-    activeRequestVersion += 1
     closeActiveStream('interrupted')
+    activeRequestVersion += 1
     currentChatId.value = chatId
 
     try {
@@ -387,7 +416,12 @@ export const useChatStream = ({
         currentMessages.value = mergeMessagesWithLocalCache(
           messages as Message[],
           cachedConversation?.messages || []
-        ).filter(message => isRenderableMessage(message))
+        ).filter(message => {
+          if (message.role === 'assistant' && message.isStreaming && !String(message.content || '').trim()) {
+            return false
+          }
+          return isRenderableMessage(message)
+        })
         ensureChatHistoryItem(chatId, 'server')
         persistConversationCache(chatId, 'server')
         const todosPayload = await fetchTodosForThread(chatId)
@@ -828,6 +862,10 @@ export const useChatStream = ({
     patch.workflowResult = payload.workflowResult || payload.workflow_result || null
     patch.scenarioResult = payload.scenarioResult || payload.scenario_result || null
     patch.artifacts = payload.artifacts || []
+    patch.producedArtifacts = payload.producedArtifacts || payload.produced_artifacts || []
+    patch.produced_artifacts = payload.produced_artifacts || payload.producedArtifacts || []
+    patch.referencedArtifacts = payload.referencedArtifacts || payload.referenced_artifacts || []
+    patch.referenced_artifacts = payload.referenced_artifacts || payload.referencedArtifacts || []
     patch.timeline = payload.timeline || []
     patch.governance = payload.governance || null
     patch.reportGate = payload.reportGate || payload.report_gate || 'pass'
@@ -839,6 +877,8 @@ export const useChatStream = ({
     patch.analysisArtifact = payload.analysisArtifact || payload.analysis_artifact || null
     patch.workorderDecision = payload.workorderDecision || payload.workorder_decision || null
     patch.workorder_decision = payload.workorder_decision || payload.workorderDecision || null
+    patch.workorderDraft = payload.workorderDraft || payload.workorder_draft || null
+    patch.workorder_draft = payload.workorder_draft || payload.workorderDraft || null
     patch.artifact = payload.artifact || null
     patch.workflowStages = payload.workflowStages || payload.workflow_stages || []
     patch.currentWorkflowStage = payload.currentWorkflowStage || payload.current_stage || null
@@ -1163,6 +1203,10 @@ export const useChatStream = ({
             patch.workflowEnvelope = completeData.workflowEnvelope || completeData.workflow_envelope || null
             patch.scenarioResult = completeData.scenarioResult || completeData.scenario_result || null
             patch.artifacts = completeData.artifacts || []
+            patch.producedArtifacts = completeData.producedArtifacts || completeData.produced_artifacts || []
+            patch.produced_artifacts = completeData.produced_artifacts || completeData.producedArtifacts || []
+            patch.referencedArtifacts = completeData.referencedArtifacts || completeData.referenced_artifacts || []
+            patch.referenced_artifacts = completeData.referenced_artifacts || completeData.referencedArtifacts || []
             patch.timeline = completeData.timeline || []
             patch.governance = completeData.governance || null
             patch.evidenceQuality = completeData.evidenceQuality || completeData.evidence_quality || null
@@ -1176,6 +1220,8 @@ export const useChatStream = ({
             patch.analysisArtifact = completeData.analysisArtifact || completeData.analysis_artifact || null
             patch.workorderDecision = completeData.workorderDecision || completeData.workorder_decision || null
             patch.workorder_decision = completeData.workorder_decision || completeData.workorderDecision || null
+            patch.workorderDraft = completeData.workorderDraft || completeData.workorder_draft || null
+            patch.workorder_draft = completeData.workorder_draft || completeData.workorderDraft || null
             patch.uiPayload = completeData.uiPayload || completeData.ui_payload || null
             patch.ui_payload = completeData.ui_payload || completeData.uiPayload || null
             patch.artifact = completeData.artifact || null

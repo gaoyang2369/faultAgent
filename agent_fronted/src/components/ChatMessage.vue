@@ -3886,10 +3886,14 @@ const processedContent = computed(() => {
 // 从原始消息提取报告链接
 const reportLinks = computed(() => {
   const links = new Set();
-  const structuredUrl = props.message?.reportUrl || props.message?.report_url;
-  const artifactUrl = props.message?.reportArtifact?.report_url || props.message?.report_artifact?.report_url;
-  const artifactFilename = props.message?.reportArtifact?.report_filename || props.message?.report_artifact?.report_filename;
-  const reportFilename = props.message?.reportFilename || props.message?.report_filename;
+  const producedArtifacts = props.message?.producedArtifacts || props.message?.produced_artifacts || null;
+  const hasArtifactBoundary = Array.isArray(producedArtifacts);
+  const producedReports = (producedArtifacts || [])
+    .filter((item) => item?.artifact_type === 'report' && item?.created_in_current_turn === true && item?.display_policy === 'show_card');
+  const structuredUrl = producedReports[0]?.url || (hasArtifactBoundary ? null : (props.message?.reportUrl || props.message?.report_url));
+  const artifactUrl = producedReports[0]?.url || (hasArtifactBoundary ? null : (props.message?.reportArtifact?.report_url || props.message?.report_artifact?.report_url));
+  const artifactFilename = producedReports[0]?.artifact_id || (hasArtifactBoundary ? null : (props.message?.reportArtifact?.report_filename || props.message?.report_artifact?.report_filename));
+  const reportFilename = producedReports[0]?.artifact_id || (hasArtifactBoundary ? null : (props.message?.reportFilename || props.message?.report_filename));
 
   if (structuredUrl) {
     links.add(structuredUrl);
@@ -3946,7 +3950,7 @@ const finalAnswerTitle = computed(() => {
 });
 const finalAnswerSectionClass = computed(() => `final-answer-section--${messageUiType.value}`);
 const hasDiagnosisResultCard = computed(() => Boolean(
-  ['status_card', 'diagnosis_card', 'report_status'].includes(messageUiPayload.value?.type) &&
+  ['status_card', 'diagnosis_card', 'report_status', 'workorder_card'].includes(messageUiPayload.value?.type) &&
   diagnosisAnalysisArtifact.value &&
   (messageUiPayload.value?.type !== 'report_status' || messageUiPayload.value?.report_generated === true) &&
   (

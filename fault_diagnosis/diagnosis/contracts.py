@@ -46,6 +46,15 @@ QualityLevel = Literal["high", "medium", "low"]
 FreshnessLevel = Literal["current", "recent", "stale", "unknown"]
 CompletenessLevel = Literal["complete", "partial", "missing"]
 ClaimStatus = Literal["candidate", "confirmed", "rejected", "final"]
+WorkOrderLifecycleStatus = Literal[
+    "not_evaluated",
+    "not_recommended",
+    "recommended_draft",
+    "draft_created",
+    "dispatch_forbidden",
+    "dispatch_requires_external_approval",
+]
+WorkOrderDraftStatus = Literal["draft", "pending_verification"]
 
 
 class EvidenceQuality(BaseModel):
@@ -184,7 +193,8 @@ class AnalysisStepArtifact(BaseModel):
 class WorkOrderSuggestion(BaseModel):
     """工单建议阶段产物。"""
 
-    need_workorder: bool = Field(default=False, description="是否建议生成维修工单")
+    lifecycle_status: WorkOrderLifecycleStatus = Field(default="not_recommended", description="工单生命周期状态")
+    need_workorder: bool | None = Field(default=None, description="兼容字段：是否建议生成维修工单")
     reason: str = Field(default="", description="建议或不建议生成工单的规则依据")
     workorder_type: str = Field(default="", description="建议工单类型")
     priority: str = Field(default="P2", description="建议优先级编码")
@@ -202,6 +212,47 @@ class WorkOrderSuggestion(BaseModel):
     title: str = Field(default="", description="建议工单标题")
     trigger_source: str = Field(default="故障诊断 Agent", description="触发来源")
     status: str = Field(default="待派单", description="建议初始状态")
+    source_diagnosis_artifact_id: str | None = Field(default=None, description="原始诊断 artifact id")
+    source_report_artifact_id: str | None = Field(default=None, description="原始报告 artifact id")
+    pending_action: dict[str, Any] | None = Field(default=None, description="待用户确认的后续动作")
+
+    @model_validator(mode="after")
+    def _populate_lifecycle_compat(self) -> "WorkOrderSuggestion":
+        if self.lifecycle_status == "not_recommended" and self.need_workorder is True:
+            self.lifecycle_status = "recommended_draft"
+        if self.lifecycle_status == "not_evaluated":
+            self.need_workorder = None
+            if self.status == "待派单":
+                self.status = "未评估"
+            return self
+        if self.lifecycle_status == "recommended_draft":
+            self.need_workorder = True
+            if self.status == "待派单":
+                self.status = "待确认"
+            return self
+        if self.lifecycle_status == "not_recommended":
+            self.need_workorder = False
+        return self
+
+
+class WorkOrderDraftArtifact(BaseModel):
+    """Agent 生成的待人工确认工单草稿，不代表派发或执行。"""
+
+    draft_id: str
+    source_diagnosis_artifact_id: str
+    source_report_artifact_id: str | None = None
+    device: str
+    fault_code: str | None = None
+    priority: str = "P2"
+    workorder_type: str = "运行异常确认工单"
+    recommended_assignee_role: str = "电气维护人员"
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    stale_warning: str | None = None
+    status: WorkOrderDraftStatus = "draft"
+    source_hash: str
+    title: str = ""
+    created_from_recommendation_artifact_id: str | None = None
+    dispatch_policy: str = "dispatch_requires_external_approval"
 
 
 class ReportStepArtifact(BaseModel):
