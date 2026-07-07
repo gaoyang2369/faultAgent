@@ -408,6 +408,9 @@ skills/{skill_name}/
 - V2 feature flag 设计。
 - 当前契约继承清单。
 
+Phase 0 的冻结清单、测试矩阵和 feature flag 设计记录在
+[Agent Engine V2 Phase 0 Baseline](./agent-engine-v2-phase0-baseline.md)。
+
 验收：
 
 - `PYTHONPATH=. pytest -q` 通过。

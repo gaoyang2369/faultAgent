@@ -13,6 +13,7 @@
 目标态规划：
 
 - [Agent Engine V2 架构迁移执行计划](./agent-engine-v2-execution-plan.md)：用于后续分阶段迁移执行，不代表当前生产链路已经具备这些能力。
+- [Agent Engine V2 Phase 0 Baseline](./agent-engine-v2-phase0-baseline.md)：V2 迁移前的当前契约、继承矩阵、baseline case list 和 feature flag 草案。
 
 维护原则：
 
