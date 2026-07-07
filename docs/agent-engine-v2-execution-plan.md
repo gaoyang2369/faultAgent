@@ -442,6 +442,8 @@ Phase 0 的冻结清单、测试矩阵和 feature flag 设计记录在
 - V2 合同能 JSON 序列化。
 - V2 plan-only 能返回空计划和明确的 `not_implemented` 状态。
 
+Phase 1 产物应保持为旁路合同与空引擎，尚未接入 `/chat/plan`、`/chat/stream` 或 `/agent/chat`。
+
 ### Phase 2: Request Understanding Layer
 
 目标：
