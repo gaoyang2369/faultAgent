@@ -10,6 +10,10 @@
 4. [HTTP API 契约](./backend-api-contract.md)：外部路径、请求/响应、cookie 和权限要求。
 5. [SSE 事件契约](./sse-event-contract.md)：`/chat/stream` 事件序列和 `complete` payload。
 
+目标态规划：
+
+- [Agent Engine V2 架构迁移执行计划](./agent-engine-v2-execution-plan.md)：用于后续分阶段迁移执行，不代表当前生产链路已经具备这些能力。
+
 维护原则：
 
 - 新文档写当前事实，不写迁移流水账。
