@@ -1,0 +1,4 @@
+- user: "现在 J1 还故障吗"
+  selected_skill: runtime_status
+  required_slots:
+    device: J1

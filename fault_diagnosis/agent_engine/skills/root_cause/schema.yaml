@@ -1,0 +1,12 @@
+input:
+  device:
+    type: string
+    required: true
+  fault_code:
+    type: string
+    required: false
+output:
+  root_cause_candidates:
+    type: array
+  confidence:
+    type: string

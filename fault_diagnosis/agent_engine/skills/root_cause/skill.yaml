@@ -1,0 +1,28 @@
+name: root_cause
+version: "0.1.0"
+description: Plan root-cause analysis when the user asks why a fault occurred.
+trigger_intents:
+  - root_cause_analysis
+required_slots:
+  - device
+optional_slots:
+  - fault_code
+  - time_window
+required_evidence:
+  - runtime_trend
+  - alarm_history
+allowed_nodes:
+  - sql
+  - rag
+  - analysis
+allowed_tools:
+  - sql.read
+  - kb.search
+forbidden_tools:
+  - sql.write
+  - device_control.write
+risk_level: medium
+output_variants:
+  - answer
+  - root_cause_candidates
+fallback_policy: ask_for_time_window_or_device

@@ -1,0 +1,29 @@
+name: workorder_decision
+version: "0.1.0"
+description: Decide whether a work order draft is appropriate, without dispatching.
+trigger_intents:
+  - decide_workorder
+  - create_workorder_draft
+  - dispatch_workorder
+required_slots:
+  - device
+optional_slots:
+  - fault_code
+  - evidence_bundle
+required_evidence:
+  - fresh_runtime_status
+  - diagnosis_summary
+allowed_nodes:
+  - analysis
+  - workorder
+  - approval
+allowed_tools:
+  - workorder.create
+forbidden_tools:
+  - workorder.dispatch
+  - device_control.write
+risk_level: high
+output_variants:
+  - workorder_decision
+  - workorder_draft
+fallback_policy: require_fresh_status_and_human_approval

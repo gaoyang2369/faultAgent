@@ -499,6 +499,8 @@ Phase 2 的请求理解层仍保持旁路，只填充 V2 `IntentFrame`、`Rewrit
 - 权限范围问题不复用上一轮诊断上下文。
 - 旧 context 测试对应行为不倒退。
 
+Phase 3 产物应保持为旁路上下文适配和 skill route plan-only 输出；首批 skill 包仅作为渐进加载元数据，不执行 SQL/RAG/report/workorder，也不接入旧 API。
+
 ### Phase 4: Plan Compiler 与 Policy Validator
 
 目标：

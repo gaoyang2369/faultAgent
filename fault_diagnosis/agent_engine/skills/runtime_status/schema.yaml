@@ -1,0 +1,14 @@
+input:
+  device:
+    type: string
+    required: true
+  time_window:
+    type: object
+    required: false
+output:
+  current_status:
+    type: string
+  latest_sample_time:
+    type: string
+  freshness:
+    type: string

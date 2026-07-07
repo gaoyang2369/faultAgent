@@ -1,0 +1,4 @@
+- user: "基于刚才结果生成报告"
+  selected_skill: report_generation
+  inherited_slots:
+    evidence_bundle: eb_J1

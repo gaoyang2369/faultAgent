@@ -11,20 +11,28 @@ from .contracts import (
     ContextFrame,
     SkillRoute,
 )
+from .context import ContextFrameAdapter
 from .engine import AgentEngineV2
+from .skills import LoadedSkill, SkillLoader, SkillMetadata, SkillRegistry, SkillRouter
 from .understanding import IntentFrameBuilder, RewriteFrameBuilder
 
 __all__ = [
     "AgentEngineV2",
     "ContextFrame",
+    "ContextFrameAdapter",
     "EvidenceLedger",
     "ExecutionPlan",
     "IntentFrame",
     "IntentFrameBuilder",
+    "LoadedSkill",
     "NodeResult",
     "OutputFrame",
     "PlanSnapshotV2",
     "RewriteFrame",
     "RewriteFrameBuilder",
+    "SkillLoader",
+    "SkillMetadata",
+    "SkillRegistry",
     "SkillRoute",
+    "SkillRouter",
 ]

@@ -1,0 +1,5 @@
+- user: "A07089 是什么，现在 J1 还故障吗"
+  selected_skill: alarm_triage
+  required_slots:
+    device: J1
+    fault_code: A07089

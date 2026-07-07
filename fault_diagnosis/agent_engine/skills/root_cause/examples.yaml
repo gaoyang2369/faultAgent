@@ -1,0 +1,5 @@
+- user: "J1 A07089 为什么一直出现"
+  selected_skill: root_cause
+  required_slots:
+    device: J1
+    fault_code: A07089

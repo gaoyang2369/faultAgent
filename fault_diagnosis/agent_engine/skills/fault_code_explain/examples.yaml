@@ -1,0 +1,4 @@
+- user: "A07089 是什么"
+  selected_skill: fault_code_explain
+  required_slots:
+    fault_code: A07089

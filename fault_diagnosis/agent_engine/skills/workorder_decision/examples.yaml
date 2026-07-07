@@ -1,0 +1,5 @@
+- user: "要不要工单"
+  selected_skill: workorder_decision
+  inherited_slots:
+    device: J1
+    evidence_bundle: eb_J1

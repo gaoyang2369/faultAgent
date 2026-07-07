@@ -1,0 +1,12 @@
+input:
+  report_source:
+    type: string
+    required: true
+  evidence_bundle:
+    type: string
+    required: false
+output:
+  report_payload:
+    type: object
+  report_url:
+    type: string

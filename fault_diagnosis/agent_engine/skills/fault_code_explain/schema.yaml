@@ -1,0 +1,14 @@
+input:
+  fault_code:
+    type: string
+    required: true
+  device:
+    type: string
+    required: false
+output:
+  explanation:
+    type: string
+  likely_causes:
+    type: array
+  suggested_checks:
+    type: array

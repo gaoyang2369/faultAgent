@@ -1,0 +1,29 @@
+name: alarm_triage
+version: "0.1.0"
+description: Combine runtime status and alarm-code evidence for initial triage.
+trigger_intents:
+  - explain_fault_code
+  - check_current_status
+required_slots:
+  - device
+  - fault_code
+optional_slots:
+  - time_window
+required_evidence:
+  - latest_runtime_status
+  - fault_code_manual
+allowed_nodes:
+  - sql
+  - rag
+  - analysis
+allowed_tools:
+  - sql.read
+  - kb.search
+forbidden_tools:
+  - sql.write
+  - workorder.dispatch
+risk_level: medium
+output_variants:
+  - answer
+  - recommendation
+fallback_policy: run_partial_status_or_code_explain

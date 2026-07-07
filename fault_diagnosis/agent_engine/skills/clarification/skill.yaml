@@ -1,0 +1,22 @@
+name: clarification
+version: "0.1.0"
+description: Ask a targeted clarification when required context is missing or ambiguous.
+trigger_intents:
+  - clarification
+required_slots: []
+optional_slots:
+  - candidates
+  - missing_context
+required_evidence: []
+allowed_nodes:
+  - clarification
+allowed_tools: []
+forbidden_tools:
+  - sql.read
+  - kb.search
+  - workorder.dispatch
+  - device_control.write
+risk_level: low
+output_variants:
+  - clarification_question
+fallback_policy: ask_one_question

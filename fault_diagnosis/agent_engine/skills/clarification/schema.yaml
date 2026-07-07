@@ -1,0 +1,10 @@
+input:
+  missing_context:
+    type: array
+    required: false
+  candidates:
+    type: object
+    required: false
+output:
+  question:
+    type: string

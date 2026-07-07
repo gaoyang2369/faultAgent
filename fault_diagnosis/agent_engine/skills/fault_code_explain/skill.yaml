@@ -1,0 +1,24 @@
+name: fault_code_explain
+version: "0.1.0"
+description: Explain a fault or alarm code using manual and knowledge evidence.
+trigger_intents:
+  - explain_fault_code
+required_slots:
+  - fault_code
+optional_slots:
+  - device
+required_evidence:
+  - fault_code_manual
+allowed_nodes:
+  - rag
+  - kg
+allowed_tools:
+  - kb.search
+  - kg.lookup
+forbidden_tools:
+  - sql.write
+  - workorder.dispatch
+risk_level: low
+output_variants:
+  - answer
+fallback_policy: ask_for_fault_code

@@ -1,0 +1,24 @@
+name: runtime_status
+version: "0.1.0"
+description: Check current or recent runtime status for an explicitly scoped device.
+trigger_intents:
+  - check_current_status
+required_slots:
+  - device
+optional_slots:
+  - time_window
+  - fault_code
+required_evidence:
+  - latest_runtime_status
+allowed_nodes:
+  - sql
+allowed_tools:
+  - sql.read
+forbidden_tools:
+  - sql.write
+  - device_control.write
+risk_level: low
+output_variants:
+  - answer
+  - status_brief
+fallback_policy: ask_for_device

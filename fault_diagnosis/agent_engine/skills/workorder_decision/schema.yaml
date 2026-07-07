@@ -1,0 +1,14 @@
+input:
+  device:
+    type: string
+    required: true
+  evidence_bundle:
+    type: string
+    required: false
+output:
+  need_workorder:
+    type: boolean
+  draft_payload:
+    type: object
+  approval_required:
+    type: boolean

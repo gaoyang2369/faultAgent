@@ -1,0 +1,14 @@
+input:
+  device:
+    type: string
+    required: true
+  fault_code:
+    type: string
+    required: true
+output:
+  severity:
+    type: string
+  recommendation:
+    type: string
+  evidence_refs:
+    type: array
