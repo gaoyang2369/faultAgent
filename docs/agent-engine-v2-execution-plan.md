@@ -471,6 +471,8 @@ Phase 1 产物应保持为旁路合同与空引擎，尚未接入 `/chat/plan`�
 - “那 J2 呢”能识别显式设备切换。
 - 模型失败时 fallback 可用。
 
+Phase 2 的请求理解层仍保持旁路，只填充 V2 `IntentFrame`、`RewriteFrame` 和 trace，不执行工具或接入旧 API。
+
 ### Phase 3: Context + Skill Router
 
 目标：

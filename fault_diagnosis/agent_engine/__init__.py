@@ -12,6 +12,7 @@ from .contracts import (
     SkillRoute,
 )
 from .engine import AgentEngineV2
+from .understanding import IntentFrameBuilder, RewriteFrameBuilder
 
 __all__ = [
     "AgentEngineV2",
@@ -19,9 +20,11 @@ __all__ = [
     "EvidenceLedger",
     "ExecutionPlan",
     "IntentFrame",
+    "IntentFrameBuilder",
     "NodeResult",
     "OutputFrame",
     "PlanSnapshotV2",
     "RewriteFrame",
+    "RewriteFrameBuilder",
     "SkillRoute",
 ]

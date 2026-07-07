@@ -8,12 +8,11 @@ from .contracts import (
     ContextFrame,
     EvidenceLedger,
     ExecutionPlan,
-    IntentFrame,
     OutputFrame,
     PlanSnapshotV2,
-    RewriteFrame,
     SkillRoute,
 )
+from .understanding import IntentFrameBuilder, RewriteFrameBuilder
 
 
 class AgentEngineV2:
@@ -33,7 +32,6 @@ class AgentEngineV2:
         auth_context: Any | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> PlanSnapshotV2:
-        normalized_message = (raw_message or "").strip()
         snapshot_metadata = dict(metadata or {})
         if thread_id:
             snapshot_metadata["thread_id"] = thread_id
@@ -42,14 +40,19 @@ class AgentEngineV2:
         if auth_context is not None:
             snapshot_metadata["auth_context_present"] = True
 
+        context_frame = ContextFrame()
+        intent_frame = IntentFrameBuilder().build(raw_message)
+        rewrite_frame = RewriteFrameBuilder().build(
+            raw_message,
+            intent_frame=intent_frame,
+            context_frame=context_frame,
+        )
+
         return PlanSnapshotV2(
             status="not_implemented",
-            intent_frame=IntentFrame(
-                raw_message=raw_message,
-                normalized_message=normalized_message,
-            ),
-            rewrite_frame=RewriteFrame(),
-            context_frame=ContextFrame(),
+            intent_frame=intent_frame,
+            rewrite_frame=rewrite_frame,
+            context_frame=context_frame,
             skill_route=SkillRoute(),
             execution_plan=ExecutionPlan(),
             evidence_ledger=EvidenceLedger(),
@@ -63,6 +66,12 @@ class AgentEngineV2:
                 "engine": "agent_engine_v2",
                 "mode": "plan_only",
                 "status": "not_implemented",
+                "request_understanding": {
+                    "raw_message": raw_message,
+                    "user_rewrite": rewrite_frame.user_rewrite,
+                    "rewrite_reason": rewrite_frame.rewrite_reason,
+                    "fallback_used": bool(intent_frame.model_trace.get("fallback_used")),
+                },
             },
             warnings=["Agent Engine V2 is not implemented yet."],
             metadata=snapshot_metadata,
