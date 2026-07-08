@@ -16,6 +16,7 @@ from fault_diagnosis.agent_engine import (
     RuntimeResult,
     RuntimeState,
     SkillRoute,
+    ToolRuntime,
     WorkflowRuntimeExecutor,
 )
 
@@ -116,4 +117,5 @@ def test_v2_runtime_public_interfaces_are_exported() -> None:
     assert token.cancelled is True
     assert token.reason == "test_stop"
     assert WorkflowRuntimeExecutor
+    assert ToolRuntime
     assert RuntimeState(plan=ExecutionPlan(plan_id="plan.test", plan_version="v2.test.validated")).status == "running"

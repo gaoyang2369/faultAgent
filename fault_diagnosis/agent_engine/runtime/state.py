@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..contracts import EvidenceLedger, ExecutionPlan, NodeResult, NodeStatus
+from ...security.contracts import AuthContext
 
 RuntimeStatus = Literal["completed", "blocked", "failed", "cancelled"]
 
@@ -54,9 +55,11 @@ class RuntimeState(BaseModel):
     thread_id: str = ""
     request_id: str = ""
     status: RuntimeStatus | Literal["running"] = "running"
+    auth_context: AuthContext | None = None
     cancel_token: CancelToken = Field(default_factory=CancelToken, exclude=True)
     node_results: list[NodeResult] = Field(default_factory=list)
     evidence_ledger: EvidenceLedger = Field(default_factory=EvidenceLedger)
+    artifacts: dict[str, Any] = Field(default_factory=dict)
     trace_events: list[RuntimeTraceEvent] = Field(default_factory=list)
     interrupts: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[dict[str, Any]] = Field(default_factory=list)
@@ -80,6 +83,26 @@ class RuntimeState(BaseModel):
             payload.setdefault("node_type", node.get("node_type"))
             self.evidence_ledger.evidence_items.append(payload)
             refs.append(evidence_id)
+        self.evidence_ledger.quality_checks = {
+            **self.evidence_ledger.quality_checks,
+            "evidence_count": len(self.evidence_ledger.evidence_items),
+            "claim_count": len(self.evidence_ledger.claims),
+        }
+        return refs
+
+    def commit_claims(self, claims: list[dict[str, Any]]) -> list[str]:
+        refs: list[str] = []
+        for index, item in enumerate(claims, start=1):
+            payload = dict(item)
+            claim_id = str(payload.get("claim_id") or f"claim_{len(self.evidence_ledger.claims) + index}")
+            payload["claim_id"] = claim_id
+            self.evidence_ledger.claims.append(payload)
+            refs.append(claim_id)
+        self.evidence_ledger.final_claim_ids = [
+            str(item.get("claim_id"))
+            for item in self.evidence_ledger.claims
+            if item.get("claim_id") and item.get("status", "candidate") in {"candidate", "confirmed", "final"}
+        ]
         self.evidence_ledger.quality_checks = {
             **self.evidence_ledger.quality_checks,
             "evidence_count": len(self.evidence_ledger.evidence_items),

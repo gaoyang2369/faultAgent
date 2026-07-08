@@ -5,7 +5,9 @@ from __future__ import annotations
 import time
 from typing import Any, Protocol
 
-from ..contracts import ExecutionPlan
+from ..contracts import ExecutionPlan, NodeStatus
+from ...security.contracts import AuthContext
+from ...security.permissions import build_auth_context
 from .graph import RuntimeGraph, RuntimeGraphError
 from .state import (
     CancelToken,
@@ -22,13 +24,21 @@ class NodeExecutionOutput:
     def __init__(
         self,
         *,
+        status: NodeStatus = "completed",
         output: dict[str, Any] | None = None,
         tool_call_refs: list[str] | None = None,
         proposed_evidence: list[dict[str, Any]] | None = None,
+        proposed_claims: list[dict[str, Any]] | None = None,
+        artifacts: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
     ) -> None:
+        self.status = status
         self.output = output or {}
         self.tool_call_refs = list(tool_call_refs or [])
         self.proposed_evidence = list(proposed_evidence or [])
+        self.proposed_claims = list(proposed_claims or [])
+        self.artifacts = dict(artifacts or {})
+        self.error = error
 
 
 class TypedNode(Protocol):
@@ -76,19 +86,32 @@ class FakeTypedNode:
 class WorkflowRuntimeExecutor:
     """Execute validated V2 plans with fake typed nodes."""
 
-    def __init__(self, node_registry: dict[str, TypedNode] | None = None) -> None:
-        registry: dict[str, TypedNode] = {
-            "sql": FakeTypedNode("sql", emits_evidence=True),
-            "rag": FakeTypedNode("rag", emits_evidence=True),
-            "kg": FakeTypedNode("kg", emits_evidence=True),
-            "analysis": FakeTypedNode("analysis", emits_evidence=False),
-            "report": FakeTypedNode("report", emits_evidence=False),
-            "workorder": FakeTypedNode("workorder", emits_evidence=False),
-            "approval": FakeTypedNode("approval", emits_evidence=False),
-            "clarification": FakeTypedNode("clarification", emits_evidence=False),
-        }
+    def __init__(
+        self,
+        node_registry: dict[str, TypedNode] | None = None,
+        *,
+        real_tools: bool = False,
+        tool_runtime: Any | None = None,
+    ) -> None:
+        if real_tools:
+            from .nodes import build_real_node_registry
+            from .tool_runtime import ToolRuntime
+
+            registry = build_real_node_registry(tool_runtime=tool_runtime or ToolRuntime())
+        else:
+            registry: dict[str, TypedNode] = {
+                "sql": FakeTypedNode("sql", emits_evidence=True),
+                "rag": FakeTypedNode("rag", emits_evidence=True),
+                "kg": FakeTypedNode("kg", emits_evidence=True),
+                "analysis": FakeTypedNode("analysis", emits_evidence=False),
+                "report": FakeTypedNode("report", emits_evidence=False),
+                "workorder": FakeTypedNode("workorder", emits_evidence=False),
+                "approval": FakeTypedNode("approval", emits_evidence=False),
+                "clarification": FakeTypedNode("clarification", emits_evidence=False),
+            }
         registry.update(node_registry or {})
         self.node_registry = registry
+        self.preblock_approvals = not real_tools
 
     def execute(
         self,
@@ -98,12 +121,14 @@ class WorkflowRuntimeExecutor:
         thread_id: str = "",
         request_id: str = "",
         cancel_token: CancelToken | None = None,
+        auth_context: AuthContext | None = None,
     ) -> RuntimeResult:
         state = RuntimeState(
             plan=plan.model_copy(deep=True),
             trace_id=trace_id,
             thread_id=thread_id,
             request_id=request_id,
+            auth_context=auth_context or build_auth_context(role="guest"),
             cancel_token=cancel_token or CancelToken(),
         )
         state.add_trace(
@@ -155,7 +180,7 @@ class WorkflowRuntimeExecutor:
                 )
                 continue
 
-            if self._approval_blocks(node, state.plan):
+            if self.preblock_approvals and self._approval_blocks(node, state.plan):
                 result = node_result(
                     node=node,
                     status="blocked",
@@ -206,6 +231,12 @@ class WorkflowRuntimeExecutor:
             if result.status == "cancelled":
                 self._cancel_remaining(state, graph, after_node_id=node_id, node_status=node_status)
                 return self._finish_cancelled(state)
+            if result.status == "blocked":
+                return self._finish_blocked(
+                    state,
+                    code=(result.error or {}).get("code", "node_blocked"),
+                    message=(result.error or {}).get("message", "Node blocked execution."),
+                )
             if result.status == "failed":
                 return self._finish_failed(state, error=result.error or {})
 
@@ -257,27 +288,40 @@ class WorkflowRuntimeExecutor:
                     )
                     return result
 
-                evidence_refs = state.commit_evidence(node, output.proposed_evidence)
+                if output.artifacts:
+                    state.artifacts.update(output.artifacts)
+                evidence_refs: list[str] = []
+                if output.status == "completed":
+                    evidence_refs = state.commit_evidence(node, output.proposed_evidence)
+                    state.commit_claims(output.proposed_claims)
                 duration_ms = round((time.monotonic() - started) * 1000, 1)
                 result = node_result(
                     node=node,
-                    status="completed",
+                    status=output.status,
                     input_summary=input_summary,
                     output=output.output,
                     evidence_refs=evidence_refs,
                     tool_call_refs=output.tool_call_refs,
+                    error=output.error,
                     retry_count=attempts,
                     duration_ms=duration_ms,
                 )
+                if output.status in {"failed", "blocked"} and result.error:
+                    state.errors.append(result.error)
+                if output.status == "blocked":
+                    state.interrupts.extend(
+                        result.output.get("interrupts", []) if isinstance(result.output, dict) else []
+                    )
                 state.add_trace(
                     "node_status",
                     node_id=node_id,
                     node_type=result.node_type,
-                    status="completed",
+                    status=result.status,
                     input_summary=input_summary,
                     output_summary=_summarize_output(result.output),
                     duration_ms=duration_ms,
                     retry_count=attempts,
+                    error=result.error,
                 )
                 return result
             except Exception as exc:  # noqa: BLE001 - fake nodes intentionally simulate arbitrary failures.
