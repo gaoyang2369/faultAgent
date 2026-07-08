@@ -16,7 +16,15 @@ from ..runtime.session_store import clear_namespace, set_namespace
 from .stream_control import StreamCancellationHandle, clear_stream_handle
 from ..common.utils import summarize_identifier_for_log
 from ..single_agent import RestrictedSingleAgentRunner
+from ..single_agent.planner import build_plan_snapshot
+from ..agent_engine import AgentEngineV2, WorkflowRuntimeExecutor
+from ..agent_engine.cutover import decide_v2_execution
+from ..agent_engine.flags import load_agent_engine_flags, should_build_v2_compare
+from ..agent_engine.observability import build_plan_compare, record_plan_compare
+from ..agent_engine.output import project_start, project_task_update, project_token, project_tool_end, project_tool_start
+from ..agent_engine.runtime import CancelToken
 from ..security.contracts import AuthContext
+from ..security.permissions import build_auth_context
 
 _log = get_logger("streaming")
 
@@ -105,6 +113,66 @@ async def token_stream_events(
                 )
             return
 
+        flags = load_agent_engine_flags()
+        v2_snapshot = None
+        v2_decision = None
+        if should_build_v2_compare(flags=flags):
+            try:
+                effective_auth = auth_context or _fallback_auth_context(user_identity)
+                legacy_plan = build_plan_snapshot(
+                    message=message,
+                    thread_id=thread_id,
+                    user_identity=user_identity,
+                    auth_context=effective_auth,
+                    conversation_context=conversation_context,
+                )
+                v2_snapshot = AgentEngineV2().plan_only(
+                    raw_message=message,
+                    thread_id=thread_id,
+                    request_id=request_id,
+                    auth_context=effective_auth,
+                    conversation_context=conversation_context,
+                    legacy_plan=legacy_plan,
+                    metadata={"stream_id": stream_id, "source": "chat_stream"},
+                )
+                v2_decision = decide_v2_execution(
+                    snapshot=v2_snapshot,
+                    thread_id=thread_id,
+                    flags=flags,
+                )
+                compare = build_plan_compare(
+                    legacy_plan=legacy_plan,
+                    v2_snapshot=v2_snapshot,
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    thread_id=thread_id,
+                    effective_skill_mode=v2_decision.effective_mode,
+                    fallback_reason=v2_decision.fallback_reason,
+                )
+                record_plan_compare(compare)
+            except Exception as exc:  # noqa: BLE001 - compare must never break legacy streaming.
+                _log.warning(
+                    "V2 compare failed; continuing legacy stream",
+                    thread_id=summarize_identifier_for_log(thread_id, keep=10),
+                    stream_id=summarize_identifier_for_log(stream_id, keep=8),
+                    error=str(exc),
+                )
+
+        if flags.engine_mode == "v2" and v2_snapshot is not None and v2_decision is not None and v2_decision.execute_v2:
+            async for chunk in _stream_v2_runtime(
+                app=app,
+                plan=v2_decision.plan,
+                thread_id=thread_id,
+                request_id=request_id,
+                stream_id=stream_id,
+                trace_id=trace_id,
+                auth_context=auth_context or _fallback_auth_context(user_identity),
+                cancel_handle=cancel_handle,
+                complete_payload_enricher=complete_payload_enricher,
+            ):
+                yield chunk
+            return
+
         single_agent = RestrictedSingleAgentRunner(
             message=message,
             thread_id=thread_id,
@@ -163,3 +231,106 @@ async def token_stream_events(
         if stream_id:
             await clear_stream_handle(app, stream_id)
         clear_namespace()
+
+
+async def _stream_v2_runtime(
+    *,
+    app: FastAPI,
+    plan,
+    thread_id: str,
+    request_id: str,
+    stream_id: str,
+    trace_id: str,
+    auth_context: AuthContext,
+    cancel_handle: StreamCancellationHandle | None,
+    complete_payload_enricher,
+) -> AsyncGenerator[str, None]:
+    yield encode_sse_event(
+        "start",
+        project_start(thread_id=thread_id, stream_id=stream_id, trace_id=trace_id),
+        trace_id=trace_id,
+    )
+    token = CancelToken()
+    if cancel_handle is not None and cancel_handle.cancel_event.is_set():
+        token.cancel(cancel_handle.cancel_reason or "user_stop")
+    state_for_start = _state_from_plan(
+        plan=plan,
+        trace_id=trace_id,
+        thread_id=thread_id,
+        request_id=request_id,
+        auth_context=auth_context,
+    )
+    yield encode_sse_event("task_update", project_task_update(state=state_for_start), trace_id=trace_id)
+    for node in plan.nodes:
+        yield encode_sse_event(
+            "tool_start",
+            project_tool_start(state=state_for_start, node=node),
+            trace_id=trace_id,
+        )
+    executor = WorkflowRuntimeExecutor(
+        real_tools=True,
+        tool_runtime=getattr(app.state, "agent_engine_v2_tool_runtime", None),
+    )
+    result = executor.execute(
+        plan,
+        trace_id=trace_id,
+        thread_id=thread_id,
+        request_id=request_id,
+        cancel_token=token,
+        auth_context=auth_context,
+    )
+    state_for_progress = _state_from_result(
+        plan=plan,
+        result=result,
+        trace_id=trace_id,
+        thread_id=thread_id,
+        request_id=request_id,
+        auth_context=auth_context,
+    )
+    yield encode_sse_event("task_update", project_task_update(state=state_for_progress), trace_id=trace_id)
+    for node_result in result.node_results:
+        yield encode_sse_event(
+            "tool_end",
+            project_tool_end(state=state_for_progress, result=node_result),
+            trace_id=trace_id,
+        )
+    if result.output_frame.final_answer and not result.complete_payload.get("cancelled"):
+        yield encode_sse_event("token", project_token(result.output_frame), trace_id=trace_id)
+    complete = dict(result.complete_payload)
+    if complete_payload_enricher is not None:
+        try:
+            complete = complete_payload_enricher(complete)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("V2 complete payload enrichment failed", thread_id=thread_id, error=str(exc))
+    yield encode_sse_event("complete", complete, trace_id=trace_id)
+
+
+def _state_from_plan(*, plan, trace_id: str, thread_id: str, request_id: str, auth_context: AuthContext):
+    from ..agent_engine.runtime import RuntimeState
+
+    return RuntimeState(
+        plan=plan,
+        trace_id=trace_id,
+        thread_id=thread_id,
+        request_id=request_id,
+        auth_context=auth_context,
+    )
+
+
+def _state_from_result(*, plan, result, trace_id: str, thread_id: str, request_id: str, auth_context: AuthContext):
+    state = _state_from_plan(
+        plan=plan,
+        trace_id=trace_id,
+        thread_id=thread_id,
+        request_id=request_id,
+        auth_context=auth_context,
+    )
+    state.status = result.status
+    state.node_results = list(result.node_results)
+    state.evidence_ledger = result.evidence_ledger
+    return state
+
+
+def _fallback_auth_context(user_identity: str) -> AuthContext:
+    role = "admin" if str(user_identity or "") == "管理员" else "guest"
+    return build_auth_context(role=role)

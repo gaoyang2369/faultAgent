@@ -1,0 +1,984 @@
+{
+  "schema_version": "agent_engine_v2_compare_summary.v1",
+  "total": 7,
+  "failed": 0,
+  "review_required": 0,
+  "by_skill": {
+    "runtime_status": {
+      "total": 2,
+      "none": 0,
+      "warning": 2,
+      "error": 0,
+      "critical": 0,
+      "review_required": 0,
+      "cutover_candidate": true
+    },
+    "fault_code_explain": {
+      "total": 1,
+      "none": 0,
+      "warning": 1,
+      "error": 0,
+      "critical": 0,
+      "review_required": 0,
+      "cutover_candidate": true
+    },
+    "alarm_triage": {
+      "total": 2,
+      "none": 0,
+      "warning": 2,
+      "error": 0,
+      "critical": 0,
+      "review_required": 0,
+      "cutover_candidate": false
+    },
+    "report_generation": {
+      "total": 1,
+      "none": 0,
+      "warning": 1,
+      "error": 0,
+      "critical": 0,
+      "review_required": 0,
+      "cutover_candidate": false
+    },
+    "root_cause": {
+      "total": 1,
+      "none": 0,
+      "warning": 1,
+      "error": 0,
+      "critical": 0,
+      "review_required": 0,
+      "cutover_candidate": false
+    }
+  },
+  "records": [
+    {
+      "schema_version": "agent_engine_v2_compare.v1",
+      "request_id": "eval-single_status_j1",
+      "trace_id": "trace-eval-single_status_j1",
+      "thread_id": "eval-v2-compare-single_status_j1",
+      "primary_skill": "runtime_status",
+      "effective_skill_mode": "shadow",
+      "review_required": false,
+      "severity": "warning",
+      "summary": "V2 compare severity=warning; changed surfaces: nodes, evidence_requirements, risk. Fallback: skill_mode:shadow.",
+      "fallback_reason": "skill_mode:shadow",
+      "legacy": {
+        "intent": {
+          "task_family": "runtime_status",
+          "requested_output": "answer"
+        },
+        "skill": {
+          "primary": "runtime_status"
+        },
+        "nodes": [
+          "analysis",
+          "sql"
+        ],
+        "tools": [
+          "sql.read"
+        ],
+        "evidence_requirements": [],
+        "risk": "",
+        "approval": []
+      },
+      "v2": {
+        "intent": {
+          "primary": "check_current_status",
+          "sub_intents": [
+            "check_current_status"
+          ],
+          "requested_outputs": [
+            "answer"
+          ]
+        },
+        "skill": {
+          "primary": "runtime_status",
+          "selected": [
+            "runtime_status"
+          ]
+        },
+        "primary_skill": "runtime_status",
+        "nodes": [
+          "sql"
+        ],
+        "tools": [
+          "sql.read"
+        ],
+        "evidence_requirements": [
+          "latest_runtime_status",
+          "need_asset_identity",
+          "need_current_status",
+          "need_metric_timestamp"
+        ],
+        "risk": "low",
+        "approval": [],
+        "status": "validated",
+        "warnings": []
+      },
+      "diffs": [
+        {
+          "surface": "nodes",
+          "severity": "warning",
+          "legacy": [
+            "analysis",
+            "sql"
+          ],
+          "v2": [
+            "sql"
+          ],
+          "added": [],
+          "removed": [
+            "analysis"
+          ]
+        },
+        {
+          "surface": "evidence_requirements",
+          "severity": "warning",
+          "legacy": [],
+          "v2": [
+            "latest_runtime_status",
+            "need_asset_identity",
+            "need_current_status",
+            "need_metric_timestamp"
+          ],
+          "added": [
+            "latest_runtime_status",
+            "need_asset_identity",
+            "need_current_status",
+            "need_metric_timestamp"
+          ],
+          "removed": []
+        },
+        {
+          "surface": "risk",
+          "severity": "warning",
+          "legacy": "",
+          "v2": "low"
+        }
+      ],
+      "created_at": "2026-07-08T06:13:37.343636+00:00"
+    },
+    {
+      "schema_version": "agent_engine_v2_compare.v1",
+      "request_id": "eval-single_alarm_code_qa",
+      "trace_id": "trace-eval-single_alarm_code_qa",
+      "thread_id": "eval-v2-compare-single_alarm_code_qa",
+      "primary_skill": "fault_code_explain",
+      "effective_skill_mode": "shadow",
+      "review_required": false,
+      "severity": "warning",
+      "summary": "V2 compare severity=warning; changed surfaces: nodes, tools, evidence_requirements, risk. Fallback: skill_mode:shadow.",
+      "fallback_reason": "skill_mode:shadow",
+      "legacy": {
+        "intent": {
+          "task_family": "knowledge_lookup",
+          "requested_output": "answer"
+        },
+        "skill": {
+          "primary": "fault_code_explain"
+        },
+        "nodes": [
+          "analysis",
+          "rag"
+        ],
+        "tools": [
+          "kg.lookup"
+        ],
+        "evidence_requirements": [],
+        "risk": "",
+        "approval": []
+      },
+      "v2": {
+        "intent": {
+          "primary": "explain_fault_code",
+          "sub_intents": [
+            "explain_fault_code"
+          ],
+          "requested_outputs": [
+            "answer"
+          ]
+        },
+        "skill": {
+          "primary": "fault_code_explain",
+          "selected": [
+            "fault_code_explain"
+          ]
+        },
+        "primary_skill": "fault_code_explain",
+        "nodes": [
+          "kg",
+          "rag"
+        ],
+        "tools": [
+          "kb.search",
+          "kg.lookup"
+        ],
+        "evidence_requirements": [
+          "fault_code_manual",
+          "need_applicability_scope",
+          "need_knowledge_source",
+          "need_safety_notes_for_risky_operation"
+        ],
+        "risk": "low",
+        "approval": [],
+        "status": "validated",
+        "warnings": []
+      },
+      "diffs": [
+        {
+          "surface": "nodes",
+          "severity": "warning",
+          "legacy": [
+            "analysis",
+            "rag"
+          ],
+          "v2": [
+            "kg",
+            "rag"
+          ],
+          "added": [
+            "kg"
+          ],
+          "removed": [
+            "analysis"
+          ]
+        },
+        {
+          "surface": "tools",
+          "severity": "warning",
+          "legacy": [
+            "kg.lookup"
+          ],
+          "v2": [
+            "kb.search",
+            "kg.lookup"
+          ],
+          "added": [
+            "kb.search"
+          ],
+          "removed": []
+        },
+        {
+          "surface": "evidence_requirements",
+          "severity": "warning",
+          "legacy": [],
+          "v2": [
+            "fault_code_manual",
+            "need_applicability_scope",
+            "need_knowledge_source",
+            "need_safety_notes_for_risky_operation"
+          ],
+          "added": [
+            "fault_code_manual",
+            "need_applicability_scope",
+            "need_knowledge_source",
+            "need_safety_notes_for_risky_operation"
+          ],
+          "removed": []
+        },
+        {
+          "surface": "risk",
+          "severity": "warning",
+          "legacy": "",
+          "v2": "low"
+        }
+      ],
+      "created_at": "2026-07-08T06:13:37.369616+00:00"
+    },
+    {
+      "schema_version": "agent_engine_v2_compare.v1",
+      "request_id": "eval-single_alarm_triage_device",
+      "trace_id": "trace-eval-single_alarm_triage_device",
+      "thread_id": "eval-v2-compare-single_alarm_triage_device",
+      "primary_skill": "alarm_triage",
+      "effective_skill_mode": "shadow",
+      "review_required": false,
+      "severity": "warning",
+      "summary": "V2 compare severity=warning; changed surfaces: nodes, tools, evidence_requirements, risk. Fallback: skill_mode:shadow.",
+      "fallback_reason": "skill_mode:shadow",
+      "legacy": {
+        "intent": {
+          "task_family": "diagnosis",
+          "requested_output": "answer"
+        },
+        "skill": {
+          "primary": "alarm_triage"
+        },
+        "nodes": [
+          "analysis",
+          "rag",
+          "sql",
+          "workorder"
+        ],
+        "tools": [
+          "kg.lookup",
+          "sql.read"
+        ],
+        "evidence_requirements": [],
+        "risk": "",
+        "approval": []
+      },
+      "v2": {
+        "intent": {
+          "primary": "check_current_status",
+          "sub_intents": [
+            "check_current_status"
+          ],
+          "requested_outputs": [
+            "answer"
+          ]
+        },
+        "skill": {
+          "primary": "alarm_triage",
+          "selected": [
+            "alarm_triage",
+            "runtime_status"
+          ]
+        },
+        "primary_skill": "alarm_triage",
+        "nodes": [
+          "analysis",
+          "rag",
+          "sql",
+          "sql"
+        ],
+        "tools": [
+          "kb.search",
+          "sql.read"
+        ],
+        "evidence_requirements": [
+          "fault_code_manual",
+          "latest_runtime_status",
+          "need_alarm_definition",
+          "need_alarm_severity",
+          "need_current_alarm_status_if_device_provided",
+          "need_recommended_actions"
+        ],
+        "risk": "medium",
+        "approval": [],
+        "status": "validated",
+        "warnings": []
+      },
+      "diffs": [
+        {
+          "surface": "nodes",
+          "severity": "warning",
+          "legacy": [
+            "analysis",
+            "rag",
+            "sql",
+            "workorder"
+          ],
+          "v2": [
+            "analysis",
+            "rag",
+            "sql"
+          ],
+          "added": [],
+          "removed": [
+            "workorder"
+          ]
+        },
+        {
+          "surface": "tools",
+          "severity": "warning",
+          "legacy": [
+            "kg.lookup",
+            "sql.read"
+          ],
+          "v2": [
+            "kb.search",
+            "sql.read"
+          ],
+          "added": [
+            "kb.search"
+          ],
+          "removed": [
+            "kg.lookup"
+          ]
+        },
+        {
+          "surface": "evidence_requirements",
+          "severity": "warning",
+          "legacy": [],
+          "v2": [
+            "fault_code_manual",
+            "latest_runtime_status",
+            "need_alarm_definition",
+            "need_alarm_severity",
+            "need_current_alarm_status_if_device_provided",
+            "need_recommended_actions"
+          ],
+          "added": [
+            "fault_code_manual",
+            "latest_runtime_status",
+            "need_alarm_definition",
+            "need_alarm_severity",
+            "need_current_alarm_status_if_device_provided",
+            "need_recommended_actions"
+          ],
+          "removed": []
+        },
+        {
+          "surface": "risk",
+          "severity": "warning",
+          "legacy": "",
+          "v2": "medium"
+        }
+      ],
+      "created_at": "2026-07-08T06:13:37.396657+00:00"
+    },
+    {
+      "schema_version": "agent_engine_v2_compare.v1",
+      "request_id": "eval-single_fault_diagnosis",
+      "trace_id": "trace-eval-single_fault_diagnosis",
+      "thread_id": "eval-v2-compare-single_fault_diagnosis",
+      "primary_skill": "alarm_triage",
+      "effective_skill_mode": "shadow",
+      "review_required": false,
+      "severity": "warning",
+      "summary": "V2 compare severity=warning; changed surfaces: nodes, tools, evidence_requirements, risk. Fallback: skill_mode:shadow.",
+      "fallback_reason": "skill_mode:shadow",
+      "legacy": {
+        "intent": {
+          "task_family": "diagnosis",
+          "requested_output": "answer"
+        },
+        "skill": {
+          "primary": ""
+        },
+        "nodes": [
+          "analysis",
+          "collect_asset_context",
+          "rag",
+          "sql",
+          "workorder"
+        ],
+        "tools": [
+          "kg.lookup",
+          "sql.read"
+        ],
+        "evidence_requirements": [],
+        "risk": "",
+        "approval": []
+      },
+      "v2": {
+        "intent": {
+          "primary": "check_current_status",
+          "sub_intents": [
+            "check_current_status"
+          ],
+          "requested_outputs": [
+            "answer"
+          ]
+        },
+        "skill": {
+          "primary": "alarm_triage",
+          "selected": [
+            "alarm_triage",
+            "runtime_status"
+          ]
+        },
+        "primary_skill": "alarm_triage",
+        "nodes": [
+          "analysis",
+          "rag",
+          "sql",
+          "sql"
+        ],
+        "tools": [
+          "kb.search",
+          "sql.read"
+        ],
+        "evidence_requirements": [
+          "fault_code_manual",
+          "latest_runtime_status",
+          "need_alarm_definition",
+          "need_alarm_severity",
+          "need_current_alarm_status_if_device_provided",
+          "need_recommended_actions"
+        ],
+        "risk": "medium",
+        "approval": [],
+        "status": "validated",
+        "warnings": []
+      },
+      "diffs": [
+        {
+          "surface": "nodes",
+          "severity": "warning",
+          "legacy": [
+            "analysis",
+            "collect_asset_context",
+            "rag",
+            "sql",
+            "workorder"
+          ],
+          "v2": [
+            "analysis",
+            "rag",
+            "sql"
+          ],
+          "added": [],
+          "removed": [
+            "collect_asset_context",
+            "workorder"
+          ]
+        },
+        {
+          "surface": "tools",
+          "severity": "warning",
+          "legacy": [
+            "kg.lookup",
+            "sql.read"
+          ],
+          "v2": [
+            "kb.search",
+            "sql.read"
+          ],
+          "added": [
+            "kb.search"
+          ],
+          "removed": [
+            "kg.lookup"
+          ]
+        },
+        {
+          "surface": "evidence_requirements",
+          "severity": "warning",
+          "legacy": [],
+          "v2": [
+            "fault_code_manual",
+            "latest_runtime_status",
+            "need_alarm_definition",
+            "need_alarm_severity",
+            "need_current_alarm_status_if_device_provided",
+            "need_recommended_actions"
+          ],
+          "added": [
+            "fault_code_manual",
+            "latest_runtime_status",
+            "need_alarm_definition",
+            "need_alarm_severity",
+            "need_current_alarm_status_if_device_provided",
+            "need_recommended_actions"
+          ],
+          "removed": []
+        },
+        {
+          "surface": "risk",
+          "severity": "warning",
+          "legacy": "",
+          "v2": "medium"
+        }
+      ],
+      "created_at": "2026-07-08T06:13:37.423699+00:00"
+    },
+    {
+      "schema_version": "agent_engine_v2_compare.v1",
+      "request_id": "eval-single_health_assessment",
+      "trace_id": "trace-eval-single_health_assessment",
+      "thread_id": "eval-v2-compare-single_health_assessment",
+      "primary_skill": "runtime_status",
+      "effective_skill_mode": "shadow",
+      "review_required": false,
+      "severity": "warning",
+      "summary": "V2 compare severity=warning; changed surfaces: nodes, tools, evidence_requirements, risk. Fallback: skill_mode:shadow.",
+      "fallback_reason": "skill_mode:shadow",
+      "legacy": {
+        "intent": {
+          "task_family": "diagnosis",
+          "requested_output": "answer"
+        },
+        "skill": {
+          "primary": ""
+        },
+        "nodes": [
+          "analysis",
+          "rag",
+          "sql",
+          "workorder"
+        ],
+        "tools": [
+          "kg.lookup",
+          "sql.read"
+        ],
+        "evidence_requirements": [],
+        "risk": "",
+        "approval": []
+      },
+      "v2": {
+        "intent": {
+          "primary": "check_current_status",
+          "sub_intents": [
+            "check_current_status"
+          ],
+          "requested_outputs": [
+            "answer"
+          ]
+        },
+        "skill": {
+          "primary": "runtime_status",
+          "selected": [
+            "runtime_status"
+          ]
+        },
+        "primary_skill": "runtime_status",
+        "nodes": [
+          "sql"
+        ],
+        "tools": [
+          "sql.read"
+        ],
+        "evidence_requirements": [
+          "latest_runtime_status",
+          "need_asset_identity",
+          "need_current_status",
+          "need_metric_timestamp"
+        ],
+        "risk": "low",
+        "approval": [],
+        "status": "validated",
+        "warnings": []
+      },
+      "diffs": [
+        {
+          "surface": "nodes",
+          "severity": "warning",
+          "legacy": [
+            "analysis",
+            "rag",
+            "sql",
+            "workorder"
+          ],
+          "v2": [
+            "sql"
+          ],
+          "added": [],
+          "removed": [
+            "analysis",
+            "rag",
+            "workorder"
+          ]
+        },
+        {
+          "surface": "tools",
+          "severity": "warning",
+          "legacy": [
+            "kg.lookup",
+            "sql.read"
+          ],
+          "v2": [
+            "sql.read"
+          ],
+          "added": [],
+          "removed": [
+            "kg.lookup"
+          ]
+        },
+        {
+          "surface": "evidence_requirements",
+          "severity": "warning",
+          "legacy": [],
+          "v2": [
+            "latest_runtime_status",
+            "need_asset_identity",
+            "need_current_status",
+            "need_metric_timestamp"
+          ],
+          "added": [
+            "latest_runtime_status",
+            "need_asset_identity",
+            "need_current_status",
+            "need_metric_timestamp"
+          ],
+          "removed": []
+        },
+        {
+          "surface": "risk",
+          "severity": "warning",
+          "legacy": "",
+          "v2": "low"
+        }
+      ],
+      "created_at": "2026-07-08T06:13:37.450188+00:00"
+    },
+    {
+      "schema_version": "agent_engine_v2_compare.v1",
+      "request_id": "eval-single_report_generation",
+      "trace_id": "trace-eval-single_report_generation",
+      "thread_id": "eval-v2-compare-single_report_generation",
+      "primary_skill": "report_generation",
+      "effective_skill_mode": "shadow",
+      "review_required": false,
+      "severity": "warning",
+      "summary": "V2 compare severity=warning; changed surfaces: nodes, evidence_requirements, risk. Fallback: skill_mode:shadow.",
+      "fallback_reason": "skill_mode:shadow",
+      "legacy": {
+        "intent": {
+          "task_family": "reporting",
+          "requested_output": "report"
+        },
+        "skill": {
+          "primary": "report_generation"
+        },
+        "nodes": [
+          "analysis",
+          "evidence_validation",
+          "output_guardrail",
+          "report",
+          "sql"
+        ],
+        "tools": [
+          "report.write_draft",
+          "sql.read"
+        ],
+        "evidence_requirements": [],
+        "risk": "",
+        "approval": []
+      },
+      "v2": {
+        "intent": {
+          "primary": "generate_report",
+          "sub_intents": [
+            "check_current_status",
+            "generate_report"
+          ],
+          "requested_outputs": [
+            "answer",
+            "report"
+          ]
+        },
+        "skill": {
+          "primary": "report_generation",
+          "selected": [
+            "report_generation",
+            "runtime_status"
+          ]
+        },
+        "primary_skill": "report_generation",
+        "nodes": [
+          "report",
+          "sql"
+        ],
+        "tools": [
+          "report.write_draft",
+          "sql.read"
+        ],
+        "evidence_requirements": [
+          "latest_runtime_status",
+          "need_claim_evidence_links",
+          "need_existing_or_fresh_evidence_bundle",
+          "need_report_time_window",
+          "reportable_artifact"
+        ],
+        "risk": "low",
+        "approval": [],
+        "status": "validated",
+        "warnings": []
+      },
+      "diffs": [
+        {
+          "surface": "nodes",
+          "severity": "warning",
+          "legacy": [
+            "analysis",
+            "evidence_validation",
+            "output_guardrail",
+            "report",
+            "sql"
+          ],
+          "v2": [
+            "report",
+            "sql"
+          ],
+          "added": [],
+          "removed": [
+            "analysis",
+            "evidence_validation",
+            "output_guardrail"
+          ]
+        },
+        {
+          "surface": "evidence_requirements",
+          "severity": "warning",
+          "legacy": [],
+          "v2": [
+            "latest_runtime_status",
+            "need_claim_evidence_links",
+            "need_existing_or_fresh_evidence_bundle",
+            "need_report_time_window",
+            "reportable_artifact"
+          ],
+          "added": [
+            "latest_runtime_status",
+            "need_claim_evidence_links",
+            "need_existing_or_fresh_evidence_bundle",
+            "need_report_time_window",
+            "reportable_artifact"
+          ],
+          "removed": []
+        },
+        {
+          "surface": "risk",
+          "severity": "warning",
+          "legacy": "",
+          "v2": "low"
+        }
+      ],
+      "created_at": "2026-07-08T06:13:37.477519+00:00"
+    },
+    {
+      "schema_version": "agent_engine_v2_compare.v1",
+      "request_id": "eval-single_root_cause_missing_window",
+      "trace_id": "trace-eval-single_root_cause_missing_window",
+      "thread_id": "eval-v2-compare-single_root_cause_missing_window",
+      "primary_skill": "root_cause",
+      "effective_skill_mode": "shadow",
+      "review_required": false,
+      "severity": "warning",
+      "summary": "V2 compare severity=warning; changed surfaces: nodes, tools, evidence_requirements, risk. Fallback: skill_mode:shadow.",
+      "fallback_reason": "skill_mode:shadow",
+      "legacy": {
+        "intent": {
+          "task_family": "diagnosis",
+          "requested_output": "answer"
+        },
+        "skill": {
+          "primary": "root_cause"
+        },
+        "nodes": [
+          "analysis",
+          "rag",
+          "report",
+          "sql",
+          "workorder"
+        ],
+        "tools": [
+          "kg.lookup",
+          "report.write_draft",
+          "sql.read"
+        ],
+        "evidence_requirements": [],
+        "risk": "",
+        "approval": []
+      },
+      "v2": {
+        "intent": {
+          "primary": "check_current_status",
+          "sub_intents": [
+            "check_current_status"
+          ],
+          "requested_outputs": [
+            "answer"
+          ]
+        },
+        "skill": {
+          "primary": "root_cause",
+          "selected": [
+            "root_cause",
+            "runtime_status"
+          ]
+        },
+        "primary_skill": "root_cause",
+        "nodes": [
+          "analysis",
+          "rag",
+          "sql",
+          "sql"
+        ],
+        "tools": [
+          "kb.search",
+          "sql.read"
+        ],
+        "evidence_requirements": [
+          "alarm_history",
+          "latest_runtime_status",
+          "need_causal_support",
+          "need_event_timeline",
+          "need_impact_scope",
+          "need_unknowns",
+          "runtime_trend"
+        ],
+        "risk": "medium",
+        "approval": [],
+        "status": "validated",
+        "warnings": []
+      },
+      "diffs": [
+        {
+          "surface": "nodes",
+          "severity": "warning",
+          "legacy": [
+            "analysis",
+            "rag",
+            "report",
+            "sql",
+            "workorder"
+          ],
+          "v2": [
+            "analysis",
+            "rag",
+            "sql"
+          ],
+          "added": [],
+          "removed": [
+            "report",
+            "workorder"
+          ]
+        },
+        {
+          "surface": "tools",
+          "severity": "warning",
+          "legacy": [
+            "kg.lookup",
+            "report.write_draft",
+            "sql.read"
+          ],
+          "v2": [
+            "kb.search",
+            "sql.read"
+          ],
+          "added": [
+            "kb.search"
+          ],
+          "removed": [
+            "kg.lookup",
+            "report.write_draft"
+          ]
+        },
+        {
+          "surface": "evidence_requirements",
+          "severity": "warning",
+          "legacy": [],
+          "v2": [
+            "alarm_history",
+            "latest_runtime_status",
+            "need_causal_support",
+            "need_event_timeline",
+            "need_impact_scope",
+            "need_unknowns",
+            "runtime_trend"
+          ],
+          "added": [
+            "alarm_history",
+            "latest_runtime_status",
+            "need_causal_support",
+            "need_event_timeline",
+            "need_impact_scope",
+            "need_unknowns",
+            "runtime_trend"
+          ],
+          "removed": []
+        },
+        {
+          "surface": "risk",
+          "severity": "warning",
+          "legacy": "",
+          "v2": "medium"
+        }
+      ],
+      "created_at": "2026-07-08T06:13:37.504720+00:00"
+    }
+  ]
+}

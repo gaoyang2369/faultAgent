@@ -12,8 +12,11 @@ from .contracts import (
     SkillRoute,
 )
 from .context import ContextFrameAdapter
+from .cutover import V2ExecutionDecision, decide_v2_execution
 from .engine import AgentEngineV2
 from .evidence import EvidenceLedgerWriter, LedgerCommitResult, LedgerValidationResult, project_ledger_to_evidence_bundle
+from .flags import AgentEngineFlags, effective_skill_mode, load_agent_engine_flags, should_build_v2_compare
+from .observability import build_plan_compare, record_plan_compare
 from .output import (
     build_output_frame,
     build_reportable_payload,
@@ -39,6 +42,7 @@ __all__ = [
     "EvidenceLedger",
     "EvidenceLedgerWriter",
     "ExecutionPlan",
+    "AgentEngineFlags",
     "IntentFrame",
     "IntentFrameBuilder",
     "LoadedSkill",
@@ -62,10 +66,15 @@ __all__ = [
     "SkillRouter",
     "TypedNode",
     "ToolRuntime",
+    "V2ExecutionDecision",
     "WorkflowRuntimeExecutor",
+    "build_plan_compare",
     "build_output_frame",
     "build_reportable_payload",
+    "decide_v2_execution",
     "diff_plans",
+    "effective_skill_mode",
+    "load_agent_engine_flags",
     "project_artifact_envelope",
     "project_complete",
     "project_ledger_to_evidence_bundle",
@@ -74,5 +83,7 @@ __all__ = [
     "project_token",
     "project_tool_end",
     "project_tool_start",
+    "record_plan_compare",
     "save_v2_artifact",
+    "should_build_v2_compare",
 ]
