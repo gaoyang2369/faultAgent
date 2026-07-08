@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from typing import Any
 
 from ....diagnosis.contracts import AnalysisStepArtifact, KnowledgeStepArtifact, ReportStepArtifact, SqlStepArtifact
-from ....diagnosis.report_mapper import _operation_payload
+from ...output.report import build_reportable_payload
 from ....security.runtime_context import reset_current_auth_context, set_current_auth_context
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
@@ -78,16 +77,17 @@ def _build_operation_payload(state: RuntimeState, node: dict[str, Any]) -> str:
         AnalysisStepArtifact,
         AnalysisStepArtifact(success=False, conclusion="缺少分析产物", error="missing_analysis_artifact"),
     )
-    return _operation_payload(
-        title=str(input_value(node, "title", "") or "DCMA 运行诊断报告"),
-        diagnosis_type=str(input_value(node, "diagnosis_type", "") or "运行诊断"),
-        report_time=datetime.now().strftime("%Y年%m月%d日 %H:%M"),
+    payload = build_reportable_payload(
         request=request,
         sql_artifact=sql_artifact,
         knowledge_artifact=knowledge_artifact,
         analysis_artifact=analysis_artifact,
+        normalized_rows=state.artifacts.get("sql_rows") if isinstance(state.artifacts.get("sql_rows"), list) else None,
+        title=str(input_value(node, "title", "") or "DCMA 运行诊断报告"),
+        diagnosis_type=str(input_value(node, "diagnosis_type", "") or "运行诊断"),
         workorder_suggestion=state.artifacts.get("workorder_suggestion"),
     )
+    return str(payload["operation_report_payload"])
 
 
 def _model(value: Any, model_type: Any, default: Any) -> Any:

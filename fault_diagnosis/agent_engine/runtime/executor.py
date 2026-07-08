@@ -16,6 +16,8 @@ from .state import (
     build_complete_payload,
     node_result,
 )
+from ..output.answer import build_output_frame
+from ..evidence import project_ledger_to_evidence_bundle
 
 
 class NodeExecutionOutput:
@@ -404,7 +406,7 @@ class WorkflowRuntimeExecutor:
 
     def _finish_completed(self, state: RuntimeState) -> RuntimeResult:
         state.status = "completed"
-        return _runtime_result(state, status="completed", final_content="V2 fake runtime completed.")
+        return _runtime_result(state, status="completed", final_content="")
 
     def _finish_blocked(self, state: RuntimeState, *, code: str, message: str) -> RuntimeResult:
         state.status = "blocked"
@@ -422,9 +424,11 @@ class WorkflowRuntimeExecutor:
         state.status = "cancelled"
         state.finalize_ledger()
         state.add_trace("runtime_status", status="cancelled", metadata={"cancel_reason": state.cancel_token.reason})
+        output_frame = _runtime_output_frame(state, status="cancelled", cancelled=True)
         complete = build_complete_payload(
             state=state,
             status="cancelled",
+            output_frame=output_frame,
             cancelled=True,
             cancel_reason=state.cancel_token.reason,
         )
@@ -432,6 +436,7 @@ class WorkflowRuntimeExecutor:
             status="cancelled",
             node_results=list(state.node_results),
             evidence_ledger=state.evidence_ledger,
+            output_frame=output_frame,
             trace=state.trace_payload(),
             complete_payload=complete,
             cancel_payload=complete,
@@ -440,14 +445,38 @@ class WorkflowRuntimeExecutor:
 
 def _runtime_result(state: RuntimeState, *, status: str, final_content: str) -> RuntimeResult:
     state.finalize_ledger()
-    complete = build_complete_payload(state=state, status=status, final_content=final_content)  # type: ignore[arg-type]
+    output_frame = _runtime_output_frame(state, status=status)
+    complete = build_complete_payload(
+        state=state,
+        status=status,  # type: ignore[arg-type]
+        final_content=final_content,
+        output_frame=output_frame,
+    )
     return RuntimeResult(
         status=status,  # type: ignore[arg-type]
         node_results=list(state.node_results),
         evidence_ledger=state.evidence_ledger,
+        output_frame=output_frame,
         trace=state.trace_payload(),
         complete_payload=complete,
         cancel_payload=None,
+    )
+
+
+def _runtime_output_frame(state: RuntimeState, *, status: str, cancelled: bool = False):
+    bundle = project_ledger_to_evidence_bundle(
+        state.evidence_ledger,
+        trace_id=state.trace_id,
+        task={"plan_id": state.plan.plan_id},
+    )
+    return build_output_frame(
+        status=status,
+        artifacts=state.artifacts,
+        evidence_bundle=bundle,
+        node_results=state.node_results,
+        error=state.errors[-1] if state.errors else None,
+        cancelled=cancelled,
+        cancel_reason=state.cancel_token.reason if cancelled else None,
     )
 
 

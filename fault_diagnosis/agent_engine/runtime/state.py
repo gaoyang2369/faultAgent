@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..contracts import EvidenceLedger, ExecutionPlan, NodeResult, NodeStatus
+from ..contracts import EvidenceLedger, ExecutionPlan, NodeResult, NodeStatus, OutputFrame
 from ..evidence import create_ledger, finalize_ledger
 from ..evidence.ledger import EvidenceLedgerWriter
 from ...security.contracts import AuthContext
@@ -137,6 +137,7 @@ class RuntimeResult(BaseModel):
     status: RuntimeStatus
     node_results: list[NodeResult] = Field(default_factory=list)
     evidence_ledger: EvidenceLedger = Field(default_factory=EvidenceLedger)
+    output_frame: OutputFrame = Field(default_factory=OutputFrame)
     trace: dict[str, Any] = Field(default_factory=dict)
     complete_payload: dict[str, Any] = Field(default_factory=dict)
     cancel_payload: dict[str, Any] | None = None
@@ -147,27 +148,20 @@ def build_complete_payload(
     state: RuntimeState,
     status: RuntimeStatus,
     final_content: str = "",
+    output_frame: OutputFrame | None = None,
     cancelled: bool = False,
     cancel_reason: str | None = None,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "type": "chat_complete",
-        "thread_id": state.thread_id,
-        "trace_id": state.trace_id,
-        "request_id": state.request_id,
-        "runtime": "agent_engine_v2",
-        "status": status,
-        "final_content": final_content,
-        "todos": [],
-        "event_count": len(state.trace_events),
-        "timestamp": _timestamp(),
-        "node_results": [item.model_dump(mode="json") for item in state.node_results],
-        "evidence_ledger": state.evidence_ledger.model_dump(mode="json"),
-        "trace": state.trace_payload(),
-    }
-    if cancelled:
-        payload.update({"cancelled": True, "cancel_reason": cancel_reason or "user_stop", "final_content": ""})
-    return payload
+    from ..output.sse_projection import project_complete
+
+    return project_complete(
+        state=state,
+        status=status,
+        output_frame=output_frame,
+        final_content=final_content,
+        cancelled=cancelled,
+        cancel_reason=cancel_reason,
+    )
 
 
 def node_result(
