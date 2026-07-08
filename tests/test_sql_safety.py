@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fault_diagnosis.diagnosis.contracts import DiagnosisRequest
-from fault_diagnosis.single_agent.sql_safety import (
+from fault_diagnosis.security.sql_safety import (
     ALLOWED_SQL_TABLES,
     REAL_DATA_LATEST_TABLE,
     SQL_SCHEMA_CONTEXT,

@@ -127,7 +127,7 @@ class Claim(BaseModel):
     missing_evidence: list[str] = Field(default_factory=list, description="缺失证据")
     reasoning_summary: str = Field(default="", description="短推理摘要，不承载长链路思考")
     status: ClaimStatus = Field(default="candidate", description="判断状态")
-    created_by: str = Field(default="single_agent", description="创建节点")
+    created_by: str = Field(default="agent_engine_v2", description="创建节点")
     decision: str | None = Field(default=None, description="决策类 Claim 的决策值")
     reason_codes: list[str] = Field(default_factory=list, description="规则或原因编码")
 

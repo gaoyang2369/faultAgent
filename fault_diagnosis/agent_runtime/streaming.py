@@ -17,10 +17,8 @@ from .stream_control import StreamCancellationHandle, clear_stream_handle
 from ..common.utils import summarize_identifier_for_log
 from ..diagnosis.artifact_store import save_thread_artifact
 from ..diagnosis.contracts import DiagnosisArtifactEnvelope
-from ..single_agent import RestrictedSingleAgentRunner
 from ..agent_engine import AgentEngineV2, WorkflowRuntimeExecutor
 from ..agent_engine.cutover import prepare_v2_execution_plan
-from ..agent_engine.flags import is_legacy_rollback_enabled, load_agent_engine_flags
 from ..agent_engine.output import project_start, project_task_update, project_token, project_tool_end, project_tool_start
 from ..agent_engine.runtime import CancelToken
 from ..security.contracts import AuthContext
@@ -87,7 +85,7 @@ async def token_stream_events(
     conversation_context: dict[str, Any] | None = None,
     complete_payload_enricher=None,
 ) -> AsyncGenerator[str, None]:
-    """聊天 SSE 兼容入口：dev mock、V2 默认主链路或 legacy rollback。"""
+    """聊天 SSE 兼容入口：dev mock 或 Agent Engine V2 主链路。"""
 
     request_id = bind_request_id(request_id or new_request_id())
     trace_id = _build_trace_id(request_id)
@@ -113,52 +111,29 @@ async def token_stream_events(
                 )
             return
 
-        flags = load_agent_engine_flags()
-        if not is_legacy_rollback_enabled(flags=flags):
-            effective_auth = auth_context or _fallback_auth_context(user_identity)
-            v2_snapshot = AgentEngineV2().plan_only(
-                raw_message=message,
-                thread_id=thread_id,
-                request_id=request_id,
-                auth_context=effective_auth,
-                conversation_context=conversation_context,
-                metadata={"stream_id": stream_id, "source": "chat_stream"},
-            )
-            v2_plan = prepare_v2_execution_plan(snapshot=v2_snapshot, thread_id=thread_id)
-            async for chunk in _stream_v2_runtime(
-                app=app,
-                plan=v2_plan,
-                thread_id=thread_id,
-                request_id=request_id,
-                stream_id=stream_id,
-                trace_id=trace_id,
-                auth_context=effective_auth,
-                cancel_handle=cancel_handle,
-                complete_payload_enricher=complete_payload_enricher,
-            ):
-                yield chunk
-            return
-
-        single_agent = RestrictedSingleAgentRunner(
-            message=message,
+        effective_auth = auth_context or _fallback_auth_context(user_identity)
+        v2_snapshot = AgentEngineV2().plan_only(
+            raw_message=message,
             thread_id=thread_id,
-            user_identity=user_identity,
+            request_id=request_id,
+            auth_context=effective_auth,
+            conversation_context=conversation_context,
+            metadata={"stream_id": stream_id, "source": "chat_stream"},
+        )
+        v2_plan = prepare_v2_execution_plan(snapshot=v2_snapshot, thread_id=thread_id)
+        async for chunk in _stream_v2_runtime(
+            app=app,
+            plan=v2_plan,
+            thread_id=thread_id,
             request_id=request_id,
             stream_id=stream_id,
             trace_id=trace_id,
-            auth_context=auth_context,
-            conversation_context=conversation_context,
-        )
-        async for chunk in single_agent.stream_events(
-            app,
+            auth_context=effective_auth,
             cancel_handle=cancel_handle,
+            complete_payload_enricher=complete_payload_enricher,
         ):
-            yield adapt_sse_chunk(
-                chunk,
-                trace_id,
-                thread_id=thread_id,
-                complete_payload_enricher=complete_payload_enricher,
-            )
+            yield chunk
+        return
     except asyncio.CancelledError:
         _log.warning(
             "流式请求被取消",

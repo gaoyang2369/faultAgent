@@ -1,6 +1,6 @@
 ﻿# 当前架构总览
 
-faultAgent 当前是工业设备故障诊断系统，后端源码根是 `fault_diagnosis/`，前端是 `agent_fronted/`。后端默认主链路已经切到 Agent Engine V2，不是多 Agent 编排，也不是开放式 autonomous agent loop。旧 `single_agent` runner 仅作为一个迭代周期内的 `AGENT_ENGINE_VERSION=legacy` 全局回滚路径保留。
+faultAgent 当前是工业设备故障诊断系统，后端源码根是 `fault_diagnosis/`，前端是 `agent_fronted/`。后端唯一主链路是 Agent Engine V2，不是多 Agent 编排，也不是开放式 autonomous agent loop。旧执行链路已经删除，`AGENT_ENGINE_VERSION` 只兼容解析为 `v2`。
 
 ## 主链路
 
@@ -52,9 +52,8 @@ api/             HTTP / SSE 路由
 services/        应用服务、session/thread/history/stop stream 编排
 auth/            session、cookie、thread ownership、voice exchange
 security/        RBAC / ABAC、SQL/RAG/report/workorder/tool 权限
-agent_runtime/   SSE 编码、流调度、取消、错误分类、V2/legacy 回滚选择
+agent_runtime/   SSE 编码、流调度、取消、错误分类、V2 runtime bridge
 agent_engine/    V2 understanding、skill routing、planning、runtime、output projection
-single_agent/    短期 legacy rollback；不再作为 V2 helper 来源
 context/         ResolvedContext、CaseState、PendingAction
 diagnosis/       领域合同、artifact store、report mapper、report/evidence/workorder helper
 tools/           SQL、知识库、报告工具
@@ -64,7 +63,7 @@ runtime/         dev mode、session namespace、前端兼容适配
 infrastructure/  app 生命周期、数据库池、模型、CORS、静态资源
 ```
 
-HTTP 层不做诊断业务；service 层不做 Agent 阶段逻辑；`agent_runtime/` 不做领域判断；`agent_engine/` 不管理 Web 会话和持久化仓储。`single_agent/flow.py` 不再是默认主链路。
+HTTP 层不做诊断业务；service 层不做 Agent 阶段逻辑；`agent_runtime/` 不做领域判断；`agent_engine/` 不管理 Web 会话和持久化仓储。
 
 ## V2 Runtime
 
@@ -195,5 +194,3 @@ artifact 支撑这些续问：
 ## 文档边界
 
 详细后端说明见 [fault_diagnosis/README.md](../fault_diagnosis/README.md)。
-
-legacy rollback 说明见 [fault_diagnosis/single_agent/README.md](../fault_diagnosis/single_agent/README.md)。

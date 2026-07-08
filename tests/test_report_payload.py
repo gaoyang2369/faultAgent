@@ -10,14 +10,12 @@ from fault_diagnosis.diagnosis.contracts import (
     KnowledgeStepArtifact,
     SqlStepArtifact,
 )
-from fault_diagnosis.single_agent.reporting import (
+from fault_diagnosis.diagnosis.reporting import (
     build_analysis_evidence_summary,
     build_report_payload,
     build_structured_analysis_artifact,
 )
-from fault_diagnosis.single_agent.contracts import SingleAgentDecision
-from fault_diagnosis.single_agent.output.renderers import render_final_answer
-from fault_diagnosis.single_agent.sql_safety import REAL_DATA_FALLBACK_COLUMNS, REAL_DATA_LATEST_TABLE
+from fault_diagnosis.security.sql_safety import REAL_DATA_FALLBACK_COLUMNS, REAL_DATA_LATEST_TABLE
 from fault_diagnosis.tools.kb_tools import query_fault_code_from_local_pdfs
 from fault_diagnosis.tools.report_tools import _build_report_html
 
@@ -625,33 +623,3 @@ def test_structured_analysis_uses_rag_fault_code_actions() -> None:
     assert "RAG知识要点" in evidence_summary
     assert "F01002" in evidence_summary
 
-
-def test_final_answer_uses_task_template_without_fallback_sections() -> None:
-    artifact = AnalysisStepArtifact(
-        success=True,
-        conclusion="设备存在异常码，需结合数据和 RAG 处理。",
-        basis=["SQL 返回最新运行数据", "RAG 命中故障码处理步骤"],
-        probable_causes=["RAG 指向参数配置问题"],
-        verification_items=["确认复位后是否复现"],
-        recommendations=["立即处置：按现场规程确认安全状态后处理"],
-        risk_notice="处置前确认现场安全状态。",
-        missing_information=["现场是否已复位"],
-        confidence_details=["异常码识别：high", "处置闭环：medium"],
-        confidence="medium",
-    )
-
-    rendered = render_final_answer(
-        decision=SingleAgentDecision(primary_task_type="fault_diagnosis"),
-        evidence_bundle=None,
-        analysis_artifact=artifact,
-    )
-    answer = rendered.content
-
-    assert "【报告文件】" not in answer
-    assert "诊断结论" in answer
-    assert "处置建议" in answer
-    assert "关键证据" in answer
-    assert "可能原因" in answer
-    assert "RAG 指向参数配置问题" in answer
-    assert "【可能原因与待验证】" not in answer
-    assert "【建议处置与验证】" not in answer

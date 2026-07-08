@@ -5,17 +5,16 @@ import json
 from fault_diagnosis.agent_engine import AgentEngineV2, ExecutionPlan
 from fault_diagnosis.agent_engine.observability import build_plan_compare, record_plan_compare
 from fault_diagnosis.security.permissions import build_auth_context
-from fault_diagnosis.single_agent.planner import PlanSnapshot
 
 
 def test_plan_compare_covers_required_surfaces_and_writes_jsonl(tmp_path) -> None:
-    legacy = PlanSnapshot(
-        task_family="runtime_status",
-        enabled_nodes={"sql": True},
-        runtime_tools=["sql_db_query"],
-        evidence_gaps={"required_evidence": ["latest_runtime_status"]},
-        requested_output="answer",
-    )
+    legacy = {
+        "task_family": "runtime_status",
+        "enabled_nodes": {"sql": True},
+        "runtime_tools": ["sql_db_query"],
+        "evidence_gaps": {"required_evidence": ["latest_runtime_status"]},
+        "requested_output": "answer",
+    }
     v2 = AgentEngineV2().plan_only(
         raw_message="J1 当前运行状态怎么样",
         auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
@@ -41,11 +40,11 @@ def test_plan_compare_covers_required_surfaces_and_writes_jsonl(tmp_path) -> Non
 
 
 def test_plan_compare_marks_dangerous_tool_difference_for_review() -> None:
-    legacy = PlanSnapshot(
-        task_family="diagnosis",
-        enabled_nodes={"sql": True},
-        runtime_tools=["device_control.write"],
-    )
+    legacy = {
+        "task_family": "diagnosis",
+        "enabled_nodes": {"sql": True},
+        "runtime_tools": ["device_control.write"],
+    }
     candidate = ExecutionPlan(
         plan_id="plan.compare.danger",
         plan_version="v2.compare.validated",

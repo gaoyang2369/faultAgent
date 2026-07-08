@@ -55,7 +55,7 @@ start -> token -> complete
 
 ## task_update
 
-`task_update` 是前端进度面板事件。它不是完整内部 stage 列表，而是由 `single_agent/workflow/todos.py` 聚合后的少量用户可见阶段。
+`task_update` 是前端进度面板事件。它不是完整内部 node 列表，而是由 Agent Engine V2 plan/runtime 输出聚合后的少量用户可见阶段。
 
 ```json
 {
@@ -248,7 +248,7 @@ start -> token -> complete
     "code": "INTERNAL_ERROR",
     "message": "请求处理失败，请稍后重试",
     "retryable": false,
-    "details": { "category": "single_agent" },
+    "details": { "category": "agent_engine_v2" },
     "trace_id": "trace_xxx",
     "run_id": null
   }

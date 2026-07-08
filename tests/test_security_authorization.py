@@ -13,7 +13,19 @@ from fault_diagnosis.security.sql_acl import apply_sql_acl
 from fault_diagnosis.security.tool_gateway import authorize_tool_call
 from fault_diagnosis.services.workorder_service import CreateWorkOrderPayload, WorkOrderService
 from fault_diagnosis.repositories.workorder_repository import FileWorkOrderRepository
-from fault_diagnosis.single_agent.contracts import SingleAgentDecision
+
+
+def _decision(**overrides) -> SimpleNamespace:
+    payload = {
+        "task_family": "diagnosis",
+        "requested_output": "answer",
+        "goal_set": {"goals": [{"goal_type": "diagnose_fault"}]},
+        "enabled_nodes": {},
+        "runtime_tools": [],
+        "objects": {},
+    }
+    payload.update(overrides)
+    return SimpleNamespace(**payload)
 
 
 def test_password_hash_is_salted_and_verifiable() -> None:
@@ -67,7 +79,7 @@ def test_signed_user_cookie_is_session_bound_and_reloads_server_scope(tmp_path) 
 
 
 def test_guest_fault_diagnosis_is_denied() -> None:
-    decision = SingleAgentDecision(
+    decision = _decision(
         task_family="diagnosis",
         goal_set={"goals": [{"goal_type": "diagnose_fault"}]},
         enabled_nodes={"sql": True, "knowledge": True, "analysis": True, "report": True},
@@ -88,7 +100,7 @@ def test_guest_fault_diagnosis_is_denied() -> None:
 
 
 def test_guest_report_generation_is_denied_without_degraded_tools() -> None:
-    decision = SingleAgentDecision(
+    decision = _decision(
         task_family="reporting",
         requested_output="report",
         goal_set={"goals": [{"goal_type": "generate_report"}]},
@@ -113,7 +125,7 @@ def test_engineer_cannot_authorize_unassigned_asset() -> None:
         asset_scope=["J1号机"],
         table_scope=["real_data_01"],
     )
-    decision = SingleAgentDecision(
+    decision = _decision(
         task_family="diagnosis",
         goal_set={"goals": [{"goal_type": "diagnose_fault"}]},
         objects={"device_ids": ["J2号机"]},
@@ -152,7 +164,7 @@ def test_guest_sql_acl_denies_unassigned_asset() -> None:
         "SELECT * FROM real_data_01 WHERE device_name = 'G120电机2' ORDER BY create_time DESC LIMIT 10",
         auth=build_auth_context(role="guest"),
         request=SimpleNamespace(equipment_hint="G120电机2"),
-        decision=SingleAgentDecision(objects={"device_ids": ["G120电机2"]}),
+        decision=_decision(objects={"device_ids": ["G120电机2"]}),
     )
 
     assert result.allowed is False
@@ -171,7 +183,7 @@ def test_engineer_sql_acl_injects_asset_scope() -> None:
         "SELECT * FROM real_data_01 ORDER BY create_time DESC",
         auth=auth,
         request=request,
-        decision=SingleAgentDecision(objects={"device_ids": ["J1号机"]}),
+        decision=_decision(objects={"device_ids": ["J1号机"]}),
     )
 
     assert result.allowed is True
@@ -190,7 +202,7 @@ def test_engineer_asset_scope_allows_registered_aliases() -> None:
         "SELECT * FROM real_data_01 ORDER BY create_time DESC",
         auth=auth,
         request=SimpleNamespace(equipment_hint="G120电机1"),
-        decision=SingleAgentDecision(objects={"device_ids": ["G120电机1"]}),
+        decision=_decision(objects={"device_ids": ["G120电机1"]}),
     )
 
     assert result.allowed is True
@@ -243,4 +255,3 @@ def test_workorder_service_enforces_http_equivalent_permissions(tmp_path) -> Non
     assert record["status"] == "待派单"
     assert record["created_by"] == "engineer_01"
     assert record["authorized_asset_scope"] == ["J1号机"]
-

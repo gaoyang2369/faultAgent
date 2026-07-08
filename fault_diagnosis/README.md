@@ -2,7 +2,7 @@
 
 `fault_diagnosis/` 是 faultAgent 工业故障诊断系统的后端源码根。当前后端默认主链路是 Agent Engine V2：请求理解、上下文解析、skill 路由、ExecutionPlan 校验、受限 SQL、知识库检索、诊断分析、可选报告/工单建议、最终回答、诊断 artifact 保存。
 
-它不是多 Agent 编排，也不是让 LLM 自由循环选择工具。后端不维护两套默认 runner；旧 `single_agent` runner 仅作为一个迭代周期内的 `AGENT_ENGINE_VERSION=legacy` 全局回滚路径。代码里的 `workflow_*` 字段是前端和历史 artifact 兼容投影，不代表还有独立 workflow 系统。
+它不是多 Agent 编排，也不是让 LLM 自由循环选择工具。后端只维护 Agent Engine V2 主链路；`AGENT_ENGINE_VERSION` 只兼容解析为 `v2`。代码里的 `workflow_*` 字段是前端和历史 artifact 兼容投影，不代表还有独立 workflow 系统。
 
 ## 项目定位
 
@@ -38,7 +38,7 @@ gunicorn -w 4 -k uvicorn.workers.UvicornWorker fault_diagnosis.app:app --bind 0.
 
 常用环境变量以当前代码为准：
 
-- 运行模式：`APP_ENV` / `ENV`、`LOCAL_DEV_MODE`、`ENABLE_PLAN_ENDPOINT`、`ENABLE_DEV_AUTH`、`FRONTEND_ORIGINS`、`AGENT_ENGINE_VERSION=v2|legacy`。默认 `v2`；`legacy` 只作为短期全局回滚。
+- 运行模式：`APP_ENV` / `ENV`、`LOCAL_DEV_MODE`、`ENABLE_PLAN_ENDPOINT`、`ENABLE_DEV_AUTH`、`FRONTEND_ORIGINS`、`AGENT_ENGINE_VERSION=v2`。`AGENT_ENGINE_VERSION` 保留为兼容环境变量，非 `v2` 值会解析为 `v2`。
 - MySQL：`HOST`、`PORT`、`MYSQL_PW`、`MYSQL_USER`、`DCMA_DB_NAME` / `DB_NAME`。
 - OpenAI-compatible LLM：`OPENAI_BASE_URL`、`OPENAI_API_KEY`、`MODEL_NAME`、`SINGLE_AGENT_MODEL_TIMEOUT_SECONDS`、`SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS`。
 - Ollama / FAISS / 知识库：`OLLAMA_BASE_URL`、`EMBEDDING_MODEL`、`FAISS_PATH`、`KB_CHUNK_SIZE`、`KB_CHUNK_OVERLAP`、`KB_BATCH_SIZE`、`KB_QUERY_TIMEOUT_SECONDS`、`KB_EMBED_TIMEOUT_SECONDS`、`KB_BUILD_MAX_DOCUMENTS`、`KB_INCREMENTAL_BUILD`、`KB_EMBED_CACHE_PATH`。
@@ -64,9 +64,8 @@ fault_diagnosis/
   services/               应用服务与用例编排
   auth/                   session、cookie、thread ownership、voice exchange
   security/               RBAC / ABAC、SQL/RAG/report/workorder/tool 权限校验
-  agent_runtime/          SSE 编码、流调度、取消、错误分类、V2/legacy 回滚选择
+  agent_runtime/          SSE 编码、流调度、取消、错误分类、V2 runtime bridge
   agent_engine/           V2 understanding、skill routing、planning、runtime、output projection
-  single_agent/           短期 legacy rollback；不再作为 V2 helper 来源
   context/                ResolvedContext、CaseState、PendingAction、artifact-backed context
   diagnosis/              诊断领域合同、artifact store、report/evidence/workorder mapper、分析 helper
   tools/                  SQL、知识库、报告工具
@@ -79,7 +78,7 @@ fault_diagnosis/
   common/                 路径、日志、编码、通用工具
 ```
 
-扩展时保持分层：路由只接 HTTP；service 管会话、权限上下文、历史和停止流；`agent_runtime/` 只做流协议、取消和错误分类；`agent_engine/` 承担 V2 诊断执行；`diagnosis/` 保存可跨入口复用的 artifact 和领域合同。`single_agent/flow.py` 不再是默认主链路。
+扩展时保持分层：路由只接 HTTP；service 管会话、权限上下文、历史和停止流；`agent_runtime/` 只做流协议、取消和错误分类；`agent_engine/` 承担 V2 诊断执行；`diagnosis/` 保存可跨入口复用的 artifact 和领域合同。
 
 ## HTTP / SSE 接口
 
@@ -141,9 +140,8 @@ GET /chat/stream
 
 - HTTP 层不直接做诊断业务。
 - service 层负责 session/thread 解析、历史消息、身份上下文、停止流、语音聚合。
-- `agent_runtime/` 负责 SSE 适配、取消句柄、错误分类、dev mode 分流和 legacy 全局回滚选择。
+- `agent_runtime/` 负责 SSE 适配、取消句柄、错误分类和 dev mode 分流。
 - `agent_engine/` 负责 V2 understanding、skill routing、plan validation、typed nodes、output projection。
-- `single_agent/` 只保留短期 rollback runner；V2 复用能力放在 `diagnosis/`、`security/` 和 `tools/`。
 - `diagnosis/artifact_store.py` 保存线程级诊断产物，支撑后续“基于刚才结果生成报告”“是不是要生成工单”等续问。
 
 ## SSE 契约
@@ -187,7 +185,7 @@ start -> task_update* -> ping* -> tool_start/tool_end* -> token -> complete
 - `todos`
 - `workflow_route`、`workflow_policy`、`workflow_result`、`workflow_envelope` 等兼容字段，如由 adapter 补齐
 
-`decision` 中的旧任务类型、旧候选任务和旧意图列表如果出现，只是 `single_agent/compat/legacy_intent.py` 的兼容投影。前端和调试工具不应把它们理解为内部核心决策来源。新调试字段优先看 `resolved_context`、`goal_set`、`task_family`、`policy_id`、`decision.enabled_nodes`、`decision.runtime_tools`、`readiness` 和 `manual_confirmation`。
+`decision` 中的旧任务类型、旧候选任务和旧意图列表如果出现，只是 V2 output projection 的前端兼容字段。前端和调试工具不应把它们理解为内部核心决策来源。新调试字段优先看 `resolved_context`、`goal_set`、`task_family`、`policy_id`、`decision.enabled_nodes`、`decision.runtime_tools`、`readiness` 和 `manual_confirmation`。
 
 ## 身份与权限
 

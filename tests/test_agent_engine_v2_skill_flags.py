@@ -3,7 +3,6 @@ from __future__ import annotations
 from fault_diagnosis import config
 from fault_diagnosis.agent_engine.flags import (
     effective_skill_mode,
-    is_legacy_rollback_enabled,
     load_agent_engine_flags,
     should_build_v2_compare,
 )
@@ -17,18 +16,16 @@ def test_agent_engine_defaults_to_v2(monkeypatch) -> None:
 
     assert flags.engine_mode == "v2"
     assert effective_skill_mode("runtime_status", flags=flags) == "v2"
-    assert is_legacy_rollback_enabled(flags=flags) is False
     assert should_build_v2_compare(flags=flags) is False
 
 
-def test_legacy_is_global_rollback_only(monkeypatch) -> None:
+def test_retired_legacy_mode_resolves_to_v2(monkeypatch) -> None:
     monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "legacy")
     monkeypatch.setenv("AGENT_ENGINE_V2_SKILL_FAULT_CODE_EXPLAIN", "v2")
 
     flags = load_agent_engine_flags()
 
-    assert flags.engine_mode == "legacy"
-    assert is_legacy_rollback_enabled(flags=flags) is True
+    assert flags.engine_mode == "v2"
     assert effective_skill_mode("fault_code_explain", flags=flags) == "v2"
 
 

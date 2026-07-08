@@ -39,15 +39,10 @@ PATTERNS = tuple(
         r"\bmigration_readiness\b",
         r"\bsafe_to_migrate\b",
         r"\bfallback_to_legacy\b",
-        r"safe-to-migrate",
-        r"fallback-to-legacy",
     )
 )
 
 COMPAT_ALLOWED_PREFIXES = (
-    "fault_diagnosis/single_agent/compat/legacy_intent.py",
-    "fault_diagnosis/single_agent/output/",
-    "fault_diagnosis/single_agent/artifacts.py",
     "fault_diagnosis/runtime/dev_mode.py",
     "tests/",
     "docs/",

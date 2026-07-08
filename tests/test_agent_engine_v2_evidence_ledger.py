@@ -11,7 +11,7 @@ from fault_diagnosis.agent_engine.evidence import (
     validate_ledger,
 )
 from fault_diagnosis.security.permissions import build_auth_context
-from fault_diagnosis.single_agent.evidence.quality import validate_evidence_bundle
+from fault_diagnosis.diagnosis.evidence.quality import validate_evidence_bundle
 
 
 def test_ledger_commits_authorized_evidence_dedupes_and_generates_refs() -> None:

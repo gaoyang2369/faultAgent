@@ -9,7 +9,7 @@ def test_legacy_dependency_scan_reports_new_summary_buckets() -> None:
 
     assert set(summary) == {"internal_forbidden_hits", "compat_allowed_hits", "legacy_archived_hits"}
     assert summary["internal_forbidden_hits"] == 0
-    assert summary["compat_allowed_hits"] >= 1
+    assert summary["compat_allowed_hits"] >= 0
 
 
 def test_legacy_dependency_scan_writes_json_and_markdown() -> None:

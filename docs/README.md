@@ -5,15 +5,14 @@
 当前推荐阅读顺序：
 
 1. [后端 README](../fault_diagnosis/README.md)：后端启动、目录、接口、权限、artifact 和扩展约定。
-2. [single_agent legacy rollback README](../fault_diagnosis/single_agent/README.md)：旧 runner 的短期回滚边界。
-3. [当前架构总览](./current-architecture.md)：跨后端、Agent、上下文、权限、artifact 的简明当前态。
-4. [HTTP API 契约](./backend-api-contract.md)：外部路径、请求/响应、cookie 和权限要求。
-5. [SSE 事件契约](./sse-event-contract.md)：`/chat/stream` 事件序列和 `complete` payload。
+2. [当前架构总览](./current-architecture.md)：跨后端、Agent、上下文、权限、artifact 的简明当前态。
+3. [HTTP API 契约](./backend-api-contract.md)：外部路径、请求/响应、cookie 和权限要求。
+4. [SSE 事件契约](./sse-event-contract.md)：`/chat/stream` 事件序列和 `complete` payload。
 
 目标态规划：
 
-- [Agent Engine V2 架构迁移执行计划](./agent-engine-v2-execution-plan.md)：用于后续分阶段迁移执行，不代表当前生产链路已经具备这些能力。
-- [Agent Engine V2 Phase 0 Baseline](./agent-engine-v2-phase0-baseline.md)：V2 迁移前的当前契约、继承矩阵、baseline case list 和 feature flag 草案。
+- [Agent Engine V2 架构迁移执行计划](./agent-engine-v2-execution-plan.md)：历史迁移计划，用于理解 V2 如何替换旧链路，不代表当前生产链路。
+- [Agent Engine V2 Phase 0 Baseline](./agent-engine-v2-phase0-baseline.md)：历史 baseline，用于追溯迁移前契约。
 
 维护原则：
 

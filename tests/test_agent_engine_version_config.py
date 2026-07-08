@@ -35,11 +35,16 @@ def test_agent_engine_version_defaults_to_v2() -> None:
 
 
 def test_agent_engine_version_accepts_declared_modes() -> None:
-    for mode in ("legacy", "v2"):
-        loaded = _read_agent_engine_config(mode)
+    loaded = _read_agent_engine_config("v2")
 
-        assert loaded["version"] == mode
-        assert mode in loaded["choices"]
+    assert loaded["version"] == "v2"
+    assert loaded["choices"] == {"v2"}
+
+
+def test_agent_engine_version_retired_legacy_value_falls_back_to_v2() -> None:
+    loaded = _read_agent_engine_config("legacy")
+
+    assert loaded["version"] == "v2"
 
 
 def test_agent_engine_version_invalid_value_falls_back_to_v2() -> None:

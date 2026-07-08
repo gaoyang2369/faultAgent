@@ -508,7 +508,7 @@ def validate_trace_artifacts(complete: dict[str, Any]) -> list[str]:
             "trace",
         )
     )
-    if complete.get("runtime") != "restricted_single_agent" and not has_runtime_artifacts:
+    if complete.get("runtime") != "agent_engine_v2" and not has_runtime_artifacts:
         return failures
     decision = complete.get("decision") or {}
     enabled = decision.get("enabled_nodes") or {}

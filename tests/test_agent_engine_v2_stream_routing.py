@@ -7,7 +7,6 @@ from fastapi import FastAPI
 
 from fault_diagnosis import config
 from fault_diagnosis.agent_runtime import streaming
-from fault_diagnosis.agent_runtime.sse_adapter import encode_sse_event
 from fault_diagnosis.security.permissions import build_auth_context
 
 
@@ -19,21 +18,6 @@ def _events(chunks: list[str]) -> list[dict]:
             if data:
                 parsed.append(json.loads("\n".join(data)))
     return parsed
-
-
-class _LegacyRunner:
-    called = 0
-
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-
-    async def stream_events(self, app, cancel_handle=None):  # noqa: ANN001, ARG002
-        type(self).called += 1
-        yield encode_sse_event(
-            "complete",
-            {"type": "chat_complete", "thread_id": self.kwargs["thread_id"], "final_content": "legacy-ok"},
-            trace_id=self.kwargs["trace_id"],
-        )
 
 
 class _FakeToolRuntime:
@@ -53,9 +37,7 @@ def test_default_stream_uses_v2_without_legacy_or_compare(monkeypatch) -> None:
 
 
 async def _assert_default_stream_uses_v2_without_legacy_or_compare(monkeypatch) -> None:
-    _LegacyRunner.called = 0
     monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")
-    monkeypatch.setattr(streaming, "RestrictedSingleAgentRunner", _LegacyRunner)
     app = FastAPI()
     app.state.dev_mode = False
     app.state.agent_engine_v2_tool_runtime = _FakeToolRuntime()
@@ -74,35 +56,7 @@ async def _assert_default_stream_uses_v2_without_legacy_or_compare(monkeypatch) 
     events = _events(chunks)
     complete = next(event for event in events if event["type"] == "chat_complete")
     assert complete["runtime"] == "agent_engine_v2"
-    assert _LegacyRunner.called == 0
     assert any(event["type"] == "tool_start" for event in events)
-
-
-def test_legacy_mode_is_global_rollback(monkeypatch) -> None:
-    asyncio.run(_assert_legacy_mode_is_global_rollback(monkeypatch))
-
-
-async def _assert_legacy_mode_is_global_rollback(monkeypatch) -> None:
-    _LegacyRunner.called = 0
-    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "legacy")
-    monkeypatch.setattr(streaming, "RestrictedSingleAgentRunner", _LegacyRunner)
-    app = FastAPI()
-    app.state.dev_mode = False
-
-    chunks = [
-        chunk
-        async for chunk in streaming.token_stream_events(
-            app,
-            "J1 当前运行状态怎么样",
-            "thread.legacy.rollback",
-            request_id="request.legacy.rollback",
-            auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
-        )
-    ]
-
-    complete = next(event for event in _events(chunks) if event["type"] == "chat_complete")
-    assert complete["final_content"] == "legacy-ok"
-    assert _LegacyRunner.called == 1
 
 
 def test_v2_failure_returns_server_error_without_legacy_fallback(monkeypatch) -> None:
@@ -114,10 +68,8 @@ async def _assert_v2_failure_returns_server_error_without_legacy_fallback(monkey
         def plan_only(self, **kwargs):  # noqa: ANN001, ARG002
             raise RuntimeError("v2 boom")
 
-    _LegacyRunner.called = 0
     monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")
     monkeypatch.setattr(streaming, "AgentEngineV2", BrokenEngine)
-    monkeypatch.setattr(streaming, "RestrictedSingleAgentRunner", _LegacyRunner)
     app = FastAPI()
     app.state.dev_mode = False
 
@@ -134,4 +86,3 @@ async def _assert_v2_failure_returns_server_error_without_legacy_fallback(monkey
 
     server_error = next(event for event in _events(chunks) if event.get("event_type") == "server_error")
     assert server_error["error"]["code"] == "INTERNAL_ERROR"
-    assert _LegacyRunner.called == 0

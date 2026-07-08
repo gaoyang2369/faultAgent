@@ -12,7 +12,6 @@ from fault_diagnosis.agent_engine import (
 )
 from fault_diagnosis.agent_engine.planning.plan_diff import diff_plans
 from fault_diagnosis.security.permissions import build_auth_context
-from fault_diagnosis.single_agent.planner import PlanSnapshot
 
 
 def _route(raw_message: str):
@@ -140,12 +139,12 @@ def test_llm_candidate_dangerous_tools_are_removed_and_blocked() -> None:
 
 
 def test_plan_diff_compares_legacy_and_v2_surfaces() -> None:
-    legacy = PlanSnapshot(
-        enabled_nodes={"sql": True, "knowledge": False},
-        runtime_tools=["sql_db_query"],
-        evidence_gaps={"required_evidence": ["latest_runtime_status"]},
-        requested_output="answer",
-    )
+    legacy = {
+        "enabled_nodes": {"sql": True, "knowledge": False},
+        "runtime_tools": ["sql_db_query"],
+        "evidence_gaps": {"required_evidence": ["latest_runtime_status"]},
+        "requested_output": "answer",
+    }
     v2 = ExecutionPlan(
         nodes=[{"node_id": "sql_1", "node_type": "sql"}],
         allowed_tools=["sql.read"],

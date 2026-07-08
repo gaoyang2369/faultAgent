@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from fault_diagnosis.single_agent.sql_result_parser import parse_sql_rows
+from fault_diagnosis.diagnosis.steps.sql_result_parser import parse_sql_rows
 
 
 def test_parse_sql_rows_accepts_python_datetime_repr() -> None:

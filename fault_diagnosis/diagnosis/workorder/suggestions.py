@@ -40,7 +40,7 @@ from ..reporting.utils import (
     unique_non_empty,
 )
 
-SingleAgentDecision = Any
+DecisionLike = Any
 
 
 def _workorder_priority_label(risk_level: str) -> str:
@@ -405,7 +405,7 @@ def build_workorder_suggestion(
 def build_workorder_suggestion_from_artifact(
     *,
     envelope: DiagnosisArtifactEnvelope,
-    decision: SingleAgentDecision,
+    decision: DecisionLike,
     user_identity: str | None = None,
 ) -> WorkOrderSuggestion:
     """Build a work-order draft suggestion by reusing a previous diagnosis artifact."""

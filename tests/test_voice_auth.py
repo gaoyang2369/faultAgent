@@ -7,7 +7,6 @@ from fault_diagnosis.auth.admin_auth import resolve_auth_context
 from fault_diagnosis.repositories.user_repository import FileUserRepository
 from fault_diagnosis.security.policy_engine import authorize_workflow
 from fault_diagnosis.security.voice_auth import VoiceNonceCache, sign_voice_identity
-from fault_diagnosis.single_agent.contracts import SingleAgentDecision
 
 
 SECRET = "voice-test-shared-secret"
@@ -147,11 +146,11 @@ def test_voice_engineer_can_only_access_assigned_assets(monkeypatch, tmp_path) -
     )
     assigned = authorize_workflow(
         auth,
-        SingleAgentDecision(primary_task_type="fault_diagnosis", objects={"device_ids": ["J1号机"]}),
+        SimpleNamespace(task_family="diagnosis", goal_set={"goals": [{"goal_type": "diagnose_fault"}]}, objects={"device_ids": ["J1号机"]}),
     )
     outside_scope = authorize_workflow(
         auth,
-        SingleAgentDecision(primary_task_type="fault_diagnosis", objects={"device_ids": ["J2号机"]}),
+        SimpleNamespace(task_family="diagnosis", goal_set={"goals": [{"goal_type": "diagnose_fault"}]}, objects={"device_ids": ["J2号机"]}),
     )
 
     assert auth.asset_scope == ["J1号机"]

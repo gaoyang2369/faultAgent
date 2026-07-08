@@ -33,7 +33,6 @@ from ..agent_runtime.stream_control import (
 from ..agent_runtime.streaming import token_stream_events as default_token_stream_events
 from ..agent_engine import AgentEngineV2
 from ..agent_engine.cutover import prepare_v2_execution_plan
-from ..agent_engine.flags import is_legacy_rollback_enabled, load_agent_engine_flags
 from ..agent_engine.planning import PlanPolicyBridge
 from .conversation_persistence import ConversationPersistenceService, parse_sse_payloads
 from ..common.utils import (
@@ -228,14 +227,6 @@ def _v2_plan_skip_reasons(enabled_nodes: dict[str, bool]) -> dict[str, str]:
         if not enabled_nodes.get(node):
             skip_reasons[node] = "not_planned_by_agent_engine_v2"
     return skip_reasons
-
-
-def legacy_plan_chat(**kwargs: Any):
-    """Isolate the short-term legacy /chat/plan rollback import."""
-
-    from ..single_agent.planner import build_plan_snapshot
-
-    return build_plan_snapshot(**kwargs)
 
 
 class ChatService:
@@ -446,27 +437,17 @@ class ChatService:
             message_preview=summarize_text_for_log(message, limit=72),
         )
         conversation_context = self._build_read_only_conversation_context(request.app, context)
-        if is_legacy_rollback_enabled(flags=load_agent_engine_flags()):
-            snapshot = legacy_plan_chat(
-                message=context.message,
-                thread_id=context.thread_id,
-                user_identity=context.trusted_user_identity,
-                auth_context=context.auth_context,
-                conversation_context=conversation_context,
-            )
-            payload = snapshot.model_dump(exclude_none=True)
-        else:
-            snapshot = AgentEngineV2().plan_only(
-                raw_message=context.message,
-                thread_id=context.thread_id,
-                request_id=context.request_id,
-                auth_context=context.auth_context,
-                conversation_context=conversation_context,
-                metadata={"source": "chat_plan"},
-            )
-            plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id=context.thread_id)
-            payload = snapshot.model_dump(mode="json", exclude_none=True)
-            payload.update(_v2_plan_compat_payload(snapshot=snapshot, plan=plan))
+        snapshot = AgentEngineV2().plan_only(
+            raw_message=context.message,
+            thread_id=context.thread_id,
+            request_id=context.request_id,
+            auth_context=context.auth_context,
+            conversation_context=conversation_context,
+            metadata={"source": "chat_plan"},
+        )
+        plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id=context.thread_id)
+        payload = snapshot.model_dump(mode="json", exclude_none=True)
+        payload.update(_v2_plan_compat_payload(snapshot=snapshot, plan=plan))
         payload["thread_id"] = context.thread_id
         payload["request_id"] = context.request_id
         payload["auth_context"] = context.auth_context.audit_summary()

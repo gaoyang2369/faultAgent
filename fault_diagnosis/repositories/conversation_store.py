@@ -42,6 +42,10 @@ def _normalize_status(status: str | None, *, default: str = "completed") -> str:
     return normalized or default
 
 
+def _role_sort_order(role: Any) -> int:
+    return {"user": 0, "assistant": 1}.get(str(role or ""), 2)
+
+
 def _message_status_text(status: str) -> str:
     return {
         "accepted": "已发送",
@@ -512,7 +516,11 @@ class SQLiteConversationRepository:
             sql = f"""
                 SELECT * FROM agent_messages
                 WHERE {where}
-                ORDER BY turn_index ASC, created_at ASC, id ASC
+                ORDER BY
+                    turn_index ASC,
+                    CASE role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END ASC,
+                    created_at ASC,
+                    id ASC
             """
             rows = connection.execute(sql, params).fetchall()
             messages = [self._row_to_message(row) for row in rows]
@@ -760,7 +768,7 @@ class MemoryConversationRepository:
                 and not message.get("deleted_at")
                 and (include_superseded or message.get("status") != "superseded")
             ]
-        messages.sort(key=lambda item: (item["turn_index"], item["created_at"], item["id"]))
+        messages.sort(key=lambda item: (item["turn_index"], _role_sort_order(item.get("role")), item["created_at"], item["id"]))
         return messages[-limit:] if limit is not None else messages
 
     def supersede_from_user_turn(self, *, thread_id: str, user_turn_index: int) -> list[dict[str, Any]]:

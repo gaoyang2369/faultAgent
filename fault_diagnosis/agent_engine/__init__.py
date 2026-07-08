@@ -15,7 +15,7 @@ from .context import ContextFrameAdapter
 from .cutover import V2ExecutionDecision, decide_v2_execution, prepare_v2_execution_plan
 from .engine import AgentEngineV2
 from .evidence import EvidenceLedgerWriter, LedgerCommitResult, LedgerValidationResult, project_ledger_to_evidence_bundle
-from .flags import AgentEngineFlags, effective_skill_mode, is_legacy_rollback_enabled, load_agent_engine_flags, should_build_v2_compare
+from .flags import AgentEngineFlags, effective_skill_mode, load_agent_engine_flags, should_build_v2_compare
 from .output import (
     build_output_frame,
     build_reportable_payload,
@@ -71,7 +71,6 @@ __all__ = [
     "build_reportable_payload",
     "decide_v2_execution",
     "effective_skill_mode",
-    "is_legacy_rollback_enabled",
     "load_agent_engine_flags",
     "prepare_v2_execution_plan",
     "project_artifact_envelope",

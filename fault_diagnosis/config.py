@@ -137,7 +137,7 @@ TTS_SYNTHESIZE_MAX_CHARS = max(1, int(os.getenv("TTS_SYNTHESIZE_MAX_CHARS", "500
 APP_ENV = os.getenv("APP_ENV", os.getenv("ENV", "development")).strip().lower() or "development"
 IS_PRODUCTION = APP_ENV in {"prod", "production"}
 AGENT_ENGINE_VERSION_DEFAULT = "v2"
-AGENT_ENGINE_VERSION_CHOICES = {"legacy", "v2"}
+AGENT_ENGINE_VERSION_CHOICES = {"v2"}
 AGENT_ENGINE_VERSION = _env_choice(
     "AGENT_ENGINE_VERSION",
     AGENT_ENGINE_VERSION_DEFAULT,

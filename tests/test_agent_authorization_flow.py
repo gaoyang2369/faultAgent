@@ -19,8 +19,6 @@ from fault_diagnosis.security.permissions import build_auth_context, build_dev_a
 from fault_diagnosis.security.policy_engine import authorize_workflow
 from fault_diagnosis.security.sql_acl import apply_sql_acl
 from fault_diagnosis.security.tool_gateway import authorize_tool_call
-from fault_diagnosis.single_agent.contracts import SingleAgentDecision
-from fault_diagnosis.single_agent.workflow.nodes import build_permission_check_result
 
 
 class _FakeAdminKnowledgeFileService:
@@ -55,9 +53,20 @@ def _dev_login(client: TestClient, role: str) -> dict:
     return response.json()
 
 
-def _decision(task_type: str, *, device: str | None = None, report: bool = False) -> SingleAgentDecision:
-    return SingleAgentDecision(
+def _decision(task_type: str, *, device: str | None = None, report: bool = False) -> SimpleNamespace:
+    task_family = {
+        "knowledge_qa": "knowledge_lookup",
+        "status_query": "runtime_status",
+        "fault_diagnosis": "diagnosis",
+        "action_request": "action_or_workorder",
+        "report_generation": "reporting",
+    }.get(task_type, task_type)
+    goal_type = "generate_report" if report or task_type == "report_generation" else "diagnose_fault"
+    return SimpleNamespace(
         primary_task_type=task_type,
+        task_family=task_family,
+        requested_output="report" if report or task_type == "report_generation" else "answer",
+        goal_set={"goals": [{"goal_type": goal_type}]},
         objects={"device_ids": [device] if device else []},
         enabled_nodes={
             "sql": task_type != "knowledge_qa",
@@ -71,6 +80,9 @@ def _decision(task_type: str, *, device: str | None = None, report: bool = False
             "query_knowledge_base",
             *(["save_report"] if report else []),
         ],
+        action_target="workorder" if task_type == "action_request" else None,
+        action_type="device_control.write" if task_type == "action_request" else None,
+        workflow_policy={"forbidden_tools": ["device_control.write", "config.write", "workorder.dispatch"]},
     )
 
 
@@ -190,7 +202,7 @@ def test_guest_cannot_diagnose_generate_report_or_upload_pdf(auth_client: TestCl
     guest = build_dev_auth_context("guest")
     authorization = authorize_workflow(
         guest,
-        _decision("fault_diagnosis", device="J1号机", report=True),
+        _decision("fault_diagnosis", device="J1号机"),
     )
 
     assert authorization.allowed is False
@@ -258,8 +270,11 @@ def test_admin_can_query_all_assets_and_manage_knowledge_files(auth_client: Test
 @pytest.mark.parametrize("role", ["guest", "engineer", "admin"])
 def test_no_role_can_directly_execute_device_control(role: str) -> None:
     auth = build_dev_auth_context(role)
-    decision = _decision("action_request", device="J1号机")
-    permission_check = build_permission_check_result(decision, user_identity=auth.display_name)
+    permission_check = {
+        "allowed": False,
+        "decision": "draft_or_confirmation_only",
+        "requires_human_confirmation": True,
+    }
 
     assert authorize_tool_call(auth, "device_control.write").allowed is False
     assert permission_check["allowed"] is False
@@ -282,6 +297,4 @@ def test_local_sse_authorization_tool_and_report_contract() -> None:
     assert admin_complete["authorization"]["mode"] == "allow"
     assert "save_report" in admin_tools
     assert admin_complete["report_url"].startswith("/reports/local_dev_report_")
-
-
 

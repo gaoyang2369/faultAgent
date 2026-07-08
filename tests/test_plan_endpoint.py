@@ -9,8 +9,6 @@ from fault_diagnosis.api.chat import router as chat_router
 from fault_diagnosis.auth.session_scope import SessionScopeManager
 from fault_diagnosis.diagnosis.artifact_store import clear_all_artifacts, list_thread_artifacts
 from fault_diagnosis.runtime.dev_mode import init_dev_state
-from fault_diagnosis.security.contracts import AuthContext
-from fault_diagnosis.single_agent.planner import build_plan_snapshot
 
 
 def _app() -> FastAPI:
@@ -86,15 +84,7 @@ def test_plan_endpoint_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> 
     monkeypatch.setattr(config, "LOCAL_DEV_MODE", False)
     monkeypatch.setattr(config, "DEV_AUTH_ENABLED", True)
     monkeypatch.setattr("fault_diagnosis.diagnosis.adapters.build_sql_tools_map", fail("sql_tools"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.stages.build_sql_tools_map", fail("stage_sql_tools"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.support.tool_access.get_knowledge_tool", fail("rag_tool"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.support.tool_access.get_report_tool", fail("report_tool"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.stages.get_knowledge_tool", fail("stage_rag_tool"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.stages.get_report_tool", fail("stage_report_tool"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.runner.RestrictedSingleAgentRunner._invoke_json_model", fail("analysis_llm"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.stages.build_templated_final_answer", fail("final_answer"))
     monkeypatch.setattr("fault_diagnosis.diagnosis.artifact_store.save_thread_artifact", fail("artifact_write"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.stages.save_thread_artifact", fail("stage_artifact_write"))
 
     with TestClient(_app()) as client:
         login = client.post("/auth/dev-login", json={"role": "engineer", "asset_scope": ["J1"]})
@@ -105,48 +95,5 @@ def test_plan_endpoint_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> 
         )
 
     assert response.status_code == 200
-    assert calls == []
-    assert list_thread_artifacts(thread_id) == []
-
-
-def test_planner_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> None:
-    clear_all_artifacts()
-    thread_id = "thread.planner.no-side-effect"
-    calls: list[str] = []
-
-    def fail(name: str):
-        def _inner(*args, **kwargs):  # noqa: ANN001, ARG001
-            calls.append(name)
-            raise AssertionError(f"{name} must not be called by planner")
-
-        return _inner
-
-    monkeypatch.setattr("fault_diagnosis.diagnosis.adapters.build_sql_tools_map", fail("sql_tools"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.stages.build_sql_tools_map", fail("stage_sql_tools"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.support.tool_access.get_knowledge_tool", fail("rag_tool"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.support.tool_access.get_report_tool", fail("report_tool"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.runner.RestrictedSingleAgentRunner._invoke_json_model", fail("analysis_llm"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.stages.build_templated_final_answer", fail("final_answer"))
-    monkeypatch.setattr("fault_diagnosis.diagnosis.artifact_store.save_thread_artifact", fail("artifact_write"))
-    monkeypatch.setattr("fault_diagnosis.single_agent.stages.save_thread_artifact", fail("stage_artifact_write"))
-
-    snapshot = build_plan_snapshot(
-        message="J1 当前状态如何",
-        thread_id=thread_id,
-        user_identity="engineer",
-        auth_context=AuthContext(user_id="engineer-plan-test", role="engineer", asset_scope=["J1"], table_scope=["*"]),
-    )
-
-    assert snapshot.schema_version == "agent_plan_snapshot.v2"
-    assert snapshot.resolved_context["relation_to_previous"] == "new_case"
-    assert "missing_context" in snapshot.resolved_context
-    assert snapshot.goal_set["primary_goal_id"]
-    assert snapshot.task_family == "runtime_status"
-    assert snapshot.workflow_route["task_family"] == "runtime_status"
-    assert snapshot.policy_id == "status_query_v1"
-    assert snapshot.authorization["mode"] in {"allow", "degrade", "deny"}
-    assert "shadow_plan" not in snapshot.model_dump()
-    assert "planning_diff" not in snapshot.model_dump()
-    assert "planner_gate" not in snapshot.model_dump()
     assert calls == []
     assert list_thread_artifacts(thread_id) == []

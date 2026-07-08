@@ -1,4 +1,4 @@
-"""Optional trace export bridge for the restricted single-agent runtime."""
+"""Optional trace export bridge for the Agent Engine V2 runtime."""
 
 from __future__ import annotations
 
@@ -39,17 +39,17 @@ class TraceRunContext:
     user_identity: str
     user_message: str
     stream_id: str = ""
-    runtime: str = "restricted_single_agent"
+    runtime: str = "agent_engine_v2"
     model_name: str | None = None
 
     @property
     def langfuse_trace_id(self) -> str:
-        seed = self.trace_id or self.request_id or self.thread_id or "restricted_single_agent"
+        seed = self.trace_id or self.request_id or self.thread_id or "agent_engine_v2"
         return _normalize_trace_id(seed)
 
 
 class TraceObservationHandle(Protocol):
-    """Minimal observation interface used by the single-agent runtime."""
+    """Minimal observation interface used by the Agent Engine V2 runtime."""
 
     def update(
         self,
@@ -610,7 +610,7 @@ class LangfuseTraceExporter(TraceExporter):
             "app_env": APP_ENV,
         }
         root_scope = self._client.start_as_current_observation(
-            name="restricted_single_agent",
+            name="agent_engine_v2",
             as_type="agent",
             input=root_input,
             metadata=root_metadata,
@@ -627,8 +627,8 @@ class LangfuseTraceExporter(TraceExporter):
                 "stream_id": trace_context.stream_id,
                 "runtime": trace_context.runtime,
             },
-            tags=["fault_diagnosis", "single_agent", trace_context.runtime],
-            trace_name="restricted_single_agent",
+            tags=["fault_diagnosis", "agent_engine_v2", trace_context.runtime],
+            trace_name="agent_engine_v2",
             as_baggage=False,
         )
         attrs_scope.__enter__()
