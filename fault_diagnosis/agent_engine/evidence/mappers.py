@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from ...diagnosis.contracts import DiagnosisRequest, EvidenceItem, EvidenceQuality, KnowledgeStepArtifact, SqlStepArtifact
-from ...single_agent.evidence.knowledge import build_knowledge_evidence_items
-from ...single_agent.evidence.sql import build_sql_evidence_items
+from ...diagnosis.evidence.knowledge import build_knowledge_evidence_items
+from ...diagnosis.evidence.sql import build_sql_evidence_items
 
 
 def map_sql_evidence(sql_artifact: SqlStepArtifact | dict[str, Any], *, request: DiagnosisRequest | None = None) -> list[dict[str, Any]]:

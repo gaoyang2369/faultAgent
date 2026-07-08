@@ -2,7 +2,7 @@
 
 `fault_diagnosis/single_agent/` 是 faultAgent 后端的短期 legacy rollback 实现，不再是默认主链路。默认请求由 `fault_diagnosis/agent_engine/` 的 Agent Engine V2 执行；只有显式设置 `AGENT_ENGINE_VERSION=legacy` 时，`agent_runtime.streaming` 才会回到这里的 `RestrictedSingleAgentRunner`。
 
-本目录仍保留一个迭代周期，用于紧急回滚，以及给 V2 复用稳定的 SQL safety、SQL result parser、报告 helper、evidence helper 和工单建议 helper。不要在这里新增默认生产能力。
+本目录仍保留一个迭代周期，用于紧急回滚。SQL safety、SQL result parser、报告 helper、evidence helper 和工单建议 helper 的 V2 来源已经迁到 `security/` 与 `diagnosis/`；这里的同名能力只服务 legacy fallback 和旧测试。不要在这里新增默认生产能力。
 
 诊断结论必须落到 `EvidenceBundle`；工单和设备动作只能输出建议、草稿或人工确认要求，不能自动执行设备控制，不能自动派发工单。
 
@@ -460,7 +460,7 @@ auth role=guest -> policy_engine denies/degrades
 
 ## Legacy Rollback 维护指南
 
-新生产能力应优先改 `fault_diagnosis/agent_engine/`。以下内容仅适用于维护 `AGENT_ENGINE_VERSION=legacy` 回滚链路，或修改仍被 V2 复用的 helper。
+新生产能力应优先改 `fault_diagnosis/agent_engine/`、`fault_diagnosis/diagnosis/`、`fault_diagnosis/security/` 或 `fault_diagnosis/tools/`。以下内容仅适用于维护 `AGENT_ENGINE_VERSION=legacy` 回滚链路。
 
 - 新增 `goal_type`：改 `workflow/contracts.py`、`workflow/goals.py`、`workflow/axes.py`，再补 policy 和测试。
 - 新增 `task_family`：改 `workflow/contracts.py`、`workflow/task_family.py`、policy 选择和授权映射。
@@ -469,7 +469,7 @@ auth role=guest -> policy_engine denies/degrades
 - 新增工具：实现工具，加入 `SingleAgentLimits.allowed_tools`、`security/tool_gateway.py`、policy runtime tool 映射、stage 调用和 evidence preview。
 - 新增 evidence 类型：改 `diagnosis/contracts.py`、`single_agent/evidence/*`、`evidence/quality.py` 和输出模板。
 - 修改最终回答模板：改 `output/templates.py`、`output/renderers.py` 或 `final_answer.py`。
-- 修改报告模板：改 `tools/report_tools.py` 和 `single_agent/reporting/`。
+- 修改报告模板：改 `tools/report_tools.py` 和 `diagnosis/reporting/`；legacy fallback 需要兼容时再同步 `single_agent/reporting/`。
 - 修改权限边界：改 `security/permissions.py`、`policy_engine.py`、`sql_acl.py`、`rag_acl.py`、`tool_gateway.py`。
 - 修改 `/chat/plan` 输出：改 `single_agent/planner.py`。
 - 修改前端兼容字段：改 `output/payloads.py`、`compat/legacy_intent.py`、`runtime/diagnosis_contract_adapter.py`。

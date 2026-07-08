@@ -39,4 +39,4 @@
 
 - 移除 `AGENT_ENGINE_VERSION=legacy` 分支。
 - 删除旧 `RestrictedSingleAgentRunner` 默认入口测试。
-- 将仍被 V2 复用的 SQL/report/evidence helper 迁入 `agent_engine/` 或领域模块。
+- 确认 `diagnosis/` 与 `security/` 下的 SQL/report/evidence/workorder helper 稳定后，移除旧 helper wrapper 和 legacy rollback。

@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from ....diagnosis.contracts import AnalysisStepArtifact, KnowledgeStepArtifact, SqlStepArtifact, WorkOrderSuggestion
-from ....single_agent.workorder_drafts import (
+from ....diagnosis.workorder.drafts import (
     build_pending_workorder_draft_action,
     build_workorder_draft_artifact,
     validate_pending_workorder_draft_action,
 )
-from ....single_agent.workorder_suggestions import build_workorder_suggestion
+from ....diagnosis.workorder.suggestions import build_workorder_suggestion
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
 from .base import auth_context, build_request, input_value, model_to_dict

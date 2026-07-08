@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
 from fault_diagnosis.security.assets import asset_is_in_scope, resolve_asset
 from fault_diagnosis.security.contracts import AuthContext
 from fault_diagnosis.security.permissions import AUTHORIZED_BUSINESS_TABLES
-from fault_diagnosis.single_agent.workflow.policies import POLICIES_BY_ID
 
 from ..contracts import ContextFrame, ExecutionPlan, IntentFrame, SkillRoute
 from ..skills import SkillMetadata, SkillRegistry
@@ -97,6 +97,82 @@ RISK_FROM_LEGACY = {
     "requires_confirmation": "high",
     "write_action": "critical",
     "high_risk": "critical",
+}
+
+
+@dataclass(frozen=True)
+class V2Policy:
+    policy_id: str
+    task_family: str
+    risk_level: str = "low"
+    evidence_requirements: dict[str, bool] = field(default_factory=dict)
+
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:  # noqa: ARG002
+        return {
+            "policy_id": self.policy_id,
+            "task_family": self.task_family,
+            "risk_level": self.risk_level,
+            "evidence_requirements": dict(self.evidence_requirements),
+        }
+
+
+POLICIES_BY_ID: dict[str, V2Policy] = {
+    "permission_scope_query_v1": V2Policy("permission_scope_query_v1", "meta"),
+    "knowledge_qa_v1": V2Policy(
+        "knowledge_qa_v1",
+        "knowledge_lookup",
+        evidence_requirements={"need_manual_reference": True},
+    ),
+    "status_query_v1": V2Policy(
+        "status_query_v1",
+        "runtime_status",
+        evidence_requirements={
+            "need_asset_identity": True,
+            "need_current_status": True,
+            "need_metric_timestamp": True,
+        },
+    ),
+    "alarm_triage_v1": V2Policy(
+        "alarm_triage_v1",
+        "diagnosis",
+        evidence_requirements={
+            "need_alarm_definition": True,
+            "need_alarm_severity": True,
+            "need_current_alarm_status_if_device_provided": True,
+        },
+    ),
+    "fault_diagnosis_v1": V2Policy(
+        "fault_diagnosis_v1",
+        "diagnosis",
+        evidence_requirements={
+            "need_runtime_data": True,
+            "need_supporting_evidence_for_each_cause": True,
+            "need_missing_evidence_disclosure": True,
+        },
+    ),
+    "root_cause_analysis_v1": V2Policy(
+        "root_cause_analysis_v1",
+        "diagnosis",
+        evidence_requirements={
+            "need_event_timeline": True,
+            "need_causal_support": True,
+            "need_unknowns": True,
+        },
+    ),
+    "report_generation_v1": V2Policy(
+        "report_generation_v1",
+        "reporting",
+        evidence_requirements={"need_reportable_artifact": True},
+    ),
+    "action_request_v1": V2Policy(
+        "action_request_v1",
+        "action_or_workorder",
+        risk_level="high",
+        evidence_requirements={
+            "need_current_status": True,
+            "need_human_confirmation": True,
+        },
+    ),
 }
 
 

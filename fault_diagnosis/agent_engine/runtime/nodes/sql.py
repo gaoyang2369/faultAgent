@@ -6,9 +6,9 @@ from typing import Any
 
 from ....diagnosis.contracts import SqlStepArtifact
 from ....security.sql_acl import apply_sql_acl
-from ....single_agent.evidence.sql import build_sql_evidence_items
-from ....single_agent.sql_result_parser import parse_sql_rows
-from ....single_agent.sql_safety import extract_sql_table_names
+from ....diagnosis.evidence.sql import build_sql_evidence_items
+from ....diagnosis.steps.sql_result_parser import parse_sql_rows
+from ....security.sql_safety import extract_sql_table_names
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
 from ..tool_runtime import ToolRuntime

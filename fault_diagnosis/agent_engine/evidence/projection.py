@@ -6,7 +6,7 @@ from typing import Any
 
 from ..contracts import EvidenceLedger
 from ...diagnosis.contracts import Claim, EvidenceBundle, EvidenceItem
-from ...single_agent.evidence.quality import validate_evidence_bundle
+from ...diagnosis.evidence.quality import validate_evidence_bundle
 from .quality import eligible_final_claim_ids
 
 

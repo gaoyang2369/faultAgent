@@ -7,7 +7,7 @@ from typing import Any
 
 from .. import config
 from .assets import asset_is_in_scope, data_source_terms_for_table
-from ..single_agent.sql_safety import (
+from .sql_safety import (
     ALLOWED_SQL_TABLES,
     extract_sql_table_names,
     has_unknown_sql_table,

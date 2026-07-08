@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from fault_diagnosis.single_agent.workflow.axes import goal_types, requests_report, task_profile_for_compat
-
 from .contracts import AuthContext, AuthorizationDecision
 from .assets import asset_is_in_scope
 from .permissions import effective_resource_scope
@@ -185,3 +183,77 @@ def _authorization_task(decision: Any) -> str:
     if "answer_meta_question" in goals:
         return "permission_scope_query"
     return task_profile_for_compat(decision)
+
+
+def goal_types(route_or_decision: Any) -> list[str]:
+    data = _model_dump(route_or_decision)
+    raw_goal_set = data.get("goal_set") if data else _field(route_or_decision, "goal_set")
+    goal_set = _model_dump(raw_goal_set or route_or_decision)
+    goals = data.get("goals") or goal_set.get("goals") or _field(route_or_decision, "goals", []) or []
+    return _dedupe(
+        [
+            str(_model_dump(goal).get("goal_type") or "").strip()
+            for goal in goals
+            if str(_model_dump(goal).get("goal_type") or "").strip()
+        ]
+    )
+
+
+def requests_report(route_or_decision: Any) -> bool:
+    return "generate_report" in set(goal_types(route_or_decision)) or str(
+        _field(route_or_decision, "requested_output") or ""
+    ) == "report"
+
+
+def requests_action_or_workorder(route_or_decision: Any) -> bool:
+    goals = set(goal_types(route_or_decision))
+    if goals.intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"}):
+        return True
+    if str(_field(route_or_decision, "task_family") or "") == "action_or_workorder":
+        return True
+    if str(_field(route_or_decision, "action_target") or ""):
+        return True
+    if str(_field(route_or_decision, "action_type") or ""):
+        return True
+    return False
+
+
+def task_profile_for_compat(route_or_decision: Any) -> str:
+    goals = set(goal_types(route_or_decision))
+    task_family = str(_field(route_or_decision, "task_family") or "")
+    requested_output = str(_field(route_or_decision, "requested_output") or "")
+    if requested_output == "report" or "generate_report" in goals or task_family == "reporting":
+        return "report_generation"
+    if task_family == "action_or_workorder" or requests_action_or_workorder(route_or_decision):
+        return "action_request"
+    if task_family == "meta" or "answer_meta_question" in goals:
+        return "permission_scope_query"
+    if task_family == "knowledge_lookup":
+        return "knowledge_qa"
+    if task_family == "runtime_status":
+        return "status_query"
+    if "explain_fault_code" in goals and goals.intersection({"check_runtime_status", "refresh_current_status", "recommend_resolution"}):
+        return "alarm_triage"
+    if "diagnose_fault" in goals:
+        return "fault_diagnosis"
+    if "assess_severity" in goals:
+        return "health_assessment"
+    if "explain_fault_code" in goals:
+        return "knowledge_qa"
+    return "fault_diagnosis"
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _model_dump(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(exclude_none=True)
+    return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))

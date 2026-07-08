@@ -2,7 +2,7 @@
 
 本文记录当前 FastAPI 后端对浏览器前端、语音网关和运维脚本暴露的 HTTP API。实现可以重构，但路径、方法、cookie 行为、权限边界和主要响应外壳不能在没有迁移方案的情况下改变。
 
-当前主入口是限制型单 Agent。所有诊断请求最终进入 `/chat/stream` 主链路；`/agent/chat` 只是语音网关的 JSON 聚合入口。
+当前主入口是 Agent Engine V2。所有诊断请求最终进入 `/chat/stream` 主链路；`/agent/chat` 只是语音网关的 JSON 聚合入口。
 
 ## 通用约定
 
@@ -124,4 +124,3 @@
 - `/reports/{filename}` 仍执行报告权限校验。
 - 历史、Todo、PDF 文件、工单读取继续执行 session/admin/resource 过滤。
 - SSE 事件字段满足 [sse-event-contract.md](./sse-event-contract.md)。
-

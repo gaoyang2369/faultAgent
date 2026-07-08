@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from ..contracts import AnalysisStepArtifact, DiagnosisRequest, KnowledgeStepArtifact, SqlStepArtifact
-from ...single_agent.reporting.utils import (
+from ..reporting.utils import (
     dedupe_items,
     format_float,
     format_value,
@@ -17,8 +17,8 @@ from ...single_agent.reporting.utils import (
     unique_codes,
     unique_non_empty,
 )
-from ...single_agent.sql_result_parser import parse_sql_rows
-from ...single_agent.sql_safety import REAL_DATA_LATEST_TABLE
+from ..steps.sql_result_parser import parse_sql_rows
+from ...security.sql_safety import REAL_DATA_LATEST_TABLE
 from .contracts import DiagnosticAssessment, RuleFinding, RuntimeMetricFeature, StructuredAnalysisArtifact
 from .evidence_mapper import map_assessment_to_claims, map_assessment_to_evidence_items
 from .thresholds import (

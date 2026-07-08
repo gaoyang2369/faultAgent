@@ -18,14 +18,12 @@ from ..common.logger import get_logger
 from ..common.utils import safe_json_dumps
 from ..common.utils import summarize_identifier_for_log, summarize_text_for_log
 from ..common.paths import REPORTS_DIR
+from ..agent_engine import AgentEngineV2
+from ..agent_engine.cutover import prepare_v2_execution_plan
+from ..agent_engine.planning import PlanPolicyBridge
 from ..security.contracts import AuthContext
 from ..security.permissions import build_auth_context
-from ..security.policy_engine import authorize_workflow
-from ..single_agent.output.payloads import build_ui_payload
-from ..single_agent.compat import build_legacy_intent_stack
-from ..single_agent.workflow.axes import requests_action_or_workorder, task_profile_for_compat
-from ..single_agent.workflow.policies import build_workflow_plan
-from ..single_agent.workflow.router import route_task
+from ..security.policy_engine import authorize_workflow, requests_action_or_workorder
 
 _log = get_logger("dev_mode")
 
@@ -150,42 +148,110 @@ def build_dev_authorization(
     message: str,
     auth_context: AuthContext,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Run the local mock through the same router, workflow plan and policy engine."""
+    """Run the local mock through V2 planning and policy validation."""
 
-    route = route_task(payload={}, message=message)
-    plan = build_workflow_plan(route, needs_report=route.requested_output == "report")
-    compat_task = task_profile_for_compat(route)
-    compat_fields = {
+    snapshot = AgentEngineV2().plan_only(
+        raw_message=message,
+        thread_id="local-dev",
+        auth_context=auth_context,
+        metadata={"source": "local_dev"},
+    )
+    plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id="local-dev")
+    bridge = PlanPolicyBridge()
+    primary_skill = snapshot.skill_route.primary_skill or "clarification"
+    task_family = bridge.task_family_for_skill(primary_skill)
+    requested_output = "report" if "report" in plan.expected_outputs else "answer"
+    compat_task = _compat_task_from_v2(
+        task_family=task_family,
+        requested_output=requested_output,
+        goal_types=[str(goal.get("goal_type") or "") for goal in plan.goals if goal.get("goal_type")],
+    )
+    if requested_output != "report" and _looks_like_diagnosis_request(message):
+        task_family = "diagnosis"
+        compat_task = "fault_diagnosis"
+        plan.goals = [{"goal_type": "diagnose_fault"}]
+    policy_id = "fault_diagnosis_v1" if compat_task == "fault_diagnosis" else bridge.policy_id_for_skill(primary_skill)
+    enabled_nodes = bridge.legacy_enabled_nodes(plan)
+    runtime_tools = bridge.v2_to_legacy_tools(list(plan.allowed_tools))
+    objects = {
+        "device_ids": list(snapshot.intent_frame.device_refs),
+        "alarm_codes": list(snapshot.intent_frame.fault_code_refs),
+    }
+    auth_decision = SimpleNamespace(
+        task_family=task_family,
+        requested_output=requested_output,
+        workflow_policy={"policy_id": policy_id},
+        enabled_nodes=enabled_nodes,
+        runtime_tools=runtime_tools,
+        goal_set={"goals": list(plan.goals)},
+        goals=[],
+        objects=objects,
+        action_target="workorder" if task_family == "action_or_workorder" else None,
+        action_type="create_workorder_draft" if task_family == "action_or_workorder" else None,
+    )
+    authorization = authorize_workflow(auth_context, auth_decision).model_dump()
+    runtime_tools = list(authorization.get("runtime_tools", [])) if authorization.get("allowed") else []
+    decision_payload = {
         "primary_task_type": compat_task,
         "candidate_task_types": [compat_task],
-        "intent_stack": build_legacy_intent_stack(route.goal_set),
-    }
-    decision = SimpleNamespace(
-        **compat_fields,
-        task_family=route.task_family,
-        action_target=route.action_target,
-        action_type=route.action_type,
-        goal_set=route.goal_set,
-        requested_output=route.requested_output,
-        objects=route.objects.model_dump(exclude_none=True),
-        workflow_policy=plan.policy.model_dump(exclude_none=True),
-        enabled_nodes=plan.resolved_nodes,
-        runtime_tools=plan.runtime_tools,
-    )
-    authorization = authorize_workflow(auth_context, decision).model_dump()
-    decision.authorization = authorization
-    decision_payload = {
-        **compat_fields,
-        "task_family": route.task_family,
-        "objects": route.objects.model_dump(exclude_none=True),
-        "requested_output": route.requested_output,
-        "risk_level": route.risk_level,
-        "enabled_nodes": authorization.get("allowed_nodes", {}),
-        "runtime_tools": authorization.get("runtime_tools", []),
+        "intent_stack": [{"intent": compat_task, "source": "v2_dev_projection"}],
+        "task_family": task_family,
+        "objects": objects,
+        "requested_output": requested_output,
+        "risk_level": plan.risk_level,
+        "goal_set": {
+            "goals": list(plan.goals),
+            "goal_types": [str(goal.get("goal_type") or "") for goal in plan.goals if goal.get("goal_type")],
+        },
+        "workflow_policy": {
+            "policy_id": bridge.policy_id_for_skill(primary_skill),
+            "allowed_tools": runtime_tools,
+            "forbidden_tools": bridge.v2_to_legacy_tools(list(plan.forbidden_tools)),
+        },
+        "enabled_nodes": authorization.get("allowed_nodes") or enabled_nodes,
+        "runtime_tools": runtime_tools,
         "authorization": authorization,
-        "ui_payload": build_ui_payload(decision=decision),
+        "ui_payload": {
+            "engine": "agent_engine_v2",
+            "type": _dev_ui_payload_type(authorization),
+            "task_family": task_family,
+            "policy_id": policy_id,
+            "enabled_nodes": authorization.get("allowed_nodes") or enabled_nodes,
+        },
     }
     return decision_payload, authorization
+
+
+def _compat_task_from_v2(*, task_family: str, requested_output: str, goal_types: list[str]) -> str:
+    goals = set(goal_types)
+    if requested_output == "report" or "generate_report" in goals or task_family == "reporting":
+        return "report_generation"
+    if task_family == "action_or_workorder" or goals.intersection({"decide_workorder", "create_workorder_draft"}):
+        return "action_request"
+    if task_family == "meta":
+        return "permission_scope_query"
+    if task_family == "knowledge_lookup":
+        return "knowledge_qa"
+    if task_family == "runtime_status":
+        return "status_query"
+    if "explain_fault_code" in goals and goals.intersection({"check_runtime_status", "refresh_current_status"}):
+        return "alarm_triage"
+    return "fault_diagnosis"
+
+
+def _looks_like_diagnosis_request(message: str) -> bool:
+    text = str(message or "")
+    diagnosis_terms = ("故障诊断", "根因", "诊断", "排查", "异常原因")
+    status_only_terms = ("当前状态", "运行状态", "状态怎么样", "还在报警")
+    return any(term in text for term in diagnosis_terms) and not any(term in text for term in status_only_terms)
+
+
+def _dev_ui_payload_type(authorization: dict[str, Any]) -> str:
+    if authorization.get("mode") != "deny":
+        return "workflow_ready"
+    if authorization.get("denied_reason_code") == "report_permission_denied":
+        return "report_blocked"
+    return "access_denied"
 
 
 def _summarize_todos(todos: list[dict[str, Any]]) -> dict[str, int]:

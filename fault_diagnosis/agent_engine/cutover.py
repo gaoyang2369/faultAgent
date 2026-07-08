@@ -8,7 +8,7 @@ from typing import Any
 from ..diagnosis.contracts import DiagnosisRequest
 from ..diagnosis.report_mapper import map_artifact_to_report_payload
 from ..diagnosis.artifact_store import get_thread_artifact
-from ..single_agent.sql_safety import build_fallback_sql_query
+from ..security.sql_safety import build_fallback_sql_query
 from .contracts import ExecutionPlan, PlanSnapshotV2
 
 

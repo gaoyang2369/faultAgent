@@ -35,7 +35,6 @@ from ..agent_engine import AgentEngineV2
 from ..agent_engine.cutover import prepare_v2_execution_plan
 from ..agent_engine.flags import is_legacy_rollback_enabled, load_agent_engine_flags
 from ..agent_engine.planning import PlanPolicyBridge
-from ..single_agent.planner import build_plan_snapshot
 from .conversation_persistence import ConversationPersistenceService, parse_sse_payloads
 from ..common.utils import (
     sanitize_chat_history_messages,
@@ -229,6 +228,14 @@ def _v2_plan_skip_reasons(enabled_nodes: dict[str, bool]) -> dict[str, str]:
         if not enabled_nodes.get(node):
             skip_reasons[node] = "not_planned_by_agent_engine_v2"
     return skip_reasons
+
+
+def legacy_plan_chat(**kwargs: Any):
+    """Isolate the short-term legacy /chat/plan rollback import."""
+
+    from ..single_agent.planner import build_plan_snapshot
+
+    return build_plan_snapshot(**kwargs)
 
 
 class ChatService:
@@ -440,7 +447,7 @@ class ChatService:
         )
         conversation_context = self._build_read_only_conversation_context(request.app, context)
         if is_legacy_rollback_enabled(flags=load_agent_engine_flags()):
-            snapshot = build_plan_snapshot(
+            snapshot = legacy_plan_chat(
                 message=context.message,
                 thread_id=context.thread_id,
                 user_identity=context.trusted_user_identity,

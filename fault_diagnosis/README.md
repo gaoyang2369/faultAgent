@@ -66,9 +66,9 @@ fault_diagnosis/
   security/               RBAC / ABAC、SQL/RAG/report/workorder/tool 权限校验
   agent_runtime/          SSE 编码、流调度、取消、错误分类、V2/legacy 回滚选择
   agent_engine/           V2 understanding、skill routing、planning、runtime、output projection
-  single_agent/           短期 legacy rollback；部分 SQL/report/evidence helper 被 V2 复用
+  single_agent/           短期 legacy rollback；不再作为 V2 helper 来源
   context/                ResolvedContext、CaseState、PendingAction、artifact-backed context
-  diagnosis/              诊断领域合同、artifact store、report mapper、分析 helper
+  diagnosis/              诊断领域合同、artifact store、report/evidence/workorder mapper、分析 helper
   tools/                  SQL、知识库、报告工具
   knowledge/              FAISS / Ollama / PDF 知识库
   repositories/           用户、历史、知识文件 registry、治理和工单持久化
@@ -143,7 +143,7 @@ GET /chat/stream
 - service 层负责 session/thread 解析、历史消息、身份上下文、停止流、语音聚合。
 - `agent_runtime/` 负责 SSE 适配、取消句柄、错误分类、dev mode 分流和 legacy 全局回滚选择。
 - `agent_engine/` 负责 V2 understanding、skill routing、plan validation、typed nodes、output projection。
-- `single_agent/` 只保留短期 rollback runner，并提供 V2 仍复用的 SQL/report/evidence helper。
+- `single_agent/` 只保留短期 rollback runner；V2 复用能力放在 `diagnosis/`、`security/` 和 `tools/`。
 - `diagnosis/artifact_store.py` 保存线程级诊断产物，支撑后续“基于刚才结果生成报告”“是不是要生成工单”等续问。
 
 ## SSE 契约
@@ -293,7 +293,7 @@ artifact 支撑多轮续问：
 - 修改 skill 路由改 `agent_engine/understanding/`、`agent_engine/skills/` 和 `agent_engine/planning/`。
 - 修改输出字段改 `agent_engine/output/`、`runtime/diagnosis_contract_adapter.py`、`diagnosis/contracts.py`。
 - 修改权限逻辑改 `security/permissions.py`、`security/policy_engine.py`、`security/sql_acl.py`、`security/rag_acl.py`、`security/tool_gateway.py` 或 `api/reports.py`。
-- 修改报告模板改 `tools/report_tools.py`、`agent_engine/output/report.py` 和仍被复用的 `single_agent/reporting/` helper。
+- 修改报告模板改 `tools/report_tools.py`、`agent_engine/output/report.py` 和 `diagnosis/reporting/` helper。
 - 修改 RAG 逻辑改 `knowledge/`、`tools/kb_tools.py`、`security/rag_acl.py`。
 - 不要重新引入旧任务类型或旧意图列表作为内部 policy key。
 - 不要恢复 shadow/diff/gate 双轨迁移逻辑。

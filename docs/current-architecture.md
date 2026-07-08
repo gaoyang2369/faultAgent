@@ -54,9 +54,9 @@ auth/            session、cookie、thread ownership、voice exchange
 security/        RBAC / ABAC、SQL/RAG/report/workorder/tool 权限
 agent_runtime/   SSE 编码、流调度、取消、错误分类、V2/legacy 回滚选择
 agent_engine/    V2 understanding、skill routing、planning、runtime、output projection
-single_agent/    短期 legacy rollback；部分 SQL/report/evidence helper 被 V2 复用
+single_agent/    短期 legacy rollback；不再作为 V2 helper 来源
 context/         ResolvedContext、CaseState、PendingAction
-diagnosis/       领域合同、artifact store、report mapper
+diagnosis/       领域合同、artifact store、report mapper、report/evidence/workorder helper
 tools/           SQL、知识库、报告工具
 knowledge/       FAISS / Ollama / PDF 知识库
 repositories/    用户、历史、知识文件 registry、治理、工单持久化

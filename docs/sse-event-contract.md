@@ -1,6 +1,6 @@
 # SSE 事件契约
 
-本文记录 `/chat/stream` 与 `/chat/stream/edit` 当前对前端暴露的 SSE 协议。后端内部主链路是限制型单 Agent；部分 `workflow_*` 字段名仍作为前端兼容字段保留，不代表存在独立 workflow runner。
+本文记录 `/chat/stream` 与 `/chat/stream/edit` 当前对前端暴露的 SSE 协议。后端默认主链路是 Agent Engine V2；部分 `workflow_*` 字段名仍作为前端兼容字段保留，不代表存在独立 workflow runner。
 
 ## 基本格式
 
@@ -47,7 +47,7 @@ start -> token -> complete
   "stream_id": "stream-id",
   "trace_id": "trace_xxx",
   "stage": "understand",
-  "message": "限制型单 Agent 已开始处理请求。"
+  "message": "Agent Engine V2 已开始处理请求。"
 }
 ```
 
@@ -90,7 +90,7 @@ start -> token -> complete
   "type": "ping",
   "trace_id": "trace_xxx",
   "stage": "analysis",
-  "message": "单 Agent 正在处理，连接保持中..."
+  "message": "Agent Engine V2 正在处理，连接保持中..."
 }
 ```
 
@@ -158,7 +158,7 @@ start -> token -> complete
   "thread_id": "thread.xxx",
   "trace_id": "trace_xxx",
   "request_id": "request.xxx",
-  "runtime": "restricted_single_agent",
+  "runtime": "agent_engine_v2",
   "task_family": "diagnosis",
   "policy_id": "fault_diagnosis_v1",
   "final_content": "最终答复",

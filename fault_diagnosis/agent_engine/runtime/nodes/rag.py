@@ -7,7 +7,7 @@ from typing import Any
 from ....diagnosis.contracts import KnowledgeStepArtifact
 from ....diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from ....security.runtime_context import reset_current_auth_context, set_current_auth_context
-from ....single_agent.evidence.knowledge import build_knowledge_evidence_items
+from ....diagnosis.evidence.knowledge import build_knowledge_evidence_items
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
 from ..tool_runtime import ToolRuntime
