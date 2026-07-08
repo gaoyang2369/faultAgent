@@ -1,4 +1,4 @@
-"""Agent Engine V2 empty sidecar engine."""
+"""Agent Engine V2 sidecar engine."""
 
 from __future__ import annotations
 
@@ -6,21 +6,21 @@ from typing import Any
 
 from .contracts import (
     EvidenceLedger,
-    ExecutionPlan,
     OutputFrame,
     PlanSnapshotV2,
 )
 from .context import ContextFrameAdapter
+from .planning import PlanCompiler, PlanValidator, diff_plans
 from .skills import SkillRouter
 from .understanding import IntentFrameBuilder, RewriteFrameBuilder
 
 
 class AgentEngineV2:
-    """Plan-only placeholder for the V2 engine.
+    """Plan-only V2 sidecar.
 
-    Phase 3 still avoids real tools, LLM calls, artifact writes, and legacy
-    route integration. The snapshot may include understanding, context, and
-    skill-route outputs, but execution planning remains empty.
+    Phase 4 still avoids real tools, LLM calls, artifact writes, and legacy
+    route integration. It does produce a candidate plan and a server-validated
+    plan snapshot for policy and shadow-comparison work.
     """
 
     def plan_only(
@@ -33,6 +33,8 @@ class AgentEngineV2:
         context_manager: Any | None = None,
         conversation_context: dict[str, Any] | None = None,
         recent_context_signals: dict[str, Any] | None = None,
+        llm_candidate_plan: Any | None = None,
+        legacy_plan: Any | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> PlanSnapshotV2:
         snapshot_metadata = dict(metadata or {})
@@ -62,25 +64,41 @@ class AgentEngineV2:
             rewrite_frame=rewrite_frame,
             context_frame=context_frame,
         )
+        candidate_plan = PlanCompiler().compile(
+            skill_route=skill_route,
+            intent_frame=intent_frame,
+            context_frame=context_frame,
+            llm_candidate_plan=llm_candidate_plan,
+        )
+        validation = PlanValidator().validate(
+            candidate_plan=candidate_plan,
+            skill_route=skill_route,
+            intent_frame=intent_frame,
+            auth_context=auth_context,
+        )
+        plan_diff = diff_plans(legacy_plan, validation.validated_plan)
+        snapshot_status = "blocked" if validation.status == "blocked" else "validated"
 
         return PlanSnapshotV2(
-            status="not_implemented",
+            status=snapshot_status,
             intent_frame=intent_frame,
             rewrite_frame=rewrite_frame,
             context_frame=context_frame,
             skill_route=skill_route,
-            execution_plan=ExecutionPlan(),
+            execution_plan=validation.validated_plan,
             evidence_ledger=EvidenceLedger(),
             output_frame=OutputFrame(
                 guardrail_result={
-                    "status": "not_implemented",
-                    "reason": "Agent Engine V2 plan_only has no executable runtime in Phase 3.",
+                    "status": validation.status,
+                    "issues": [issue.model_dump(mode="json") for issue in validation.issues],
+                    "removed_tools": list(validation.removed_tools),
+                    "authorization": dict(validation.authorization),
                 }
             ),
             trace={
                 "engine": "agent_engine_v2",
                 "mode": "plan_only",
-                "status": "not_implemented",
+                "status": snapshot_status,
                 "request_understanding": {
                     "raw_message": raw_message,
                     "user_rewrite": rewrite_frame.user_rewrite,
@@ -99,7 +117,16 @@ class AgentEngineV2:
                     "load_set": list(skill_route.load_set),
                     "blocked_skills": dict(skill_route.blocked_skills),
                 },
+                "candidate_plan": candidate_plan.model_dump(mode="json"),
+                "validation": {
+                    "status": validation.status,
+                    "issues": [issue.model_dump(mode="json") for issue in validation.issues],
+                    "removed_tools": list(validation.removed_tools),
+                    "approval_requirements": list(validation.approval_requirements),
+                    "authorization": dict(validation.authorization),
+                },
+                "plan_diff": plan_diff,
             },
-            warnings=["Agent Engine V2 is not implemented yet."],
+            warnings=[issue.message for issue in validation.issues],
             metadata=snapshot_metadata,
         )

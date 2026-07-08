@@ -221,12 +221,14 @@ def test_agent_engine_v2_plan_only_includes_context_and_skill_route_without_exec
         context_manager=manager,
     )
 
-    assert snapshot.status == "not_implemented"
+    assert snapshot.status == "validated"
     assert snapshot.context_frame.relation_to_previous == "report_handoff"
     assert snapshot.skill_route.primary_skill == "report_generation"
     assert snapshot.skill_route.load_set
-    assert snapshot.execution_plan.nodes == []
-    assert snapshot.execution_plan.allowed_tools == []
-    assert snapshot.output_frame.guardrail_result["status"] == "not_implemented"
+    assert [node["node_type"] for node in snapshot.execution_plan.nodes] == ["report"]
+    assert snapshot.execution_plan.allowed_tools == ["report.write_draft"]
+    assert snapshot.output_frame.guardrail_result["status"] == "validated"
     assert snapshot.trace["skill_route"]["selected_skills"] == ["report_generation"]
+    assert "candidate_plan" in snapshot.trace
+    assert "validation" in snapshot.trace
     assert snapshot.model_dump(mode="json")

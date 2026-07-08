@@ -56,13 +56,15 @@ def test_model_failure_uses_rule_fallback_and_records_trace() -> None:
 def test_plan_only_includes_understanding_frames_and_trace() -> None:
     snapshot = AgentEngineV2().plan_only(raw_message="A07089 是什么，现在 J1 还故障吗")
 
-    assert snapshot.status == "not_implemented"
+    assert snapshot.status == "validated"
     assert snapshot.intent_frame.fault_code_refs == ["A07089"]
     assert snapshot.intent_frame.device_refs == ["J1"]
     assert snapshot.rewrite_frame.user_rewrite
     assert snapshot.trace["request_understanding"]["raw_message"] == "A07089 是什么，现在 J1 还故障吗"
     assert snapshot.trace["request_understanding"]["user_rewrite"] == snapshot.rewrite_frame.user_rewrite
     assert snapshot.trace["request_understanding"]["rewrite_reason"] == snapshot.rewrite_frame.rewrite_reason
-    assert snapshot.execution_plan.nodes == []
-    assert snapshot.output_frame.guardrail_result["status"] == "not_implemented"
-    assert json.loads(snapshot.model_dump_json())["status"] == "not_implemented"
+    assert snapshot.execution_plan.nodes
+    assert snapshot.output_frame.guardrail_result["status"] == "validated"
+    assert "candidate_plan" in snapshot.trace
+    assert "validation" in snapshot.trace
+    assert json.loads(snapshot.model_dump_json())["status"] == snapshot.status

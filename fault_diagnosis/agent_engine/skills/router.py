@@ -87,7 +87,20 @@ def _select_skills(intent_frame: IntentFrame, rewrite_frame: RewriteFrame) -> li
         selected.append("report_generation")
     if sub_intents.intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"}):
         selected.append("workorder_decision")
-    return selected or ["clarification"]
+    return _prioritize_skills(selected) or ["clarification"]
+
+
+def _prioritize_skills(selected: list[str]) -> list[str]:
+    priority = {
+        "report_generation": 0,
+        "workorder_decision": 1,
+        "root_cause": 2,
+        "alarm_triage": 3,
+        "runtime_status": 4,
+        "fault_code_explain": 5,
+        "clarification": 6,
+    }
+    return sorted(selected, key=lambda skill: priority.get(skill, 100))
 
 
 def _needs_clarification(context_frame: ContextFrame, intent_frame: IntentFrame) -> bool:

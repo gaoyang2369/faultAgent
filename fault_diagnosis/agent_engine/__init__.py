@@ -13,6 +13,7 @@ from .contracts import (
 )
 from .context import ContextFrameAdapter
 from .engine import AgentEngineV2
+from .planning import PlanCompiler, PlanPolicyBridge, PlanValidationResult, PlanValidator, diff_plans
 from .skills import LoadedSkill, SkillLoader, SkillMetadata, SkillRegistry, SkillRouter
 from .understanding import IntentFrameBuilder, RewriteFrameBuilder
 
@@ -27,7 +28,11 @@ __all__ = [
     "LoadedSkill",
     "NodeResult",
     "OutputFrame",
+    "PlanCompiler",
+    "PlanPolicyBridge",
     "PlanSnapshotV2",
+    "PlanValidationResult",
+    "PlanValidator",
     "RewriteFrame",
     "RewriteFrameBuilder",
     "SkillLoader",
@@ -35,4 +40,5 @@ __all__ = [
     "SkillRegistry",
     "SkillRoute",
     "SkillRouter",
+    "diff_plans",
 ]
