@@ -110,6 +110,7 @@ def test_workorder_and_device_action_generate_approval_requirements() -> None:
     )
 
     assert result.status == "blocked"
+    assert result.validated_plan.plan_version.endswith(".blocked")
     assert "device_control.write" in result.removed_tools
     assert any(item["type"] == "device_action" and item["allowed_next_step"] == "deny" for item in result.approval_requirements)
 

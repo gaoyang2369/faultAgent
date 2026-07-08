@@ -1,0 +1,441 @@
+"""Plan-only fake Workflow Runtime for Agent Engine V2."""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Protocol
+
+from ..contracts import ExecutionPlan
+from .graph import RuntimeGraph, RuntimeGraphError
+from .state import (
+    CancelToken,
+    RuntimeResult,
+    RuntimeState,
+    build_complete_payload,
+    node_result,
+)
+
+
+class NodeExecutionOutput:
+    """Internal output returned by typed nodes before executor commits evidence."""
+
+    def __init__(
+        self,
+        *,
+        output: dict[str, Any] | None = None,
+        tool_call_refs: list[str] | None = None,
+        proposed_evidence: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.output = output or {}
+        self.tool_call_refs = list(tool_call_refs or [])
+        self.proposed_evidence = list(proposed_evidence or [])
+
+
+class TypedNode(Protocol):
+    """Typed node protocol used by fake runtime and future real tools."""
+
+    node_type: str
+
+    def run(self, *, node: dict[str, Any], state: RuntimeState) -> NodeExecutionOutput:
+        ...
+
+
+class FakeTypedNode:
+    """Default fake node that returns deterministic summaries."""
+
+    def __init__(self, node_type: str, *, emits_evidence: bool = False) -> None:
+        self.node_type = node_type
+        self.emits_evidence = emits_evidence
+
+    def run(self, *, node: dict[str, Any], state: RuntimeState) -> NodeExecutionOutput:
+        node_id = str(node.get("node_id") or "")
+        output = {
+            "status": "fake_completed",
+            "node_id": node_id,
+            "node_type": self.node_type,
+            "summary": f"Fake {self.node_type} node completed.",
+        }
+        evidence = []
+        if self.emits_evidence:
+            evidence = [
+                {
+                    "evidence_id": f"fake_ev_{node_id}",
+                    "source_type": "fake_runtime",
+                    "evidence_type": self.node_type,
+                    "summary": output["summary"],
+                    "authorized": True,
+                }
+            ]
+        return NodeExecutionOutput(
+            output=output,
+            tool_call_refs=[f"fake_tool_call:{node_id}"],
+            proposed_evidence=evidence,
+        )
+
+
+class WorkflowRuntimeExecutor:
+    """Execute validated V2 plans with fake typed nodes."""
+
+    def __init__(self, node_registry: dict[str, TypedNode] | None = None) -> None:
+        registry: dict[str, TypedNode] = {
+            "sql": FakeTypedNode("sql", emits_evidence=True),
+            "rag": FakeTypedNode("rag", emits_evidence=True),
+            "kg": FakeTypedNode("kg", emits_evidence=True),
+            "analysis": FakeTypedNode("analysis", emits_evidence=False),
+            "report": FakeTypedNode("report", emits_evidence=False),
+            "workorder": FakeTypedNode("workorder", emits_evidence=False),
+            "approval": FakeTypedNode("approval", emits_evidence=False),
+            "clarification": FakeTypedNode("clarification", emits_evidence=False),
+        }
+        registry.update(node_registry or {})
+        self.node_registry = registry
+
+    def execute(
+        self,
+        plan: ExecutionPlan,
+        *,
+        trace_id: str = "",
+        thread_id: str = "",
+        request_id: str = "",
+        cancel_token: CancelToken | None = None,
+    ) -> RuntimeResult:
+        state = RuntimeState(
+            plan=plan.model_copy(deep=True),
+            trace_id=trace_id,
+            thread_id=thread_id,
+            request_id=request_id,
+            cancel_token=cancel_token or CancelToken(),
+        )
+        state.add_trace(
+            "runtime_gate",
+            status="checking",
+            metadata={"validated_plan_required": True, "plan_version": plan.plan_version, "plan_id": plan.plan_id},
+        )
+        if not _is_executable_validated_plan(plan):
+            return self._finish_blocked(
+                state,
+                code="validated_plan_required",
+                message="V2 runtime only executes validated plans.",
+            )
+        try:
+            graph = RuntimeGraph(plan)
+        except RuntimeGraphError as exc:
+            return self._finish_blocked(state, code="invalid_graph", message=str(exc))
+
+        node_status: dict[str, str] = {}
+        for node in graph.ordered_nodes():
+            node_id = str(node.get("node_id") or "")
+            input_summary = _summarize_input(node)
+            state.add_trace("node_status", node_id=node_id, node_type=_node_type(node), status="pending", input_summary=input_summary)
+
+            if state.cancel_token.cancelled:
+                self._cancel_node(state, node, input_summary=input_summary)
+                node_status[node_id] = "cancelled"
+                self._cancel_remaining(state, graph, after_node_id=node_id, node_status=node_status)
+                return self._finish_cancelled(state)
+
+            failed_deps = [dep for dep in graph.dependencies(node_id) if node_status.get(dep) != "completed"]
+            if failed_deps:
+                result = node_result(
+                    node=node,
+                    status="skipped",
+                    input_summary=input_summary,
+                    output={"skipped_reason": "dependency_not_completed", "dependencies": failed_deps},
+                )
+                state.append_node_result(result)
+                node_status[node_id] = "skipped"
+                state.add_trace(
+                    "node_status",
+                    node_id=node_id,
+                    node_type=result.node_type,
+                    status="skipped",
+                    input_summary=input_summary,
+                    output_summary=_summarize_output(result.output),
+                    retry_count=result.retry_count,
+                )
+                continue
+
+            if self._approval_blocks(node, state.plan):
+                result = node_result(
+                    node=node,
+                    status="blocked",
+                    input_summary=input_summary,
+                    output={
+                        "approval_requirements": list(state.plan.approval_requirements),
+                        "interrupts": list(state.plan.interrupts),
+                    },
+                    error={"code": "approval_required", "message": "Node requires approval boundary."},
+                )
+                state.append_node_result(result)
+                node_status[node_id] = "blocked"
+                state.interrupts.extend(state.plan.interrupts or state.plan.approval_requirements)
+                state.add_trace(
+                    "node_status",
+                    node_id=node_id,
+                    node_type=result.node_type,
+                    status="blocked",
+                    input_summary=input_summary,
+                    output_summary=_summarize_output(result.output),
+                    error=result.error,
+                )
+                return self._finish_blocked(state, code="approval_required", message="Approval boundary blocked execution.")
+
+            typed_node = self.node_registry.get(_node_type(node))
+            if typed_node is None:
+                result = node_result(
+                    node=node,
+                    status="skipped",
+                    input_summary=input_summary,
+                    output={"skipped_reason": "fake_handler_not_configured"},
+                )
+                state.append_node_result(result)
+                node_status[node_id] = "skipped"
+                state.add_trace(
+                    "node_status",
+                    node_id=node_id,
+                    node_type=result.node_type,
+                    status="skipped",
+                    input_summary=input_summary,
+                    output_summary=_summarize_output(result.output),
+                )
+                continue
+
+            result = self._run_node_with_retry(state, node, typed_node, input_summary=input_summary)
+            state.append_node_result(result)
+            node_status[node_id] = result.status
+            if result.status == "cancelled":
+                self._cancel_remaining(state, graph, after_node_id=node_id, node_status=node_status)
+                return self._finish_cancelled(state)
+            if result.status == "failed":
+                return self._finish_failed(state, error=result.error or {})
+
+        return self._finish_completed(state)
+
+    def _run_node_with_retry(
+        self,
+        state: RuntimeState,
+        node: dict[str, Any],
+        typed_node: TypedNode,
+        *,
+        input_summary: str,
+    ):
+        node_id = str(node.get("node_id") or "")
+        retry_limit = _retry_limit(node)
+        attempts = 0
+        last_error: dict[str, Any] | None = None
+        started = time.monotonic()
+        while attempts <= retry_limit:
+            state.add_trace(
+                "node_status",
+                node_id=node_id,
+                node_type=_node_type(node),
+                status="running",
+                input_summary=input_summary,
+                retry_count=attempts,
+            )
+            try:
+                output = typed_node.run(node=node, state=state)
+                if state.cancel_token.cancelled:
+                    duration_ms = round((time.monotonic() - started) * 1000, 1)
+                    result = node_result(
+                        node=node,
+                        status="cancelled",
+                        input_summary=input_summary,
+                        output={"cancel_reason": state.cancel_token.reason},
+                        retry_count=attempts,
+                        duration_ms=duration_ms,
+                    )
+                    state.add_trace(
+                        "node_status",
+                        node_id=node_id,
+                        node_type=result.node_type,
+                        status="cancelled",
+                        input_summary=input_summary,
+                        output_summary=_summarize_output(result.output),
+                        duration_ms=duration_ms,
+                        retry_count=attempts,
+                    )
+                    return result
+
+                evidence_refs = state.commit_evidence(node, output.proposed_evidence)
+                duration_ms = round((time.monotonic() - started) * 1000, 1)
+                result = node_result(
+                    node=node,
+                    status="completed",
+                    input_summary=input_summary,
+                    output=output.output,
+                    evidence_refs=evidence_refs,
+                    tool_call_refs=output.tool_call_refs,
+                    retry_count=attempts,
+                    duration_ms=duration_ms,
+                )
+                state.add_trace(
+                    "node_status",
+                    node_id=node_id,
+                    node_type=result.node_type,
+                    status="completed",
+                    input_summary=input_summary,
+                    output_summary=_summarize_output(result.output),
+                    duration_ms=duration_ms,
+                    retry_count=attempts,
+                )
+                return result
+            except Exception as exc:  # noqa: BLE001 - fake nodes intentionally simulate arbitrary failures.
+                last_error = {"code": type(exc).__name__, "message": str(exc)}
+                state.add_trace(
+                    "node_retry",
+                    node_id=node_id,
+                    node_type=_node_type(node),
+                    status="failed_attempt",
+                    input_summary=input_summary,
+                    retry_count=attempts,
+                    error=last_error,
+                )
+                if attempts >= retry_limit:
+                    break
+                attempts += 1
+
+        duration_ms = round((time.monotonic() - started) * 1000, 1)
+        result = node_result(
+            node=node,
+            status="failed",
+            input_summary=input_summary,
+            output={},
+            error=last_error or {"code": "node_failed", "message": "Node failed."},
+            retry_count=attempts,
+            duration_ms=duration_ms,
+        )
+        state.errors.append(result.error or {})
+        state.add_trace(
+            "node_status",
+            node_id=node_id,
+            node_type=result.node_type,
+            status="failed",
+            input_summary=input_summary,
+            duration_ms=duration_ms,
+            retry_count=attempts,
+            error=result.error,
+        )
+        return result
+
+    def _approval_blocks(self, node: dict[str, Any], plan: ExecutionPlan) -> bool:
+        return _node_type(node) in {"approval", "workorder"} and bool(plan.approval_requirements or plan.interrupts)
+
+    def _cancel_node(self, state: RuntimeState, node: dict[str, Any], *, input_summary: str) -> None:
+        result = node_result(
+            node=node,
+            status="cancelled",
+            input_summary=input_summary,
+            output={"cancel_reason": state.cancel_token.reason},
+        )
+        state.append_node_result(result)
+        state.add_trace(
+            "node_status",
+            node_id=result.node_id,
+            node_type=result.node_type,
+            status="cancelled",
+            input_summary=input_summary,
+            output_summary=_summarize_output(result.output),
+        )
+
+    def _cancel_remaining(
+        self,
+        state: RuntimeState,
+        graph: RuntimeGraph,
+        *,
+        after_node_id: str,
+        node_status: dict[str, str],
+    ) -> None:
+        remaining = False
+        for node in graph.ordered_nodes():
+            node_id = str(node.get("node_id") or "")
+            if node_id == after_node_id:
+                remaining = True
+                continue
+            if not remaining or node_id in node_status:
+                continue
+            self._cancel_node(state, node, input_summary=_summarize_input(node))
+            node_status[node_id] = "cancelled"
+
+    def _finish_completed(self, state: RuntimeState) -> RuntimeResult:
+        state.status = "completed"
+        return _runtime_result(state, status="completed", final_content="V2 fake runtime completed.")
+
+    def _finish_blocked(self, state: RuntimeState, *, code: str, message: str) -> RuntimeResult:
+        state.status = "blocked"
+        error = {"code": code, "message": message}
+        state.errors.append(error)
+        state.add_trace("runtime_status", status="blocked", error=error)
+        return _runtime_result(state, status="blocked", final_content=message)
+
+    def _finish_failed(self, state: RuntimeState, *, error: dict[str, Any]) -> RuntimeResult:
+        state.status = "failed"
+        state.add_trace("runtime_status", status="failed", error=error)
+        return _runtime_result(state, status="failed", final_content="V2 fake runtime failed.")
+
+    def _finish_cancelled(self, state: RuntimeState) -> RuntimeResult:
+        state.status = "cancelled"
+        state.add_trace("runtime_status", status="cancelled", metadata={"cancel_reason": state.cancel_token.reason})
+        complete = build_complete_payload(
+            state=state,
+            status="cancelled",
+            cancelled=True,
+            cancel_reason=state.cancel_token.reason,
+        )
+        return RuntimeResult(
+            status="cancelled",
+            node_results=list(state.node_results),
+            evidence_ledger=state.evidence_ledger,
+            trace=state.trace_payload(),
+            complete_payload=complete,
+            cancel_payload=complete,
+        )
+
+
+def _runtime_result(state: RuntimeState, *, status: str, final_content: str) -> RuntimeResult:
+    complete = build_complete_payload(state=state, status=status, final_content=final_content)  # type: ignore[arg-type]
+    return RuntimeResult(
+        status=status,  # type: ignore[arg-type]
+        node_results=list(state.node_results),
+        evidence_ledger=state.evidence_ledger,
+        trace=state.trace_payload(),
+        complete_payload=complete,
+        cancel_payload=None,
+    )
+
+
+def _is_executable_validated_plan(plan: ExecutionPlan) -> bool:
+    return bool(plan.plan_id and str(plan.plan_version or "").endswith(".validated"))
+
+
+def _retry_limit(node: dict[str, Any]) -> int:
+    retry = node.get("retry")
+    if not isinstance(retry, dict):
+        return 0
+    if "max_retries" in retry:
+        return max(0, int(retry.get("max_retries") or 0))
+    if "max_attempts" in retry:
+        return max(0, int(retry.get("max_attempts") or 1) - 1)
+    return 0
+
+
+def _node_type(node: dict[str, Any]) -> str:
+    return str(node.get("node_type") or node.get("type") or "").strip()
+
+
+def _summarize_input(node: dict[str, Any]) -> str:
+    summary = {
+        "node_id": node.get("node_id"),
+        "node_type": _node_type(node),
+        "inputs": node.get("inputs", {}),
+        "required_tools": node.get("required_tools", []),
+    }
+    return _truncate(str(summary))
+
+
+def _summarize_output(output: Any) -> str:
+    return _truncate(str(output))
+
+
+def _truncate(value: str, limit: int = 500) -> str:
+    return value if len(value) <= limit else f"{value[:limit]}..."

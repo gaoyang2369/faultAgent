@@ -14,6 +14,7 @@ from .contracts import (
 from .context import ContextFrameAdapter
 from .engine import AgentEngineV2
 from .planning import PlanCompiler, PlanPolicyBridge, PlanValidationResult, PlanValidator, diff_plans
+from .runtime import CancelToken, RuntimeResult, RuntimeState, TypedNode, WorkflowRuntimeExecutor
 from .skills import LoadedSkill, SkillLoader, SkillMetadata, SkillRegistry, SkillRouter
 from .understanding import IntentFrameBuilder, RewriteFrameBuilder
 
@@ -21,6 +22,7 @@ __all__ = [
     "AgentEngineV2",
     "ContextFrame",
     "ContextFrameAdapter",
+    "CancelToken",
     "EvidenceLedger",
     "ExecutionPlan",
     "IntentFrame",
@@ -35,10 +37,14 @@ __all__ = [
     "PlanValidator",
     "RewriteFrame",
     "RewriteFrameBuilder",
+    "RuntimeResult",
+    "RuntimeState",
     "SkillLoader",
     "SkillMetadata",
     "SkillRegistry",
     "SkillRoute",
     "SkillRouter",
+    "TypedNode",
+    "WorkflowRuntimeExecutor",
     "diff_plans",
 ]

@@ -4,6 +4,7 @@ import json
 
 from fault_diagnosis.agent_engine import (
     AgentEngineV2,
+    CancelToken,
     ContextFrame,
     EvidenceLedger,
     ExecutionPlan,
@@ -12,7 +13,10 @@ from fault_diagnosis.agent_engine import (
     OutputFrame,
     PlanSnapshotV2,
     RewriteFrame,
+    RuntimeResult,
+    RuntimeState,
     SkillRoute,
+    WorkflowRuntimeExecutor,
 )
 
 
@@ -26,6 +30,8 @@ def test_v2_contracts_are_json_serializable() -> None:
         NodeResult(),
         EvidenceLedger(),
         OutputFrame(),
+        RuntimeState(plan=ExecutionPlan(plan_id="plan.test", plan_version="v2.test.validated")),
+        RuntimeResult(status="completed"),
         PlanSnapshotV2(),
     ]
 
@@ -101,3 +107,13 @@ def test_agent_engine_v2_plan_only_returns_validated_phase4_snapshot() -> None:
     assert snapshot.metadata["request_id"] == "request.phase1"
     assert snapshot.metadata["source"] == "unit_test"
     assert json.loads(snapshot.model_dump_json())["status"] == snapshot.status
+
+
+def test_v2_runtime_public_interfaces_are_exported() -> None:
+    token = CancelToken()
+    token.cancel("test_stop")
+
+    assert token.cancelled is True
+    assert token.reason == "test_stop"
+    assert WorkflowRuntimeExecutor
+    assert RuntimeState(plan=ExecutionPlan(plan_id="plan.test", plan_version="v2.test.validated")).status == "running"

@@ -185,6 +185,8 @@ class PlanValidator:
             validated.plan_version = f"{validated.plan_version}.validated"
 
         status = _status(issues, removed_tools)
+        if status == "blocked" and not validated.plan_version.endswith(".blocked"):
+            validated.plan_version = f"{validated.plan_version}.blocked"
         return PlanValidationResult(
             candidate_plan=candidate_plan,
             validated_plan=validated,
