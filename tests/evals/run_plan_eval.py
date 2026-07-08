@@ -20,12 +20,12 @@ if str(EVAL_DIR) not in sys.path:
     sys.path.insert(0, str(EVAL_DIR))
 
 from fault_diagnosis import config
-from fault_diagnosis.api.auth import router as auth_router
-from fault_diagnosis.api.chat import router as chat_router
-from fault_diagnosis.auth.session_scope import SessionScopeManager
-from fault_diagnosis.diagnosis.artifact_store import clear_all_artifacts, save_thread_artifact
-from fault_diagnosis.diagnosis.contracts import DiagnosisArtifactEnvelope
-from fault_diagnosis.runtime.dev_mode import init_dev_state
+from fault_diagnosis.server.http.routers.auth import router as auth_router
+from fault_diagnosis.server.http.routers.chat import router as chat_router
+from fault_diagnosis.server.auth.session_scope import SessionScopeManager
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import clear_all_artifacts, save_thread_artifact
+from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
+from fault_diagnosis.server.devtools.dev_mode import init_dev_state
 from evaluators import case_assertion_strength_failures, evaluate_plan_case, hard_gate_failures, summarize_results
 
 CASE_FILE = ROOT / "tests" / "evals" / "agent_workflow_cases.yaml"

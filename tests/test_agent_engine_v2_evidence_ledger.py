@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from fault_diagnosis.agent_engine import ExecutionPlan, WorkflowRuntimeExecutor
-from fault_diagnosis.agent_engine.evidence import (
+from fault_diagnosis.agent import ExecutionPlan, WorkflowRuntimeExecutor
+from fault_diagnosis.agent.evidence import (
     EvidenceLedgerWriter,
     build_v2_claim,
     create_ledger,
@@ -10,8 +10,8 @@ from fault_diagnosis.agent_engine.evidence import (
     project_ledger_to_evidence_bundle,
     validate_ledger,
 )
-from fault_diagnosis.security.permissions import build_auth_context
-from fault_diagnosis.diagnosis.evidence.quality import validate_evidence_bundle
+from fault_diagnosis.domain.security.permissions import build_auth_context
+from fault_diagnosis.domain.diagnosis.evidence.quality import validate_evidence_bundle
 
 
 def test_ledger_commits_authorized_evidence_dedupes_and_generates_refs() -> None:

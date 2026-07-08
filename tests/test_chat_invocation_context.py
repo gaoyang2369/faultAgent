@@ -9,15 +9,15 @@ testclient = pytest.importorskip("fastapi.testclient")
 FastAPI = fastapi.FastAPI
 TestClient = testclient.TestClient
 
-from fault_diagnosis.agent_runtime.sse_adapter import adapt_sse_chunk
+from fault_diagnosis.server.agent_gateway.sse_adapter import adapt_sse_chunk
 from fault_diagnosis import config
-from fault_diagnosis.api import chat as chat_api
-from fault_diagnosis.api.auth import router as auth_router
-from fault_diagnosis.api.chat import router as chat_router
-from fault_diagnosis.auth.session_scope import SessionScopeManager
-from fault_diagnosis.diagnosis.artifact_store import clear_all_artifacts, save_thread_artifact
-from fault_diagnosis.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
-from fault_diagnosis.runtime.dev_mode import init_dev_state, record_dev_exchange
+from fault_diagnosis.server.http.routers import chat as chat_api
+from fault_diagnosis.server.http.routers.auth import router as auth_router
+from fault_diagnosis.server.http.routers.chat import router as chat_router
+from fault_diagnosis.server.auth.session_scope import SessionScopeManager
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import clear_all_artifacts, save_thread_artifact
+from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
+from fault_diagnosis.server.devtools.dev_mode import init_dev_state, record_dev_exchange
 
 
 def _build_app() -> FastAPI:

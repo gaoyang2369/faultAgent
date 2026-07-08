@@ -1,18 +1,18 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from types import SimpleNamespace
 
 import pytest
 
-from fault_diagnosis.repositories.user_repository import FileUserRepository, hash_password, verify_password
-from fault_diagnosis.security.permissions import build_auth_context
-from fault_diagnosis.security.policy_engine import authorize_workflow
-from fault_diagnosis.security.rag_acl import filter_kb_documents
-from fault_diagnosis.security.sql_acl import apply_sql_acl
-from fault_diagnosis.security.tool_gateway import authorize_tool_call
-from fault_diagnosis.services.workorder_service import CreateWorkOrderPayload, WorkOrderService
-from fault_diagnosis.repositories.workorder_repository import FileWorkOrderRepository
+from fault_diagnosis.platform.persistence.repositories.user_repository import FileUserRepository, hash_password, verify_password
+from fault_diagnosis.domain.security.permissions import build_auth_context
+from fault_diagnosis.domain.security.policy_engine import authorize_workflow
+from fault_diagnosis.domain.security.rag_acl import filter_kb_documents
+from fault_diagnosis.domain.security.sql_acl import apply_sql_acl
+from fault_diagnosis.domain.security.tool_gateway import authorize_tool_call
+from fault_diagnosis.server.use_cases.workorder_service import CreateWorkOrderPayload, WorkOrderService
+from fault_diagnosis.platform.persistence.repositories.workorder_repository import FileWorkOrderRepository
 
 
 def _decision(**overrides) -> SimpleNamespace:
@@ -48,7 +48,7 @@ def test_guest_has_fixed_server_side_scope() -> None:
 
 
 def test_signed_user_cookie_is_session_bound_and_reloads_server_scope(tmp_path) -> None:
-    from fault_diagnosis.auth.admin_auth import USER_AUTH_COOKIE_NAME, issue_user_auth_token, resolve_auth_context
+    from fault_diagnosis.server.auth.admin_auth import USER_AUTH_COOKIE_NAME, issue_user_auth_token, resolve_auth_context
 
     user_path = tmp_path / "users.json"
     user_path.write_text(

@@ -4,11 +4,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from fault_diagnosis import config
-from fault_diagnosis.api.auth import router as auth_router
-from fault_diagnosis.api.chat import router as chat_router
-from fault_diagnosis.auth.session_scope import SessionScopeManager
-from fault_diagnosis.diagnosis.artifact_store import clear_all_artifacts, list_thread_artifacts
-from fault_diagnosis.runtime.dev_mode import init_dev_state
+from fault_diagnosis.server.http.routers.auth import router as auth_router
+from fault_diagnosis.server.http.routers.chat import router as chat_router
+from fault_diagnosis.server.auth.session_scope import SessionScopeManager
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import clear_all_artifacts, list_thread_artifacts
+from fault_diagnosis.server.devtools.dev_mode import init_dev_state
 
 
 def _app() -> FastAPI:
@@ -83,8 +83,8 @@ def test_plan_endpoint_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> 
     monkeypatch.setattr(config, "ENABLE_PLAN_ENDPOINT", True)
     monkeypatch.setattr(config, "LOCAL_DEV_MODE", False)
     monkeypatch.setattr(config, "DEV_AUTH_ENABLED", True)
-    monkeypatch.setattr("fault_diagnosis.diagnosis.adapters.build_sql_tools_map", fail("sql_tools"))
-    monkeypatch.setattr("fault_diagnosis.diagnosis.artifact_store.save_thread_artifact", fail("artifact_write"))
+    monkeypatch.setattr("fault_diagnosis.domain.diagnosis.adapters.build_sql_tools_map", fail("sql_tools"))
+    monkeypatch.setattr("fault_diagnosis.platform.persistence.diagnosis_artifacts.store.save_thread_artifact", fail("artifact_write"))
 
     with TestClient(_app()) as client:
         login = client.post("/auth/dev-login", json={"role": "engineer", "asset_scope": ["J1"]})

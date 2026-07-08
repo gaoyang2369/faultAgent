@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import pytest
 
-from fault_diagnosis.diagnosis.contracts import (
+from fault_diagnosis.domain.diagnosis.contracts import (
     AnalysisStepArtifact,
     DiagnosisRequest,
     KnowledgeStepArtifact,
     SqlStepArtifact,
 )
-from fault_diagnosis.repositories.workorder_repository import FileWorkOrderRepository
-from fault_diagnosis.services.workorder_service import CreateWorkOrderPayload, UpdateWorkOrderPayload, WorkOrderService
-from fault_diagnosis.security.permissions import build_auth_context
-from fault_diagnosis.diagnosis.reporting.sections import build_workorder_todo_markdown
-from fault_diagnosis.diagnosis.workorder.suggestions import build_workorder_suggestion
+from fault_diagnosis.platform.persistence.repositories.workorder_repository import FileWorkOrderRepository
+from fault_diagnosis.server.use_cases.workorder_service import CreateWorkOrderPayload, UpdateWorkOrderPayload, WorkOrderService
+from fault_diagnosis.domain.security.permissions import build_auth_context
+from fault_diagnosis.domain.diagnosis.reporting.sections import build_workorder_todo_markdown
+from fault_diagnosis.domain.diagnosis.workorder.suggestions import build_workorder_suggestion
 
 
 def _a07089_row(row_id: int) -> tuple:

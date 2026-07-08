@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fault_diagnosis.agent_engine import AgentEngineV2, ContextFrame, IntentFrameBuilder, RewriteFrameBuilder
+from fault_diagnosis.agent import AgentEngineV2, ContextFrame, IntentFrameBuilder, RewriteFrameBuilder
 
 
 def test_composite_alarm_status_workorder_intent_frame() -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fault_diagnosis.agent_engine import (
+from fault_diagnosis.agent import (
     AgentEngineV2,
     ContextFrame,
     ExecutionPlan,
@@ -10,8 +10,8 @@ from fault_diagnosis.agent_engine import (
     RewriteFrameBuilder,
     SkillRouter,
 )
-from fault_diagnosis.agent_engine.planning.plan_diff import diff_plans
-from fault_diagnosis.security.permissions import build_auth_context
+from fault_diagnosis.agent.planning.plan_diff import diff_plans
+from fault_diagnosis.domain.security.permissions import build_auth_context
 
 
 def _route(raw_message: str):

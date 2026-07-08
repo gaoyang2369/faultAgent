@@ -9,13 +9,13 @@ testclient = pytest.importorskip("fastapi.testclient")
 FastAPI = fastapi.FastAPI
 TestClient = testclient.TestClient
 
-from fault_diagnosis.api import chat as chat_api
-from fault_diagnosis.api.auth import router as auth_router
-from fault_diagnosis.api.chat import router as chat_router
-from fault_diagnosis.auth.admin_auth import USER_AUTH_COOKIE_NAME
-from fault_diagnosis.auth.session_scope import SessionScopeManager
-from fault_diagnosis.security.permissions import AUTHORIZED_BUSINESS_TABLES
-from fault_diagnosis.security.voice_auth import sign_voice_identity
+from fault_diagnosis.server.http.routers import chat as chat_api
+from fault_diagnosis.server.http.routers.auth import router as auth_router
+from fault_diagnosis.server.http.routers.chat import router as chat_router
+from fault_diagnosis.server.auth.admin_auth import USER_AUTH_COOKIE_NAME
+from fault_diagnosis.server.auth.session_scope import SessionScopeManager
+from fault_diagnosis.domain.security.permissions import AUTHORIZED_BUSINESS_TABLES
+from fault_diagnosis.domain.security.voice_auth import sign_voice_identity
 
 
 SECRET = "voice-exchange-test-secret"
@@ -66,7 +66,7 @@ def _client(monkeypatch, tmp_path, *, include_chat: bool = False) -> TestClient:
     _write_users(users_path)
     monkeypatch.setenv("USER_STORE_PATH", str(users_path))
     monkeypatch.setenv("VOICE_AUTH_SHARED_SECRET", SECRET)
-    monkeypatch.setattr("fault_diagnosis.security.voice_auth.time.time", lambda: NOW)
+    monkeypatch.setattr("fault_diagnosis.domain.security.voice_auth.time.time", lambda: NOW)
 
     app = FastAPI()
     app.state.session_scope_manager = SessionScopeManager("voice-exchange-session-secret")

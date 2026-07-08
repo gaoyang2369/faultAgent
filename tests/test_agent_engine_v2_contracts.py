@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fault_diagnosis.agent_engine import (
+from fault_diagnosis.agent import (
     AgentEngineV2,
     CancelToken,
     ContextFrame,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from fault_diagnosis.observability.payloads import sanitize_trace_value
-from fault_diagnosis.observability.tracing import NoopTraceRun, TraceRunContext
+from fault_diagnosis.platform.observability.payloads import sanitize_trace_value
+from fault_diagnosis.platform.observability.tracing import NoopTraceRun, TraceRunContext
 
 
 def test_sanitize_trace_value_redacts_sensitive_fields() -> None:

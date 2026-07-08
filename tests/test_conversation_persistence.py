@@ -9,17 +9,17 @@ testclient = pytest.importorskip("fastapi.testclient")
 FastAPI = fastapi.FastAPI
 TestClient = testclient.TestClient
 
-from fault_diagnosis.agent_runtime.sse_adapter import adapt_sse_chunk
-from fault_diagnosis.api import chat as chat_api
-from fault_diagnosis.api.chat import router as chat_router
-from fault_diagnosis.api.history import router as history_router
-from fault_diagnosis.auth.session_scope import SessionScopeManager
-from fault_diagnosis.repositories.conversation_store import (
+from fault_diagnosis.server.agent_gateway.sse_adapter import adapt_sse_chunk
+from fault_diagnosis.server.http.routers import chat as chat_api
+from fault_diagnosis.server.http.routers.chat import router as chat_router
+from fault_diagnosis.server.http.routers.history import router as history_router
+from fault_diagnosis.server.auth.session_scope import SessionScopeManager
+from fault_diagnosis.platform.persistence.repositories.conversation_store import (
     MemoryConversationRepository,
     SQLiteConversationRepository,
     messages_to_history_payload,
 )
-from fault_diagnosis.repositories.history_index import MemoryHistoryIndexRepository
+from fault_diagnosis.platform.persistence.repositories.history_index import MemoryHistoryIndexRepository
 
 
 def test_sqlite_conversation_repository_persists_messages_and_supersedes_edits(tmp_path) -> None:

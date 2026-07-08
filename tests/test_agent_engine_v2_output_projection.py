@@ -4,16 +4,15 @@ import json
 
 import pytest
 
-from fault_diagnosis.agent_engine import ExecutionPlan, WorkflowRuntimeExecutor
-from fault_diagnosis.agent_engine.output import (
+from fault_diagnosis.agent import ExecutionPlan, WorkflowRuntimeExecutor
+from fault_diagnosis.agent.output import (
     build_output_frame,
     build_reportable_payload,
     project_artifact_envelope,
-    save_v2_artifact,
 )
-from fault_diagnosis.diagnosis.artifact_backends.memory import MemoryArtifactStoreBackend
-from fault_diagnosis.diagnosis.artifact_store import configure_artifact_store_backend
-from fault_diagnosis.diagnosis.contracts import (
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.backends.memory import MemoryArtifactStoreBackend
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import configure_artifact_store_backend, save_thread_artifact
+from fault_diagnosis.domain.diagnosis.contracts import (
     AnalysisStepArtifact,
     DiagnosisArtifactType,
     DiagnosisRequest,
@@ -23,7 +22,7 @@ from fault_diagnosis.diagnosis.contracts import (
     ReportStepArtifact,
     SqlStepArtifact,
 )
-from fault_diagnosis.runtime.diagnosis_contract_adapter import build_diagnosis_contract_payload
+from fault_diagnosis.agent.output.diagnosis_payload import build_diagnosis_contract_payload
 
 
 def _bundle() -> EvidenceBundle:
@@ -140,7 +139,7 @@ def test_cancelled_complete_payload_remains_compatible() -> None:
         node_type = "cancel"
 
         def run(self, *, node, state):  # noqa: ANN001
-            from fault_diagnosis.agent_engine.runtime import NodeExecutionOutput
+            from fault_diagnosis.agent.runtime import NodeExecutionOutput
 
             state.cancel_token.cancel("user_stop")
             return NodeExecutionOutput(output={"status": "cancelled"})
@@ -166,14 +165,16 @@ def test_v2_artifact_projection_saves_existing_envelope_contract() -> None:
         artifacts={"analysis_artifact": _analysis()},
         evidence_bundle=_bundle(),
     )
-    envelope = save_v2_artifact(
-        thread_id="thread.artifact.output",
-        output_frame=frame,
-        evidence_bundle=_bundle(),
-        artifacts={"analysis_artifact": _analysis()},
-        node_results=[],
-        trace={"trace_id": "trace.artifact.output"},
-        request_summary="诊断 J1 A07089",
+    envelope = save_thread_artifact(
+        project_artifact_envelope(
+            thread_id="thread.artifact.output",
+            output_frame=frame,
+            evidence_bundle=_bundle(),
+            artifacts={"analysis_artifact": _analysis()},
+            node_results=[],
+            trace={"trace_id": "trace.artifact.output"},
+            request_summary="诊断 J1 A07089",
+        )
     )
     contract = build_diagnosis_contract_payload(envelope)
 

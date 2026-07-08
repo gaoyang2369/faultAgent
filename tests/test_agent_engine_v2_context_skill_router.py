@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fault_diagnosis.agent_engine import (
+from fault_diagnosis.agent import (
     AgentEngineV2,
     ContextFrame,
     ContextFrameAdapter,
@@ -10,11 +10,11 @@ from fault_diagnosis.agent_engine import (
     SkillRegistry,
     SkillRouter,
 )
-from fault_diagnosis.context import ArtifactBackedCaseStore, ContextManager
-from fault_diagnosis.diagnosis.artifact_backends.memory import MemoryArtifactStoreBackend
-from fault_diagnosis.diagnosis.artifact_store import configure_artifact_store_backend, save_thread_artifact
-from fault_diagnosis.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
-from fault_diagnosis.security.permissions import build_auth_context
+from fault_diagnosis.domain.context import ArtifactBackedCaseStore, ContextManager
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.backends.memory import MemoryArtifactStoreBackend
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import configure_artifact_store_backend, save_thread_artifact
+from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
+from fault_diagnosis.domain.security.permissions import build_auth_context
 
 
 def _artifact(

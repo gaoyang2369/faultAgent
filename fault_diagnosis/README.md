@@ -47,38 +47,26 @@ gunicorn -w 4 -k uvicorn.workers.UvicornWorker fault_diagnosis.app:app --bind 0.
 - PostgreSQL artifact/health：`POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`。
 - Session / auth：`SESSION_SECRET`、`SESSION_SECRET_FILE`、`SESSION_COOKIE_SECURE`、`SESSION_COOKIE_SAMESITE`、`SESSION_COOKIE_DOMAIN`、`SESSION_COOKIE_PATH`、`USER_STORE_PATH`、`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`ALLOW_DEFAULT_ADMIN_PASSWORD`、`ADMIN_AUTH_MAX_AGE`。
 - 语音身份：`VOICE_AUTH_SHARED_SECRET`、`VOICE_AUTH_MAX_AGE_SECONDS`。
-- 报告与本地状态：报告目录固定为 `trash/run/reports/`，由 `common/paths.py` 的 `REPORTS_DIR` 定义；当前没有独立 `REPORTS_DIR` 环境变量。
+- 报告与本地状态：报告目录固定为 `trash/run/reports/`，由 `platform/paths.py` 的 `REPORTS_DIR` 定义；当前没有独立 `REPORTS_DIR` 环境变量。
 - 审计与 trace：`SECURITY_AUDIT_PATH`、`AGENT_TRACE_BACKEND`、`AGENT_TRACE_CAPTURE_CONTENT`、`AGENT_TRACE_PREVIEW_CHARS`、`AGENT_TRACE_FLUSH_ON_RUN`、`AGENT_TRACE_FLUSH_TIMEOUT_SECONDS`、`AGENT_TRACE_LOCAL_LOG`、`AGENT_TRACE_LOCAL_LOG_PATH`、`AGENT_TRACE_CONSOLE`、`AGENT_TRACE_CONSOLE_VERBOSE`、`AGENT_TRACE_CONSOLE_PREVIEW_CHARS`、`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`、`LANGFUSE_HOST`、`LANGFUSE_BASE_URL`。
 - 其他外部能力：`TTS_SYNTHESIZE_URL`、`TTS_SYNTHESIZE_TIMEOUT_SECONDS`、`TTS_SYNTHESIZE_MAX_CHARS`、`ASSET_REGISTRY_PATH`、`HISTORY_INDEX_PATH`、`WORKORDER_DIR`、`DCMA_SQL_TIME_ANCHOR=now|latest_row_if_stale`、`HEALTHCHECK_TIMEOUT_SECONDS`。
 
-`LOCAL_DEV_MODE=true` 会跳过真实 MySQL/知识库初始化，走 `runtime/dev_mode.py` 的本地模拟流。
+`LOCAL_DEV_MODE=true` 会跳过真实 MySQL/知识库初始化，走 `server/devtools/dev_mode.py` 的本地模拟流。
 
 ## 后端目录结构
 
 ```text
 fault_diagnosis/
   app.py                  进程入口，创建 FastAPI app 并交给 server_runner
-  app_factory.py          FastAPI app 组装
-  config.py               环境变量和集中配置
-  api/                    HTTP / SSE 路由
-  services/               应用服务与用例编排
-  auth/                   session、cookie、thread ownership、voice exchange
-  security/               RBAC / ABAC、SQL/RAG/report/workorder/tool 权限校验
-  agent_runtime/          SSE 编码、流调度、取消、错误分类、V2 runtime bridge
-  agent_engine/           V2 understanding、skill routing、planning、runtime、output projection
-  context/                ResolvedContext、CaseState、PendingAction、artifact-backed context
-  diagnosis/              诊断领域合同、artifact store、report/evidence/workorder mapper、分析 helper
-  tools/                  SQL、知识库、报告工具
-  knowledge/              FAISS / Ollama / PDF 知识库
-  repositories/           用户、历史、知识文件 registry、治理和工单持久化
-  runtime/                dev mode、session namespace、前端兼容适配
-  infrastructure/         app 生命周期、数据库池、模型、CORS、静态资源
-  observability/          trace payload、Langfuse / local trace
-  integrations/           OCR 等外部集成
-  common/                 路径、日志、编码、通用工具
+  config.py               兼容配置入口，转发到 platform/settings.py
+  server/                 HTTP/SSE、auth、session、use cases、Agent gateway、bootstrap、devtools
+  agent/                  V2 understanding、skill routing、planning、typed runtime、output projection
+  domain/                 diagnosis/context/security 领域合同、规则和纯 helper
+  platform/               persistence、tools、knowledge、integrations、observability、settings、paths
+  shared/                 无业务语义的通用编码与小工具
 ```
 
-扩展时保持分层：路由只接 HTTP；service 管会话、权限上下文、历史和停止流；`agent_runtime/` 只做流协议、取消和错误分类；`agent_engine/` 承担 V2 诊断执行；`diagnosis/` 保存可跨入口复用的 artifact 和领域合同。
+扩展时保持分层：`server/http/routers` 只接 HTTP；`server/use_cases` 管会话、权限上下文、历史和停止流；`server/agent_gateway` 只做流协议、取消和错误分类；`agent/` 承担 V2 诊断执行；`domain/` 保存领域合同和规则；`platform/` 保存持久化、工具、知识库、外部集成和观测能力。
 
 ## HTTP / SSE 接口
 
@@ -125,13 +113,13 @@ fault_diagnosis/
 
 ```text
 GET /chat/stream
-  -> api/chat.py
+  -> server/http/routers/chat.py
   -> ChatService.stream_chat
-  -> agent_runtime.streaming.token_stream_events
+  -> server/agent_gateway/streaming.token_stream_events
   -> AgentEngineV2.plan_only
   -> WorkflowRuntimeExecutor
-  -> agent_engine.output SSE/artifact projection
-  -> diagnosis artifact save
+  -> agent/output SSE/artifact projection
+  -> platform persistence artifact save
 ```
 
 `POST /agent/chat` 进入 `ChatService.agent_chat` 后复用同一个 `token_stream_events`，只是在服务层把 SSE 聚合为 JSON。
@@ -140,9 +128,9 @@ GET /chat/stream
 
 - HTTP 层不直接做诊断业务。
 - service 层负责 session/thread 解析、历史消息、身份上下文、停止流、语音聚合。
-- `agent_runtime/` 负责 SSE 适配、取消句柄、错误分类和 dev mode 分流。
-- `agent_engine/` 负责 V2 understanding、skill routing、plan validation、typed nodes、output projection。
-- `diagnosis/artifact_store.py` 保存线程级诊断产物，支撑后续“基于刚才结果生成报告”“是不是要生成工单”等续问。
+- `server/agent_gateway/` 负责 SSE 适配、取消句柄、错误分类和 dev mode 分流。
+- `agent/` 负责 V2 understanding、skill routing、plan validation、typed nodes、output projection。
+- `platform/persistence/diagnosis_artifacts/store.py` 保存线程级诊断产物，支撑后续“基于刚才结果生成报告”“是不是要生成工单”等续问。
 
 ## SSE 契约
 
@@ -284,15 +272,15 @@ artifact 支撑多轮续问：
 
 ## 开发与扩展约定
 
-- 新接口放 `api/`，用例编排放 `services/`。
-- 新持久化放 `repositories/` 或 diagnosis artifact backend，不要在路由里直接写业务文件。
-- 新工具先在 `tools/` 或领域模块实现，再接入 V2 `ToolRuntime`/typed node、`security/tool_gateway.py` 或对应 ACL、evidence 转换。
-- 修改 V2 流程顺序改 `agent_engine/planning/` 和 `agent_engine/runtime/graph.py`；修改单个节点改 `agent_engine/runtime/nodes/`。
-- 修改 skill 路由改 `agent_engine/understanding/`、`agent_engine/skills/` 和 `agent_engine/planning/`。
-- 修改输出字段改 `agent_engine/output/`、`runtime/diagnosis_contract_adapter.py`、`diagnosis/contracts.py`。
-- 修改权限逻辑改 `security/permissions.py`、`security/policy_engine.py`、`security/sql_acl.py`、`security/rag_acl.py`、`security/tool_gateway.py` 或 `api/reports.py`。
-- 修改报告模板改 `tools/report_tools.py`、`agent_engine/output/report.py` 和 `diagnosis/reporting/` helper。
-- 修改 RAG 逻辑改 `knowledge/`、`tools/kb_tools.py`、`security/rag_acl.py`。
+- 新接口放 `server/http/routers/`，用例编排放 `server/use_cases/`。
+- 新持久化放 `platform/persistence/`，不要在路由里直接写业务文件。
+- 新工具先在 `platform/tools/` 或 `domain/` 实现，再接入 V2 `ToolRuntime`/typed node、`domain/security/tool_gateway.py` 或对应 ACL、evidence 转换。
+- 修改 V2 流程顺序改 `agent/planning/` 和 `agent/runtime/graph.py`；修改单个节点改 `agent/runtime/nodes/`。
+- 修改 skill 路由改 `agent/understanding/`、`agent/skills/` 和 `agent/planning/`。
+- 修改输出字段改 `agent/output/`、`agent/output/diagnosis_payload.py`、`domain/diagnosis/contracts.py`。
+- 修改权限逻辑改 `domain/security/permissions.py`、`domain/security/policy_engine.py`、`domain/security/sql_acl.py`、`domain/security/rag_acl.py`、`domain/security/tool_gateway.py` 或 `server/http/routers/reports.py`。
+- 修改报告模板改 `platform/tools/report_tools.py`、`agent/output/report.py` 和 `domain/diagnosis/reporting/` helper。
+- 修改 RAG 逻辑改 `platform/knowledge/`、`platform/tools/kb_tools.py`、`domain/security/rag_acl.py`。
 - 不要重新引入旧任务类型或旧意图列表作为内部 policy key。
 - 不要恢复 shadow/diff/gate 双轨迁移逻辑。
 - 不要让 LLM 自由选择工具或绕过 EvidenceBundle 下诊断结论。

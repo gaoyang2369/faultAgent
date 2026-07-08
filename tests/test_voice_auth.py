@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from fault_diagnosis.auth.admin_auth import resolve_auth_context
-from fault_diagnosis.repositories.user_repository import FileUserRepository
-from fault_diagnosis.security.policy_engine import authorize_workflow
-from fault_diagnosis.security.voice_auth import VoiceNonceCache, sign_voice_identity
+from fault_diagnosis.server.auth.admin_auth import resolve_auth_context
+from fault_diagnosis.platform.persistence.repositories.user_repository import FileUserRepository
+from fault_diagnosis.domain.security.policy_engine import authorize_workflow
+from fault_diagnosis.domain.security.voice_auth import VoiceNonceCache, sign_voice_identity
 
 
 SECRET = "voice-test-shared-secret"
@@ -69,7 +69,7 @@ def _request(*, user="陈冠任", role="admin", timestamp=NOW, nonce="nonce-1", 
 
 def _resolve(monkeypatch, tmp_path, request, cache):
     monkeypatch.setenv("VOICE_AUTH_SHARED_SECRET", SECRET)
-    monkeypatch.setattr("fault_diagnosis.security.voice_auth.time.time", lambda: NOW)
+    monkeypatch.setattr("fault_diagnosis.domain.security.voice_auth.time.time", lambda: NOW)
     return resolve_auth_context(
         request,
         "session-1",

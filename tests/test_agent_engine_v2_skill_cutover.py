@@ -6,8 +6,8 @@ import json
 from fastapi import FastAPI
 
 from fault_diagnosis import config
-from fault_diagnosis.agent_runtime import streaming
-from fault_diagnosis.security.permissions import build_auth_context
+from fault_diagnosis.server.agent_gateway import streaming
+from fault_diagnosis.domain.security.permissions import build_auth_context
 
 
 def _events(chunks: list[str]) -> list[dict]:

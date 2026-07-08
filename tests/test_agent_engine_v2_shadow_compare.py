@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 
-from fault_diagnosis.agent_engine import AgentEngineV2, ExecutionPlan
-from fault_diagnosis.agent_engine.observability import build_plan_compare, record_plan_compare
-from fault_diagnosis.security.permissions import build_auth_context
+from fault_diagnosis.agent import AgentEngineV2, ExecutionPlan
+from fault_diagnosis.agent.observability import build_plan_compare, record_plan_compare
+from fault_diagnosis.domain.security.permissions import build_auth_context
 
 
 def test_plan_compare_covers_required_surfaces_and_writes_jsonl(tmp_path) -> None:

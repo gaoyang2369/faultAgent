@@ -1,7 +1,7 @@
-﻿from .app_factory import create_app
-from .common.logger import get_logger
-from .infrastructure.app_bootstrap import bootstrap_app_runtime
-from .infrastructure.server_runner import run_backend_server
+from .platform.logging import get_logger
+from .server.bootstrap.app_bootstrap import bootstrap_app_runtime
+from .server.bootstrap.app_factory import create_app
+from .server.bootstrap.server_runner import run_backend_server
 
 _log = get_logger("app")
 

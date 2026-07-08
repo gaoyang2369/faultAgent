@@ -1,6 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from fault_diagnosis.integrations import document_ocr_runtime as runtime
+from fault_diagnosis.platform.integrations import document_ocr_runtime as runtime
 
 
 def test_pdf_text_layer_skips_ocr(monkeypatch, tmp_path) -> None:

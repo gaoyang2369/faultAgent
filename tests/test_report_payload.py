@@ -4,20 +4,20 @@ import json
 
 import pytest
 
-from fault_diagnosis.diagnosis.contracts import (
+from fault_diagnosis.domain.diagnosis.contracts import (
     AnalysisStepArtifact,
     DiagnosisRequest,
     KnowledgeStepArtifact,
     SqlStepArtifact,
 )
-from fault_diagnosis.diagnosis.reporting import (
+from fault_diagnosis.domain.diagnosis.reporting import (
     build_analysis_evidence_summary,
     build_report_payload,
     build_structured_analysis_artifact,
 )
-from fault_diagnosis.security.sql_safety import REAL_DATA_FALLBACK_COLUMNS, REAL_DATA_LATEST_TABLE
-from fault_diagnosis.tools.kb_tools import query_fault_code_from_local_pdfs
-from fault_diagnosis.tools.report_tools import _build_report_html
+from fault_diagnosis.domain.security.sql_safety import REAL_DATA_FALLBACK_COLUMNS, REAL_DATA_LATEST_TABLE
+from fault_diagnosis.platform.tools.kb_tools import query_fault_code_from_local_pdfs
+from fault_diagnosis.platform.tools.report_tools import _build_report_html
 
 
 def _operation_report_payload(**overrides) -> str:

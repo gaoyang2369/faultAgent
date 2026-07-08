@@ -3,12 +3,12 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from fault_diagnosis.auth.session_scope import SessionScopeManager
-from fault_diagnosis.diagnosis.artifact_backends.memory import MemoryArtifactStoreBackend
-from fault_diagnosis.diagnosis.artifact_store import configure_artifact_store_backend, save_thread_artifact
-from fault_diagnosis.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
-from fault_diagnosis.repositories.history_index import MemoryHistoryIndexRepository
-from fault_diagnosis.services.history_service import HistoryService
+from fault_diagnosis.server.auth.session_scope import SessionScopeManager
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.backends.memory import MemoryArtifactStoreBackend
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import configure_artifact_store_backend, save_thread_artifact
+from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
+from fault_diagnosis.platform.persistence.repositories.history_index import MemoryHistoryIndexRepository
+from fault_diagnosis.server.use_cases.history_service import HistoryService
 
 
 def _service_with_thread(thread_id: str, session_id: str, manager: SessionScopeManager) -> HistoryService:

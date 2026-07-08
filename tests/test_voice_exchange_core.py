@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from fault_diagnosis.auth.admin_auth import USER_AUTH_COOKIE_NAME, issue_user_auth_token, resolve_auth_context
-from fault_diagnosis.auth.voice_exchange import resolve_voice_exchange_auth_context
-from fault_diagnosis.repositories.user_repository import FileUserRepository
-from fault_diagnosis.security.voice_auth import VoiceNonceCache, sign_voice_identity
+from fault_diagnosis.server.auth.admin_auth import USER_AUTH_COOKIE_NAME, issue_user_auth_token, resolve_auth_context
+from fault_diagnosis.server.auth.voice_exchange import resolve_voice_exchange_auth_context
+from fault_diagnosis.platform.persistence.repositories.user_repository import FileUserRepository
+from fault_diagnosis.domain.security.voice_auth import VoiceNonceCache, sign_voice_identity
 
 
 SECRET = "voice-exchange-core-test-secret"
@@ -58,7 +58,7 @@ def _exchange(
     cache=None,
 ):
     monkeypatch.setenv("VOICE_AUTH_SHARED_SECRET", SECRET)
-    monkeypatch.setattr("fault_diagnosis.security.voice_auth.time.time", lambda: NOW)
+    monkeypatch.setattr("fault_diagnosis.domain.security.voice_auth.time.time", lambda: NOW)
     return resolve_voice_exchange_auth_context(
         user=user,
         role=role,

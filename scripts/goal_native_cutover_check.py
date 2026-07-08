@@ -15,7 +15,7 @@ SCAN_DIRS = ("fault_diagnosis", "scripts")
 SCAN_SUFFIXES = {".py", ".md", ".yaml", ".yml", ".json", ".vue", ".ts", ".js"}
 EXCLUDED_DIRS = {"__pycache__", ".git", ".pytest_cache", "node_modules", "dist", "build", ".vite", ".nuxt"}
 ALLOW_PREFIXES = (
-    "fault_diagnosis/runtime/dev_mode.py",
+    "fault_diagnosis/server/devtools/dev_mode.py",
     "tests/",
     "docs/",
     "trash/",

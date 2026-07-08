@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fault_diagnosis.diagnosis.artifact_store import clear_all_artifacts, save_thread_artifact
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import clear_all_artifacts, save_thread_artifact
 from scripts.context_acceptance_test import artifact, build_client, login, plan
 
 

@@ -6,13 +6,13 @@ faultAgent 当前是工业设备故障诊断系统，后端源码根是 `fault_d
 
 ```text
 GET /chat/stream
-  -> api/chat.py
+  -> server/http/routers/chat.py
   -> ChatService.stream_chat
-  -> agent_runtime.streaming.token_stream_events
+  -> server/agent_gateway/streaming.token_stream_events
   -> AgentEngineV2.plan_only
   -> WorkflowRuntimeExecutor
-  -> agent_engine.output SSE/artifact projection
-  -> diagnosis artifact save
+  -> agent/output SSE/artifact projection
+  -> platform persistence artifact save
 ```
 
 Agent 内部核心链路：
@@ -48,22 +48,14 @@ user request
 ## 后端分层
 
 ```text
-api/             HTTP / SSE 路由
-services/        应用服务、session/thread/history/stop stream 编排
-auth/            session、cookie、thread ownership、voice exchange
-security/        RBAC / ABAC、SQL/RAG/report/workorder/tool 权限
-agent_runtime/   SSE 编码、流调度、取消、错误分类、V2 runtime bridge
-agent_engine/    V2 understanding、skill routing、planning、runtime、output projection
-context/         ResolvedContext、CaseState、PendingAction
-diagnosis/       领域合同、artifact store、report mapper、report/evidence/workorder helper
-tools/           SQL、知识库、报告工具
-knowledge/       FAISS / Ollama / PDF 知识库
-repositories/    用户、历史、知识文件 registry、治理、工单持久化
-runtime/         dev mode、session namespace、前端兼容适配
-infrastructure/  app 生命周期、数据库池、模型、CORS、静态资源
+server/          HTTP/SSE、session、auth、用例编排、Agent gateway、devtools、bootstrap
+agent/           V2 understanding、skill routing、planning、runtime、output projection
+domain/          诊断/上下文/权限领域合同与规则
+platform/        persistence、tools、knowledge、integrations、observability、settings、paths
+shared/          无业务语义的通用编码与小工具
 ```
 
-HTTP 层不做诊断业务；service 层不做 Agent 阶段逻辑；`agent_runtime/` 不做领域判断；`agent_engine/` 不管理 Web 会话和持久化仓储。
+HTTP 层不做诊断业务；`server/use_cases` 管 session/thread/history/stop stream；`server/agent_gateway` 只做 SSE 协议、取消和错误分类；`agent/` 不管理 Web 会话；`platform/` 不反向依赖 `server/` 或 `agent/`。
 
 ## V2 Runtime
 

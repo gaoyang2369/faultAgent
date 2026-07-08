@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from fault_diagnosis.diagnosis.analysis import diagnose_dcma_runtime
-from fault_diagnosis.diagnosis.contracts import DiagnosisRequest, KnowledgeStepArtifact, SqlStepArtifact
+from fault_diagnosis.domain.diagnosis.analysis import diagnose_dcma_runtime
+from fault_diagnosis.domain.diagnosis.contracts import DiagnosisRequest, KnowledgeStepArtifact, SqlStepArtifact
 
 
 def _request() -> DiagnosisRequest:

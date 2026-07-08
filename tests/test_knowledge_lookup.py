@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from fault_diagnosis.diagnosis.steps.knowledge_lookup import build_knowledge_artifact, extract_fault_codes_from_text
-from fault_diagnosis.tools.kb_tools import query_fault_code_from_local_pdfs
+from fault_diagnosis.domain.diagnosis.steps.knowledge_lookup import build_knowledge_artifact, extract_fault_codes_from_text
+from fault_diagnosis.platform.tools.kb_tools import query_fault_code_from_local_pdfs
 
 
 def test_fault_code_query_uses_exact_local_pdf_lookup() -> None:

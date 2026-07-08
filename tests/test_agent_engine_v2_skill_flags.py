@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fault_diagnosis import config
-from fault_diagnosis.agent_engine.flags import (
+from fault_diagnosis.agent.flags import (
     effective_skill_mode,
     load_agent_engine_flags,
     should_build_v2_compare,

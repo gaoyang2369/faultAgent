@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import json
@@ -9,16 +9,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from fault_diagnosis import config
-from fault_diagnosis.api import admin_knowledge_files as admin_knowledge_files_api
-from fault_diagnosis.api.admin_knowledge_files import router as admin_knowledge_files_router
-from fault_diagnosis.api.auth import router as auth_router
-from fault_diagnosis.auth.admin_auth import DEV_AUTH_COOKIE_NAME
-from fault_diagnosis.auth.session_scope import SessionScopeManager
-from fault_diagnosis.runtime.dev_mode import build_dev_authorization, stream_dev_chat_events
-from fault_diagnosis.security.permissions import build_auth_context, build_dev_auth_context
-from fault_diagnosis.security.policy_engine import authorize_workflow
-from fault_diagnosis.security.sql_acl import apply_sql_acl
-from fault_diagnosis.security.tool_gateway import authorize_tool_call
+from fault_diagnosis.server.http.routers import admin_knowledge_files as admin_knowledge_files_api
+from fault_diagnosis.server.http.routers.admin_knowledge_files import router as admin_knowledge_files_router
+from fault_diagnosis.server.http.routers.auth import router as auth_router
+from fault_diagnosis.server.auth.admin_auth import DEV_AUTH_COOKIE_NAME
+from fault_diagnosis.server.auth.session_scope import SessionScopeManager
+from fault_diagnosis.server.devtools.dev_mode import build_dev_authorization, stream_dev_chat_events
+from fault_diagnosis.domain.security.permissions import build_auth_context, build_dev_auth_context
+from fault_diagnosis.domain.security.policy_engine import authorize_workflow
+from fault_diagnosis.domain.security.sql_acl import apply_sql_acl
+from fault_diagnosis.domain.security.tool_gateway import authorize_tool_call
 
 
 class _FakeAdminKnowledgeFileService:

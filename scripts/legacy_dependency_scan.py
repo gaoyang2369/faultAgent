@@ -43,7 +43,7 @@ PATTERNS = tuple(
 )
 
 COMPAT_ALLOWED_PREFIXES = (
-    "fault_diagnosis/runtime/dev_mode.py",
+    "fault_diagnosis/server/devtools/dev_mode.py",
     "tests/",
     "docs/",
 )

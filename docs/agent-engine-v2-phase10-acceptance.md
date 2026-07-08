@@ -12,11 +12,11 @@
 ```text
 /chat/stream
   -> ChatService.stream_chat
-  -> agent_runtime.streaming.token_stream_events
+  -> server/agent_gateway/streaming.token_stream_events
   -> AgentEngineV2.plan_only
   -> prepare_v2_execution_plan
   -> WorkflowRuntimeExecutor
-  -> agent_engine.output projection
+  -> agent/output projection
   -> DiagnosisArtifactEnvelope
 ```
 

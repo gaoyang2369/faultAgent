@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fault_diagnosis.agent_engine import ExecutionPlan, WorkflowRuntimeExecutor
-from fault_diagnosis.security.permissions import build_auth_context
-from fault_diagnosis.security.rag_acl import filter_kb_documents
-from fault_diagnosis.security.runtime_context import get_current_auth_context
-from fault_diagnosis.tools import report_tools
+from fault_diagnosis.agent import ExecutionPlan, WorkflowRuntimeExecutor
+from fault_diagnosis.domain.security.permissions import build_auth_context
+from fault_diagnosis.domain.security.rag_acl import filter_kb_documents
+from fault_diagnosis.domain.security.runtime_context import get_current_auth_context
+from fault_diagnosis.platform.tools import report_tools
 
 
 def _plan(nodes: list[dict[str, Any]], *, edges: list[dict[str, Any]] | None = None, approvals: list[dict[str, Any]] | None = None) -> ExecutionPlan:
