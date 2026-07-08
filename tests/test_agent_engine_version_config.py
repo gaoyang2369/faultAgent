@@ -27,22 +27,22 @@ def _read_agent_engine_config(value: str | None) -> dict[str, object]:
         importlib.reload(config)
 
 
-def test_agent_engine_version_defaults_to_legacy() -> None:
+def test_agent_engine_version_defaults_to_v2() -> None:
     loaded = _read_agent_engine_config(None)
 
-    assert loaded["default"] == "legacy"
-    assert loaded["version"] == "legacy"
+    assert loaded["default"] == "v2"
+    assert loaded["version"] == "v2"
 
 
 def test_agent_engine_version_accepts_declared_modes() -> None:
-    for mode in ("legacy", "v2_plan", "v2_shadow", "v2"):
+    for mode in ("legacy", "v2"):
         loaded = _read_agent_engine_config(mode)
 
         assert loaded["version"] == mode
         assert mode in loaded["choices"]
 
 
-def test_agent_engine_version_invalid_value_falls_back_to_legacy() -> None:
+def test_agent_engine_version_invalid_value_falls_back_to_v2() -> None:
     loaded = _read_agent_engine_config("v2_execute_now")
 
-    assert loaded["version"] == "legacy"
+    assert loaded["version"] == "v2"

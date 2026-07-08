@@ -70,6 +70,7 @@ def _to_context_frame(resolved: ResolvedContext, auth_context: AuthContext) -> C
     permission_context = auth_context.audit_summary()
     permission_context["context_resolution_reason"] = resolved.context_resolution_reason
     permission_context["source"] = resolved.source
+    permission_context["conversation_context_signals_summary"] = dict(resolved.conversation_context_signals_summary)
 
     return ContextFrame(
         relation_to_previous=resolved.relation_to_previous,

@@ -45,7 +45,7 @@ def test_plan_endpoint_uses_trusted_auth_not_user_identity(monkeypatch) -> None:
         response = client.get(
             "/chat/plan",
             params={
-                "message": "诊断 J1 A07089 的原因",
+                "message": "排查 J1 A07089 根因",
                 "user_identity": "管理员",
             },
         )

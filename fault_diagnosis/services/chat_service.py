@@ -31,6 +31,10 @@ from ..agent_runtime.stream_control import (
     register_stream_handle,
 )
 from ..agent_runtime.streaming import token_stream_events as default_token_stream_events
+from ..agent_engine import AgentEngineV2
+from ..agent_engine.cutover import prepare_v2_execution_plan
+from ..agent_engine.flags import is_legacy_rollback_enabled, load_agent_engine_flags
+from ..agent_engine.planning import PlanPolicyBridge
 from ..single_agent.planner import build_plan_snapshot
 from .conversation_persistence import ConversationPersistenceService, parse_sse_payloads
 from ..common.utils import (
@@ -163,6 +167,68 @@ def to_langchain_history_messages(messages: list[dict[str, Any]]) -> list:
         if converted_message is not None:
             converted.append(converted_message)
     return converted
+
+
+def _v2_plan_compat_payload(*, snapshot: Any, plan: Any) -> dict[str, Any]:
+    bridge = PlanPolicyBridge()
+    primary_skill = snapshot.skill_route.primary_skill or "clarification"
+    policy_id = bridge.policy_id_for_skill(primary_skill)
+    task_family = bridge.task_family_for_skill(primary_skill)
+    enabled_nodes = bridge.legacy_enabled_nodes(plan)
+    skipped_nodes = _v2_plan_skip_reasons(enabled_nodes)
+    planned_tools = bridge.v2_to_legacy_tools(list(plan.allowed_tools))
+    forbidden_tools = bridge.v2_to_legacy_tools(list(plan.forbidden_tools))
+    authz = dict((snapshot.output_frame.guardrail_result or {}).get("authorization") or {})
+    resolved_context = snapshot.context_frame.model_dump(mode="json", exclude_none=True)
+    signals_summary = (resolved_context.get("permission_context") or {}).get("conversation_context_signals_summary")
+    if isinstance(signals_summary, dict):
+        resolved_context["conversation_context_signals_summary"] = signals_summary
+    return {
+        "schema_version": snapshot.schema_version,
+        "engine_version": "v2",
+        "task_family": task_family,
+        "policy_id": policy_id,
+        "plan_mode": "agent_engine_v2",
+        "context_relation": snapshot.context_frame.relation_to_previous,
+        "resolved_context": resolved_context,
+        "goal_set": {
+            "primary_goal_id": str(plan.goals[0].get("goal_id") or "") if plan.goals else "",
+            "goals": list(plan.goals),
+            "goal_types": [str(goal.get("goal_type") or "") for goal in plan.goals if goal.get("goal_type")],
+            "expected_outputs": list(plan.expected_outputs),
+        },
+        "goals": list(plan.goals),
+        "workflow_route": {
+            "task_family": task_family,
+            "policy_id": policy_id,
+            "risk_level": plan.risk_level,
+            "required_evidence": list(plan.required_evidence),
+        },
+        "workflow_policy": {
+            "policy_id": policy_id,
+            "enabled_nodes": dict(enabled_nodes),
+            "allowed_tools": planned_tools,
+            "forbidden_tools": forbidden_tools,
+        },
+        "enabled_nodes": dict(enabled_nodes),
+        "skipped_nodes": dict(skipped_nodes),
+        "skip_reasons": dict(skipped_nodes),
+        "planned_tools": planned_tools,
+        "forbidden_tools": forbidden_tools,
+        "missing_slots": list(snapshot.context_frame.missing_context),
+        "evidence_gaps": {"required_evidence": list(plan.required_evidence), "missing_or_stale_evidence": []},
+        "readiness": {"diagnosis": {}, "workorder_action": {}},
+        "manual_confirmation": {},
+        "authorization": authz,
+    }
+
+
+def _v2_plan_skip_reasons(enabled_nodes: dict[str, bool]) -> dict[str, str]:
+    skip_reasons: dict[str, str] = {}
+    for node in ("analysis", "sql", "knowledge", "report", "workorder_decision"):
+        if not enabled_nodes.get(node):
+            skip_reasons[node] = "not_planned_by_agent_engine_v2"
+    return skip_reasons
 
 
 class ChatService:
@@ -372,14 +438,28 @@ class ChatService:
             message_len=len(message),
             message_preview=summarize_text_for_log(message, limit=72),
         )
-        snapshot = build_plan_snapshot(
-            message=context.message,
-            thread_id=context.thread_id,
-            user_identity=context.trusted_user_identity,
-            auth_context=context.auth_context,
-            conversation_context=self._build_read_only_conversation_context(request.app, context),
-        )
-        payload = snapshot.model_dump(exclude_none=True)
+        conversation_context = self._build_read_only_conversation_context(request.app, context)
+        if is_legacy_rollback_enabled(flags=load_agent_engine_flags()):
+            snapshot = build_plan_snapshot(
+                message=context.message,
+                thread_id=context.thread_id,
+                user_identity=context.trusted_user_identity,
+                auth_context=context.auth_context,
+                conversation_context=conversation_context,
+            )
+            payload = snapshot.model_dump(exclude_none=True)
+        else:
+            snapshot = AgentEngineV2().plan_only(
+                raw_message=context.message,
+                thread_id=context.thread_id,
+                request_id=context.request_id,
+                auth_context=context.auth_context,
+                conversation_context=conversation_context,
+                metadata={"source": "chat_plan"},
+            )
+            plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id=context.thread_id)
+            payload = snapshot.model_dump(mode="json", exclude_none=True)
+            payload.update(_v2_plan_compat_payload(snapshot=snapshot, plan=plan))
         payload["thread_id"] = context.thread_id
         payload["request_id"] = context.request_id
         payload["auth_context"] = context.auth_context.audit_summary()

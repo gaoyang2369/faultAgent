@@ -1,27 +1,30 @@
-# single_agent 单 Agent 说明
+# single_agent Legacy Rollback 说明
 
-`fault_diagnosis/single_agent/` 是 faultAgent 后端的限制型单 Agent 核心。它不是多 Agent 编排，不是 LangChain ReAct 式开放循环，也不是让 LLM 自由决定调用哪个工具。工具调用由固定阶段代码、goal-native policy、权限和硬白名单共同控制，主流程可审计、可复现、可限制。
+`fault_diagnosis/single_agent/` 是 faultAgent 后端的短期 legacy rollback 实现，不再是默认主链路。默认请求由 `fault_diagnosis/agent_engine/` 的 Agent Engine V2 执行；只有显式设置 `AGENT_ENGINE_VERSION=legacy` 时，`agent_runtime.streaming` 才会回到这里的 `RestrictedSingleAgentRunner`。
+
+本目录仍保留一个迭代周期，用于紧急回滚，以及给 V2 复用稳定的 SQL safety、SQL result parser、报告 helper、evidence helper 和工单建议 helper。不要在这里新增默认生产能力。
 
 诊断结论必须落到 `EvidenceBundle`；工单和设备动作只能输出建议、草稿或人工确认要求，不能自动执行设备控制，不能自动派发工单。
 
-## Agent 定位与边界
+## Rollback 定位与边界
 
-外部入口不是阶段函数，而是：
+legacy 回滚入口是：
 
 ```text
 GET /chat/stream
   -> api/chat.py
   -> ChatService.stream_chat
   -> agent_runtime.streaming.token_stream_events
+  -> AGENT_ENGINE_VERSION=legacy
   -> RestrictedSingleAgentRunner.stream_events
   -> single_agent/flow.py
 ```
 
 `POST /agent/chat` 语音兼容入口也复用同一条流，只在服务层聚合成 JSON。
 
-Agent 层只负责一次诊断请求如何执行；HTTP、session、thread ownership、历史索引、数据库池和应用启动属于 `api/`、`services/`、`auth/`、`repositories/`、`infrastructure/`。
+默认 V2 链路不经过 `single_agent/flow.py`。HTTP、session、thread ownership、历史索引、数据库池和应用启动仍属于 `api/`、`services/`、`auth/`、`repositories/`、`infrastructure/`。
 
-## 当前 goal-native 主链路
+## Legacy goal-native 链路
 
 ```text
 user request
@@ -41,7 +44,7 @@ user request
   -> save artifact
 ```
 
-内部不再以旧任务类型或旧意图列表为核心。旧任务类型、旧候选任务和旧意图列表只在 output/artifact/前端兼容边界生成。退役的 shadow/diff/gate 计划字段不再是当前生产链路。
+这条链路仅用于 legacy rollback。默认 V2 的事实来源是 `IntentFrame`、`ContextFrame`、`SkillRoute`、`ExecutionPlan`、typed node results、`EvidenceLedger` 和 `OutputFrame`。旧任务类型、旧候选任务和旧意图列表只在 output/artifact/前端兼容边界生成。退役的 shadow/diff/gate 计划字段不再是当前生产链路。
 
 核心目录：
 
@@ -66,7 +69,7 @@ single_agent/
   workorder_suggestions.py  工单建议/草稿产物
 ```
 
-`planning/` 中如果仍有历史 shadow/diff/gate 文件，只能按退役迁移遗留理解；当前执行链路使用的是 readiness 和 manual confirmation。
+`planning/` 中如果仍有历史 shadow/diff/gate 文件，只能按退役迁移遗留理解；默认执行链路不读取它们。
 
 ## 上下文管理
 
@@ -455,7 +458,9 @@ auth role=guest -> policy_engine denies/degrades
 
 不能通过历史上下文绕过权限。
 
-## 开发扩展指南
+## Legacy Rollback 维护指南
+
+新生产能力应优先改 `fault_diagnosis/agent_engine/`。以下内容仅适用于维护 `AGENT_ENGINE_VERSION=legacy` 回滚链路，或修改仍被 V2 复用的 helper。
 
 - 新增 `goal_type`：改 `workflow/contracts.py`、`workflow/goals.py`、`workflow/axes.py`，再补 policy 和测试。
 - 新增 `task_family`：改 `workflow/contracts.py`、`workflow/task_family.py`、policy 选择和授权映射。

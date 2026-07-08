@@ -1,8 +1,8 @@
 ﻿# fault_diagnosis 后端说明
 
-`fault_diagnosis/` 是 faultAgent 工业故障诊断系统的后端源码根。当前后端主链路是限制型单 Agent：请求理解、上下文解析、GoalSet 构造、任务族与 policy 选择、受限 SQL、知识库检索、诊断分析、可选报告生成、最终回答、诊断 artifact 保存。
+`fault_diagnosis/` 是 faultAgent 工业故障诊断系统的后端源码根。当前后端默认主链路是 Agent Engine V2：请求理解、上下文解析、skill 路由、ExecutionPlan 校验、受限 SQL、知识库检索、诊断分析、可选报告/工单建议、最终回答、诊断 artifact 保存。
 
-它不是多 Agent 编排，也不是让 LLM 自由循环选择工具。后端不维护两套 workflow runner；代码里的 `workflow_*` 字段主要是 policy、前端进度或历史兼容字段，不代表还有独立 workflow 系统。
+它不是多 Agent 编排，也不是让 LLM 自由循环选择工具。后端不维护两套默认 runner；旧 `single_agent` runner 仅作为一个迭代周期内的 `AGENT_ENGINE_VERSION=legacy` 全局回滚路径。代码里的 `workflow_*` 字段是前端和历史 artifact 兼容投影，不代表还有独立 workflow 系统。
 
 ## 项目定位
 
@@ -10,11 +10,11 @@
 
 - 提供 HTTP / SSE 接口，管理服务端 session、cookie、thread ownership 和历史记录。
 - 以服务端身份为准进行 RBAC + ABAC 授权，前端传入的 `user_identity` 不参与授权。
-- 调用限制型单 Agent 完成诊断流水线，内部核心链路是 `ResolvedContext -> GoalSet -> task_family -> policy_id -> enabled_nodes/runtime_tools -> readiness/manual_confirmation -> fixed stages -> output/artifact compat projection`。
+- 调用 Agent Engine V2 完成诊断流水线，内部核心链路是 `IntentFrame -> ContextFrame -> RewriteFrame -> SkillRoute -> ExecutionPlan -> typed nodes -> EvidenceLedger -> OutputFrame -> output/artifact compat projection`。
 - 读 MySQL 运行数据、查本地/上传知识文件 知识库、生成私有 HTML 报告，并保存线程级 diagnosis artifact。
 - 对工单和设备动作保持高风险边界：只能给建议、草稿和人工确认要求，不能自动派发工单，不能自动重启、停机、复位或修改参数。
 
-旧任务类型、旧候选任务和旧意图列表只允许作为 SSE、artifact、前端和输出模板的兼容投影存在，不再是内部 policy 或节点启停输入。退役的 shadow/diff/gate 计划字段已退出生产主链路，不应作为当前架构核心理解。
+旧任务类型、旧候选任务和旧意图列表只允许作为 SSE、artifact 和前端兼容投影存在，不再是内部 skill routing、plan、readiness 或节点启停输入。退役的 shadow/diff/gate 计划字段已退出生产主链路，不应作为当前架构核心理解。
 
 ## 启动方式
 
@@ -38,7 +38,7 @@ gunicorn -w 4 -k uvicorn.workers.UvicornWorker fault_diagnosis.app:app --bind 0.
 
 常用环境变量以当前代码为准：
 
-- 运行模式：`APP_ENV` / `ENV`、`LOCAL_DEV_MODE`、`ENABLE_PLAN_ENDPOINT`、`ENABLE_DEV_AUTH`、`FRONTEND_ORIGINS`。
+- 运行模式：`APP_ENV` / `ENV`、`LOCAL_DEV_MODE`、`ENABLE_PLAN_ENDPOINT`、`ENABLE_DEV_AUTH`、`FRONTEND_ORIGINS`、`AGENT_ENGINE_VERSION=v2|legacy`。默认 `v2`；`legacy` 只作为短期全局回滚。
 - MySQL：`HOST`、`PORT`、`MYSQL_PW`、`MYSQL_USER`、`DCMA_DB_NAME` / `DB_NAME`。
 - OpenAI-compatible LLM：`OPENAI_BASE_URL`、`OPENAI_API_KEY`、`MODEL_NAME`、`SINGLE_AGENT_MODEL_TIMEOUT_SECONDS`、`SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS`。
 - Ollama / FAISS / 知识库：`OLLAMA_BASE_URL`、`EMBEDDING_MODEL`、`FAISS_PATH`、`KB_CHUNK_SIZE`、`KB_CHUNK_OVERLAP`、`KB_BATCH_SIZE`、`KB_QUERY_TIMEOUT_SECONDS`、`KB_EMBED_TIMEOUT_SECONDS`、`KB_BUILD_MAX_DOCUMENTS`、`KB_INCREMENTAL_BUILD`、`KB_EMBED_CACHE_PATH`。
@@ -64,8 +64,9 @@ fault_diagnosis/
   services/               应用服务与用例编排
   auth/                   session、cookie、thread ownership、voice exchange
   security/               RBAC / ABAC、SQL/RAG/report/workorder/tool 权限校验
-  agent_runtime/          SSE 编码、流调度、取消、错误分类
-  single_agent/           单 Agent 核心编排、上下文/目标/policy/stage/output/evidence
+  agent_runtime/          SSE 编码、流调度、取消、错误分类、V2/legacy 回滚选择
+  agent_engine/           V2 understanding、skill routing、planning、runtime、output projection
+  single_agent/           短期 legacy rollback；部分 SQL/report/evidence helper 被 V2 复用
   context/                ResolvedContext、CaseState、PendingAction、artifact-backed context
   diagnosis/              诊断领域合同、artifact store、report mapper、分析 helper
   tools/                  SQL、知识库、报告工具
@@ -78,7 +79,7 @@ fault_diagnosis/
   common/                 路径、日志、编码、通用工具
 ```
 
-扩展时保持分层：路由只接 HTTP；service 管会话、权限上下文、历史和停止流；`agent_runtime/` 只做流协议、取消和错误分类；`single_agent/` 只做固定诊断流水线；`diagnosis/` 保存可跨入口复用的 artifact 和领域合同。
+扩展时保持分层：路由只接 HTTP；service 管会话、权限上下文、历史和停止流；`agent_runtime/` 只做流协议、取消和错误分类；`agent_engine/` 承担 V2 诊断执行；`diagnosis/` 保存可跨入口复用的 artifact 和领域合同。`single_agent/flow.py` 不再是默认主链路。
 
 ## HTTP / SSE 接口
 
@@ -128,10 +129,9 @@ GET /chat/stream
   -> api/chat.py
   -> ChatService.stream_chat
   -> agent_runtime.streaming.token_stream_events
-  -> RestrictedSingleAgentRunner.stream_events
-  -> single_agent/flow.py
-  -> fixed stages
-  -> output complete
+  -> AgentEngineV2.plan_only
+  -> WorkflowRuntimeExecutor
+  -> agent_engine.output SSE/artifact projection
   -> diagnosis artifact save
 ```
 
@@ -141,8 +141,9 @@ GET /chat/stream
 
 - HTTP 层不直接做诊断业务。
 - service 层负责 session/thread 解析、历史消息、身份上下文、停止流、语音聚合。
-- `agent_runtime/` 负责 SSE 适配、取消句柄、错误分类和 dev mode 分流。
-- `single_agent/` 负责固定诊断流水线。
+- `agent_runtime/` 负责 SSE 适配、取消句柄、错误分类、dev mode 分流和 legacy 全局回滚选择。
+- `agent_engine/` 负责 V2 understanding、skill routing、plan validation、typed nodes、output projection。
+- `single_agent/` 只保留短期 rollback runner，并提供 V2 仍复用的 SQL/report/evidence helper。
 - `diagnosis/artifact_store.py` 保存线程级诊断产物，支撑后续“基于刚才结果生成报告”“是不是要生成工单”等续问。
 
 ## SSE 契约
@@ -287,12 +288,12 @@ artifact 支撑多轮续问：
 
 - 新接口放 `api/`，用例编排放 `services/`。
 - 新持久化放 `repositories/` 或 diagnosis artifact backend，不要在路由里直接写业务文件。
-- 新工具先在 `tools/` 或领域模块实现，再接入 `SingleAgentLimits.allowed_tools`、`security/tool_gateway.py`、policy `runtime_tools`、对应 stage 和 evidence 转换。
-- 修改流程顺序改 `single_agent/flow.py`；修改单个阶段改 `single_agent/stages.py`；不要把业务阶段重新塞回 `runner.py`。
-- 修改 goal 构造改 `single_agent/workflow/goals.py`；修改 task family 改 `workflow/task_family.py`；修改 policy 或 enabled node 改 `workflow/policies.py`。
-- 修改输出字段改 `single_agent/output/payloads.py`、`runtime/diagnosis_contract_adapter.py`、`diagnosis/contracts.py`。
+- 新工具先在 `tools/` 或领域模块实现，再接入 V2 `ToolRuntime`/typed node、`security/tool_gateway.py` 或对应 ACL、evidence 转换。
+- 修改 V2 流程顺序改 `agent_engine/planning/` 和 `agent_engine/runtime/graph.py`；修改单个节点改 `agent_engine/runtime/nodes/`。
+- 修改 skill 路由改 `agent_engine/understanding/`、`agent_engine/skills/` 和 `agent_engine/planning/`。
+- 修改输出字段改 `agent_engine/output/`、`runtime/diagnosis_contract_adapter.py`、`diagnosis/contracts.py`。
 - 修改权限逻辑改 `security/permissions.py`、`security/policy_engine.py`、`security/sql_acl.py`、`security/rag_acl.py`、`security/tool_gateway.py` 或 `api/reports.py`。
-- 修改报告模板改 `tools/report_tools.py` 和 `single_agent/reporting/`。
+- 修改报告模板改 `tools/report_tools.py`、`agent_engine/output/report.py` 和仍被复用的 `single_agent/reporting/` helper。
 - 修改 RAG 逻辑改 `knowledge/`、`tools/kb_tools.py`、`security/rag_acl.py`。
 - 不要重新引入旧任务类型或旧意图列表作为内部 policy key。
 - 不要恢复 shadow/diff/gate 双轨迁移逻辑。
@@ -321,20 +322,17 @@ npm run build
 
 ## 历史兼容说明
 
-当前主链路已经 goal-native。`workflow_route`、`workflow_policy`、`workflow_result`、`workflow_envelope` 以及旧任务类型/旧意图投影可能仍会出现在 SSE、artifact 或前端适配里，但它们是兼容输出字段，不是内部事实来源。
+当前主链路已经是 Agent Engine V2。`workflow_route`、`workflow_policy`、`workflow_result`、`workflow_envelope` 以及旧任务类型/旧意图投影可能仍会出现在 SSE、artifact 或前端适配里，但它们是兼容输出字段，不是内部事实来源。
 
 内部事实来源优先级是：
 
 ```text
-ResolvedContext
-  -> GoalSet
-  -> task_family
-  -> policy_id
-  -> enabled_nodes / runtime_tools
-  -> readiness / manual_confirmation
-  -> stage artifacts
-  -> EvidenceBundle
-  -> output_guardrail
+IntentFrame
+  -> ContextFrame
+  -> RewriteFrame
+  -> SkillRoute
+  -> ExecutionPlan
+  -> typed node results
+  -> EvidenceLedger
+  -> OutputFrame
 ```
-
-

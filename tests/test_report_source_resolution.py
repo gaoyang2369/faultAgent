@@ -269,6 +269,7 @@ def test_chat_stream_report_handoff_reuses_previous_runtime_status_artifact(monk
     monkeypatch.setattr(config, "LOCAL_DEV_MODE", False)
     monkeypatch.setattr(config, "DEV_AUTH_ENABLED", True)
     monkeypatch.setattr(config, "ENABLE_PLAN_ENDPOINT", True)
+    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "legacy")
     save_report_inputs: list[dict[str, Any]] = []
 
     async def fake_json_model(self, prompt: str) -> dict[str, Any]:  # noqa: ANN001, ARG001

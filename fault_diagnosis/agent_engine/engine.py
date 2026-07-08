@@ -10,7 +10,7 @@ from .contracts import (
     PlanSnapshotV2,
 )
 from .context import ContextFrameAdapter
-from .planning import PlanCompiler, PlanValidator, diff_plans
+from .planning import PlanCompiler, PlanValidator
 from .skills import SkillRouter
 from .understanding import IntentFrameBuilder, RewriteFrameBuilder
 
@@ -76,7 +76,6 @@ class AgentEngineV2:
             intent_frame=intent_frame,
             auth_context=auth_context,
         )
-        plan_diff = diff_plans(legacy_plan, validation.validated_plan)
         snapshot_status = "blocked" if validation.status == "blocked" else "validated"
 
         return PlanSnapshotV2(
@@ -125,7 +124,6 @@ class AgentEngineV2:
                     "approval_requirements": list(validation.approval_requirements),
                     "authorization": dict(validation.authorization),
                 },
-                "plan_diff": plan_diff,
             },
             warnings=[issue.message for issue in validation.issues],
             metadata=snapshot_metadata,

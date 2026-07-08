@@ -107,7 +107,7 @@ def test_agent_engine_v2_plan_only_returns_validated_phase4_snapshot() -> None:
     assert snapshot.output_frame.guardrail_result["status"] in {"validated", "degraded", "blocked"}
     assert "candidate_plan" in snapshot.trace
     assert "validation" in snapshot.trace
-    assert "plan_diff" in snapshot.trace
+    assert "plan_diff" not in snapshot.trace
     assert snapshot.metadata["thread_id"] == "thread.phase1"
     assert snapshot.metadata["request_id"] == "request.phase1"
     assert snapshot.metadata["source"] == "unit_test"

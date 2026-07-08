@@ -36,18 +36,56 @@ class _LegacyRunner:
         )
 
 
-def test_v2_shadow_keeps_legacy_stream_and_records_compare(monkeypatch, tmp_path) -> None:
-    asyncio.run(_assert_v2_shadow_keeps_legacy_stream_and_records_compare(monkeypatch, tmp_path))
+class _FakeToolRuntime:
+    def invoke_sql_tool(self, tool_name: str, payload):  # noqa: ANN001
+        assert tool_name == "sql_db_query"
+        return [(1, "2026-07-08 10:00:00", "G120电机1", "INV-J1", "2026-07-08", "10:00:00", "正常", "", "")]
+
+    def query_knowledge_base(self, query: str) -> str:
+        return f"故障码：A07089\n含义：速度偏差或负载异常。\n查询：{query}"
+
+    def save_report(self, **kwargs):  # noqa: ANN003
+        return "报告已保存至：/reports/fake.html"
 
 
-async def _assert_v2_shadow_keeps_legacy_stream_and_records_compare(monkeypatch, tmp_path) -> None:
+def test_default_stream_uses_v2_without_legacy_or_compare(monkeypatch) -> None:
+    asyncio.run(_assert_default_stream_uses_v2_without_legacy_or_compare(monkeypatch))
+
+
+async def _assert_default_stream_uses_v2_without_legacy_or_compare(monkeypatch) -> None:
     _LegacyRunner.called = 0
-    records = []
-    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2_shadow")
-    monkeypatch.setattr(config, "AGENT_ENGINE_V2_COMPARE_LOG_PATH", str(tmp_path / "compare.jsonl"))
-    monkeypatch.setenv("AGENT_ENGINE_V2_SKILL_RUNTIME_STATUS", "shadow")
+    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")
     monkeypatch.setattr(streaming, "RestrictedSingleAgentRunner", _LegacyRunner)
-    monkeypatch.setattr(streaming, "record_plan_compare", lambda record: records.append(record))
+    app = FastAPI()
+    app.state.dev_mode = False
+    app.state.agent_engine_v2_tool_runtime = _FakeToolRuntime()
+
+    chunks = [
+        chunk
+        async for chunk in streaming.token_stream_events(
+            app,
+            "A07089 是什么意思",
+            "thread.v2.default",
+            request_id="request.v2.default",
+            auth_context=build_auth_context(role="guest"),
+        )
+    ]
+
+    events = _events(chunks)
+    complete = next(event for event in events if event["type"] == "chat_complete")
+    assert complete["runtime"] == "agent_engine_v2"
+    assert _LegacyRunner.called == 0
+    assert any(event["type"] == "tool_start" for event in events)
+
+
+def test_legacy_mode_is_global_rollback(monkeypatch) -> None:
+    asyncio.run(_assert_legacy_mode_is_global_rollback(monkeypatch))
+
+
+async def _assert_legacy_mode_is_global_rollback(monkeypatch) -> None:
+    _LegacyRunner.called = 0
+    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "legacy")
+    monkeypatch.setattr(streaming, "RestrictedSingleAgentRunner", _LegacyRunner)
     app = FastAPI()
     app.state.dev_mode = False
 
@@ -56,8 +94,8 @@ async def _assert_v2_shadow_keeps_legacy_stream_and_records_compare(monkeypatch,
         async for chunk in streaming.token_stream_events(
             app,
             "J1 当前运行状态怎么样",
-            "thread.shadow",
-            request_id="request.shadow",
+            "thread.legacy.rollback",
+            request_id="request.legacy.rollback",
             auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
         )
     ]
@@ -65,21 +103,19 @@ async def _assert_v2_shadow_keeps_legacy_stream_and_records_compare(monkeypatch,
     complete = next(event for event in _events(chunks) if event["type"] == "chat_complete")
     assert complete["final_content"] == "legacy-ok"
     assert _LegacyRunner.called == 1
-    assert records and records[0]["primary_skill"] == "runtime_status"
-    assert records[0]["effective_skill_mode"] == "shadow"
 
 
-def test_v2_compare_failure_does_not_break_legacy_stream(monkeypatch) -> None:
-    asyncio.run(_assert_v2_compare_failure_does_not_break_legacy_stream(monkeypatch))
+def test_v2_failure_returns_server_error_without_legacy_fallback(monkeypatch) -> None:
+    asyncio.run(_assert_v2_failure_returns_server_error_without_legacy_fallback(monkeypatch))
 
 
-async def _assert_v2_compare_failure_does_not_break_legacy_stream(monkeypatch) -> None:
+async def _assert_v2_failure_returns_server_error_without_legacy_fallback(monkeypatch) -> None:
     class BrokenEngine:
         def plan_only(self, **kwargs):  # noqa: ANN001, ARG002
-            raise RuntimeError("compare boom")
+            raise RuntimeError("v2 boom")
 
     _LegacyRunner.called = 0
-    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2_shadow")
+    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")
     monkeypatch.setattr(streaming, "AgentEngineV2", BrokenEngine)
     monkeypatch.setattr(streaming, "RestrictedSingleAgentRunner", _LegacyRunner)
     app = FastAPI()
@@ -90,43 +126,12 @@ async def _assert_v2_compare_failure_does_not_break_legacy_stream(monkeypatch) -
         async for chunk in streaming.token_stream_events(
             app,
             "J1 当前运行状态怎么样",
-            "thread.shadow.failure",
-            request_id="request.shadow.failure",
+            "thread.v2.failure",
+            request_id="request.v2.failure",
             auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
         )
     ]
 
-    complete = next(event for event in _events(chunks) if event["type"] == "chat_complete")
-    assert complete["final_content"] == "legacy-ok"
-    assert _LegacyRunner.called == 1
-
-
-def test_v2_mode_falls_back_when_skill_not_ready(monkeypatch) -> None:
-    asyncio.run(_assert_v2_mode_falls_back_when_skill_not_ready(monkeypatch))
-
-
-async def _assert_v2_mode_falls_back_when_skill_not_ready(monkeypatch) -> None:
-    _LegacyRunner.called = 0
-    records = []
-    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")
-    monkeypatch.setenv("AGENT_ENGINE_V2_SKILL_ALARM_TRIAGE", "v2")
-    monkeypatch.setattr(streaming, "RestrictedSingleAgentRunner", _LegacyRunner)
-    monkeypatch.setattr(streaming, "record_plan_compare", lambda record: records.append(record))
-    app = FastAPI()
-    app.state.dev_mode = False
-
-    chunks = [
-        chunk
-        async for chunk in streaming.token_stream_events(
-            app,
-            "J1 的 A07089 现在还在报警吗，怎么处理",
-            "thread.v2.fallback",
-            request_id="request.v2.fallback",
-            auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
-        )
-    ]
-
-    complete = next(event for event in _events(chunks) if event["type"] == "chat_complete")
-    assert complete["final_content"] == "legacy-ok"
-    assert _LegacyRunner.called == 1
-    assert records[0]["fallback_reason"].endswith("not_enabled_in_phase9")
+    server_error = next(event for event in _events(chunks) if event.get("event_type") == "server_error")
+    assert server_error["error"]["code"] == "INTERNAL_ERROR"
+    assert _LegacyRunner.called == 0

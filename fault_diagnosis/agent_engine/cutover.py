@@ -1,4 +1,4 @@
-"""Skill-level execution readiness and V2 stream helpers."""
+"""V2 runtime plan preparation helpers."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from ..diagnosis.report_mapper import map_artifact_to_report_payload
 from ..diagnosis.artifact_store import get_thread_artifact
 from ..single_agent.sql_safety import build_fallback_sql_query
 from .contracts import ExecutionPlan, PlanSnapshotV2
-from .flags import AgentEngineFlags, effective_skill_mode
 
 
 @dataclass(frozen=True)
@@ -22,21 +21,20 @@ class V2ExecutionDecision:
     fallback_reason: str = ""
 
 
+def prepare_v2_execution_plan(*, snapshot: PlanSnapshotV2, thread_id: str) -> ExecutionPlan:
+    return _prepare_plan(snapshot.execution_plan, snapshot=snapshot, thread_id=thread_id)
+
+
 def decide_v2_execution(
     *,
     snapshot: PlanSnapshotV2,
     thread_id: str,
-    flags: AgentEngineFlags | None = None,
+    flags: Any | None = None,  # noqa: ARG001 - retained for offline eval compatibility.
 ) -> V2ExecutionDecision:
     skill_name = snapshot.skill_route.primary_skill or "clarification"
-    mode = effective_skill_mode(skill_name, flags=flags)
     prepared = _prepare_plan(snapshot.execution_plan, snapshot=snapshot, thread_id=thread_id)
-    if mode != "v2":
-        return V2ExecutionDecision(False, skill_name, mode, prepared, f"skill_mode:{mode}")
     reason = _readiness_blocker(skill_name, prepared, snapshot=snapshot)
-    if reason:
-        return V2ExecutionDecision(False, skill_name, mode, prepared, reason)
-    return V2ExecutionDecision(True, skill_name, mode, prepared)
+    return V2ExecutionDecision(True, skill_name, "v2", prepared, reason)
 
 
 def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: str) -> ExecutionPlan:
@@ -89,9 +87,15 @@ def _readiness_blocker(skill_name: str, plan: ExecutionPlan, *, snapshot: PlanSn
             if node.get("node_type") == "report"
         )
         return "" if has_report_payload else "report_generation_missing_reportable_artifact"
-    if skill_name in {"alarm_triage", "root_cause", "workorder_decision"}:
-        return f"{skill_name}_v2_execution_not_enabled_in_phase9"
-    return "skill_not_enabled_for_v2_execution"
+    if skill_name in {"alarm_triage", "root_cause"}:
+        has_device = bool(snapshot.intent_frame.device_refs)
+        has_sql = any(str((node.get("inputs") or {}).get("sql_query") or "").strip() for node in plan.nodes if node.get("node_type") == "sql")
+        if "sql" in node_types and not has_device:
+            return f"{skill_name}_missing_device"
+        return "" if "sql" not in node_types or has_sql else f"{skill_name}_missing_sql_query"
+    if skill_name == "workorder_decision":
+        return ""
+    return ""
 
 
 def _rag_query(snapshot: PlanSnapshotV2) -> str:

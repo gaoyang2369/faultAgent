@@ -5,7 +5,7 @@
 当前推荐阅读顺序：
 
 1. [后端 README](../fault_diagnosis/README.md)：后端启动、目录、接口、权限、artifact 和扩展约定。
-2. [单 Agent README](../fault_diagnosis/single_agent/README.md)：Agent 内部 goal-native 链路、阶段、工具、证据链和高风险动作边界。
+2. [single_agent legacy rollback README](../fault_diagnosis/single_agent/README.md)：旧 runner 的短期回滚边界，以及仍被 V2 复用的 helper。
 3. [当前架构总览](./current-architecture.md)：跨后端、Agent、上下文、权限、artifact 的简明当前态。
 4. [HTTP API 契约](./backend-api-contract.md)：外部路径、请求/响应、cookie 和权限要求。
 5. [SSE 事件契约](./sse-event-contract.md)：`/chat/stream` 事件序列和 `complete` payload。

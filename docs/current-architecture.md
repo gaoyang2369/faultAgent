@@ -1,6 +1,6 @@
 ﻿# 当前架构总览
 
-faultAgent 当前是工业设备故障诊断系统，后端源码根是 `fault_diagnosis/`，前端是 `agent_fronted/`。后端主链路已经收敛为限制型单 Agent，不是多 Agent 编排，也不是开放式 autonomous agent loop。
+faultAgent 当前是工业设备故障诊断系统，后端源码根是 `fault_diagnosis/`，前端是 `agent_fronted/`。后端默认主链路已经切到 Agent Engine V2，不是多 Agent 编排，也不是开放式 autonomous agent loop。旧 `single_agent` runner 仅作为一个迭代周期内的 `AGENT_ENGINE_VERSION=legacy` 全局回滚路径保留。
 
 ## 主链路
 
@@ -9,8 +9,9 @@ GET /chat/stream
   -> api/chat.py
   -> ChatService.stream_chat
   -> agent_runtime.streaming.token_stream_events
-  -> RestrictedSingleAgentRunner.stream_events
-  -> single_agent/flow.py
+  -> AgentEngineV2.plan_only
+  -> WorkflowRuntimeExecutor
+  -> agent_engine.output SSE/artifact projection
   -> diagnosis artifact save
 ```
 
@@ -18,37 +19,31 @@ Agent 内部核心链路：
 
 ```text
 user request
-  -> understand_request
-  -> ContextManager.resolve
-  -> ResolvedContext
-  -> build_goal_set
-  -> GoalSet
-  -> resolve_task_family
-  -> select_policy_from_intent_axes
-  -> resolve_nodes_from_goals
-  -> readiness / manual_confirmation
-  -> fixed stages
-  -> EvidenceBundle
-  -> final_answer
-  -> output compat projection
+  -> IntentFrame
+  -> ContextFrame
+  -> RewriteFrame
+  -> SkillRoute
+  -> ExecutionPlan validation
+  -> V2 typed runtime nodes
+  -> EvidenceLedger
+  -> OutputFrame
+  -> SSE/artifact compat projection
   -> save artifact
 ```
 
 内部事实来源优先看：
 
-- `resolved_context`
-- `goal_set`
-- `task_family`
-- `policy_id`
-- `decision.enabled_nodes`
-- `decision.runtime_tools`
-- `readiness`
-- `manual_confirmation`
-- stage artifacts
-- `evidence_bundle`
-- `output_guardrail`
+- `IntentFrame`
+- `ContextFrame`
+- `RewriteFrame`
+- `SkillRoute`
+- `ExecutionPlan`
+- typed node results
+- `EvidenceLedger`
+- V2 artifacts
+- `OutputFrame`
 
-旧任务类型和旧意图字段只作为 SSE、artifact、前端和输出模板兼容投影存在，不再驱动 policy 或节点启停。
+`workflow_*`、旧任务类型和旧意图字段只作为 SSE、artifact 和前端兼容投影存在，由 V2 output 层单向生成，不驱动 V2 skill 路由、计划、节点启停或 readiness。
 
 ## 后端分层
 
@@ -57,8 +52,9 @@ api/             HTTP / SSE 路由
 services/        应用服务、session/thread/history/stop stream 编排
 auth/            session、cookie、thread ownership、voice exchange
 security/        RBAC / ABAC、SQL/RAG/report/workorder/tool 权限
-agent_runtime/   SSE 编码、流调度、取消、错误分类
-single_agent/    Agent 核心编排、goal、policy、stage、output、evidence
+agent_runtime/   SSE 编码、流调度、取消、错误分类、V2/legacy 回滚选择
+agent_engine/    V2 understanding、skill routing、planning、runtime、output projection
+single_agent/    短期 legacy rollback；部分 SQL/report/evidence helper 被 V2 复用
 context/         ResolvedContext、CaseState、PendingAction
 diagnosis/       领域合同、artifact store、report mapper
 tools/           SQL、知识库、报告工具
@@ -68,35 +64,33 @@ runtime/         dev mode、session namespace、前端兼容适配
 infrastructure/  app 生命周期、数据库池、模型、CORS、静态资源
 ```
 
-HTTP 层不做诊断业务；service 层不做 Agent 阶段逻辑；`agent_runtime/` 不做领域判断；`single_agent/` 不管理 Web 会话和持久化仓储。
+HTTP 层不做诊断业务；service 层不做 Agent 阶段逻辑；`agent_runtime/` 不做领域判断；`agent_engine/` 不管理 Web 会话和持久化仓储。`single_agent/flow.py` 不再是默认主链路。
 
-## 固定阶段
+## V2 Runtime
 
-常规诊断阶段：
+常规请求由 V2 plan 编译为 typed nodes：
 
 ```text
 start
-  -> understand
-  -> access_authorization
-  -> select_workflow_policy
-  -> initialize_evidence_bundle
-  -> permission_check / risk_check
-  -> sql
-  -> knowledge
-  -> analysis
-  -> resolution_recommendation
-  -> workorder_decision
-  -> report
-  -> evidence_validation
-  -> final_answer
-  -> output_guardrail
-  -> audit_log
-  -> save_artifact
+  -> task_update
+  -> sql / rag / kg / analysis / report / workorder / approval
+  -> EvidenceLedger validation/projection
+  -> OutputFrame
   -> token
   -> complete
 ```
 
-其中 `permission_check`、`risk_check`、`resolution_recommendation`、`workorder_decision`、`report`、`audit_log` 由 policy / enabled node 控制；未启用时生成 skipped artifact 或直接跳过。
+节点是否出现由 `SkillRoute` 和 `ExecutionPlan` 决定。缺设备、缺报告来源、权限不足或高风险动作由 V2 clarification/blocked/error 输出表达，不隐式回落到 legacy。
+
+当前 typed nodes：
+
+- `sql`：受 SQL ACL 保护的只读运行数据查询。
+- `rag`：知识库检索，受 RAG ACL 和当前 `AuthContext` 约束。
+- `kg`：KG 未配置时显式 skipped。
+- `analysis`：基于结构化 SQL/KB artifact 生成诊断分析。
+- `report`：只消费结构化 reportable payload 或 current artifacts。
+- `workorder`：只生成建议/草稿，不派发。
+- `approval`：高风险动作和工单边界阻断。
 
 ## 权限模型
 
@@ -202,5 +196,4 @@ artifact 支撑这些续问：
 
 详细后端说明见 [fault_diagnosis/README.md](../fault_diagnosis/README.md)。
 
-详细 Agent 说明见 [fault_diagnosis/single_agent/README.md](../fault_diagnosis/single_agent/README.md)。
-
+legacy rollback 说明见 [fault_diagnosis/single_agent/README.md](../fault_diagnosis/single_agent/README.md)。

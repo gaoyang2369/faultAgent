@@ -72,8 +72,6 @@ def test_fault_code_explain_can_run_v2_stream(monkeypatch) -> None:
 
 async def _assert_fault_code_explain_can_run_v2_stream(monkeypatch) -> None:
     monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")
-    monkeypatch.setenv("AGENT_ENGINE_V2_SKILL_FAULT_CODE_EXPLAIN", "v2")
-    monkeypatch.setattr(streaming, "record_plan_compare", lambda record: None)
     app = FastAPI()
     app.state.dev_mode = False
     app.state.agent_engine_v2_tool_runtime = FakeToolRuntime()
@@ -103,8 +101,6 @@ def test_runtime_status_can_run_v2_stream_with_deterministic_sql(monkeypatch) ->
 
 async def _assert_runtime_status_can_run_v2_stream_with_deterministic_sql(monkeypatch) -> None:
     monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")
-    monkeypatch.setenv("AGENT_ENGINE_V2_SKILL_RUNTIME_STATUS", "v2")
-    monkeypatch.setattr(streaming, "record_plan_compare", lambda record: None)
     app = FastAPI()
     app.state.dev_mode = False
     app.state.agent_engine_v2_tool_runtime = FakeToolRuntime()
@@ -124,3 +120,109 @@ async def _assert_runtime_status_can_run_v2_stream_with_deterministic_sql(monkey
     assert complete["runtime"] == "agent_engine_v2"
     assert complete["sql_artifact"]["success"] is True
     assert "SELECT" in complete["sql_artifact"]["sql_used"][0]
+
+
+def test_alarm_triage_runs_in_v2_without_legacy_fallback(monkeypatch) -> None:
+    asyncio.run(_assert_alarm_triage_runs_in_v2_without_legacy_fallback(monkeypatch))
+
+
+async def _assert_alarm_triage_runs_in_v2_without_legacy_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")
+    app = FastAPI()
+    app.state.dev_mode = False
+    app.state.agent_engine_v2_tool_runtime = FakeToolRuntime()
+
+    chunks = [
+        chunk
+        async for chunk in streaming.token_stream_events(
+            app,
+            "J1 的 A07089 现在还在报警吗，怎么处理",
+            "thread.v2.alarm",
+            request_id="request.v2.alarm",
+            auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
+        )
+    ]
+
+    complete = next(event for event in _events(chunks) if event["type"] == "chat_complete")
+    assert complete["runtime"] == "agent_engine_v2"
+    assert complete["sql_artifact"]["success"] is True
+    assert complete["knowledge_artifact"]["success"] is True
+
+
+def test_root_cause_runs_in_v2_without_legacy_fallback(monkeypatch) -> None:
+    asyncio.run(_assert_root_cause_runs_in_v2_without_legacy_fallback(monkeypatch))
+
+
+async def _assert_root_cause_runs_in_v2_without_legacy_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")
+    app = FastAPI()
+    app.state.dev_mode = False
+    app.state.agent_engine_v2_tool_runtime = FakeToolRuntime()
+
+    chunks = [
+        chunk
+        async for chunk in streaming.token_stream_events(
+            app,
+            "J1 为什么出现 A07089，帮我排查根因",
+            "thread.v2.root",
+            request_id="request.v2.root",
+            auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
+        )
+    ]
+
+    complete = next(event for event in _events(chunks) if event["type"] == "chat_complete")
+    assert complete["runtime"] == "agent_engine_v2"
+    assert complete["analysis_artifact"]["success"] is True
+
+
+def test_workorder_decision_blocks_in_v2_without_dispatch_or_legacy_fallback(monkeypatch) -> None:
+    asyncio.run(_assert_workorder_decision_blocks_in_v2_without_dispatch_or_legacy_fallback(monkeypatch))
+
+
+async def _assert_workorder_decision_blocks_in_v2_without_dispatch_or_legacy_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")
+    app = FastAPI()
+    app.state.dev_mode = False
+    app.state.agent_engine_v2_tool_runtime = FakeToolRuntime()
+
+    chunks = [
+        chunk
+        async for chunk in streaming.token_stream_events(
+            app,
+            "J1 A07089 是否需要生成工单",
+            "thread.v2.workorder",
+            request_id="request.v2.workorder",
+            auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
+        )
+    ]
+
+    complete = next(event for event in _events(chunks) if event["type"] == "chat_complete")
+    assert complete["runtime"] == "agent_engine_v2"
+    assert complete["status"] in {"blocked", "completed", "failed"}
+    assert not any("dispatch" in str(event).casefold() and event["type"] == "tool_start" for event in _events(chunks))
+
+
+def test_report_generation_without_source_is_v2_failure_not_legacy_fallback(monkeypatch) -> None:
+    asyncio.run(_assert_report_generation_without_source_is_v2_failure_not_legacy_fallback(monkeypatch))
+
+
+async def _assert_report_generation_without_source_is_v2_failure_not_legacy_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")
+    app = FastAPI()
+    app.state.dev_mode = False
+    app.state.agent_engine_v2_tool_runtime = FakeToolRuntime()
+
+    chunks = [
+        chunk
+        async for chunk in streaming.token_stream_events(
+            app,
+            "基于刚才结果生成报告",
+            "thread.v2.report.missing",
+            request_id="request.v2.report.missing",
+            auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
+        )
+    ]
+
+    complete = next(event for event in _events(chunks) if event["type"] == "chat_complete")
+    assert complete["runtime"] == "agent_engine_v2"
+    assert complete["status"] in {"failed", "blocked"}

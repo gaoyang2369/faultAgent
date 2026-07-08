@@ -30,6 +30,22 @@ class ReportNode:
         chart_payload = input_value(node, "chart_payload", None)
         operation_report_payload = str(input_value(node, "operation_report_payload", "") or "")
         if not operation_report_payload:
+            if not _has_reportable_material(state):
+                artifact = ReportStepArtifact(
+                    success=False,
+                    report_title=str(input_value(node, "title", "") or "DCMA 运行诊断报告"),
+                    error="missing_reportable_artifact",
+                )
+                state.artifacts["report_artifact"] = artifact
+                return NodeExecutionOutput(
+                    status="failed",
+                    output={"success": False, "artifact": model_to_dict(artifact), "error": artifact.error},
+                    artifacts={"report_artifact": artifact},
+                    error={
+                        "code": "missing_reportable_artifact",
+                        "message": "Report generation requires a referenced artifact or current structured diagnosis payload.",
+                    },
+                )
             operation_report_payload = _build_operation_payload(state, node)
 
         auth = auth_context(state)
@@ -88,6 +104,19 @@ def _build_operation_payload(state: RuntimeState, node: dict[str, Any]) -> str:
         workorder_suggestion=state.artifacts.get("workorder_suggestion"),
     )
     return str(payload["operation_report_payload"])
+
+
+def _has_reportable_material(state: RuntimeState) -> bool:
+    sql_artifact = state.artifacts.get("sql_artifact")
+    analysis_artifact = state.artifacts.get("analysis_artifact")
+    knowledge_artifact = state.artifacts.get("knowledge_artifact")
+    if isinstance(state.artifacts.get("sql_rows"), list) and state.artifacts["sql_rows"]:
+        return True
+    return any(
+        bool(getattr(item, "success", False) if not isinstance(item, dict) else item.get("success"))
+        for item in (sql_artifact, analysis_artifact, knowledge_artifact)
+        if item is not None
+    )
 
 
 def _model(value: Any, model_type: Any, default: Any) -> Any:

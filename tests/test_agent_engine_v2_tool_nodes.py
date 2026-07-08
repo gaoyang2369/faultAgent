@@ -207,7 +207,18 @@ def test_report_node_writes_private_report_and_returns_reports_url(tmp_path, mon
     monkeypatch.setattr(report_tools, "REPORTS_DIR", str(tmp_path))
 
     result = _runtime().execute(
-        _plan([{"node_id": "report_1", "node_type": "report", "inputs": {"report_filename": "phase6_report"}}]),
+        _plan(
+            [
+                {
+                    "node_id": "report_1",
+                    "node_type": "report",
+                    "inputs": {
+                        "report_filename": "phase6_report",
+                        "operation_report_payload": '{"title":"V2 report","sections":[]}',
+                    },
+                }
+            ]
+        ),
         auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
     )
 

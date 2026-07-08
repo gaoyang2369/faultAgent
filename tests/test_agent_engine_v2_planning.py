@@ -9,8 +9,8 @@ from fault_diagnosis.agent_engine import (
     PlanValidator,
     RewriteFrameBuilder,
     SkillRouter,
-    diff_plans,
 )
+from fault_diagnosis.agent_engine.planning.plan_diff import diff_plans
 from fault_diagnosis.security.permissions import build_auth_context
 from fault_diagnosis.single_agent.planner import PlanSnapshot
 
