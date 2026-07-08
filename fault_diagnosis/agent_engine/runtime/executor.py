@@ -131,6 +131,7 @@ class WorkflowRuntimeExecutor:
             auth_context=auth_context or build_auth_context(role="guest"),
             cancel_token=cancel_token or CancelToken(),
         )
+        state.initialize_ledger()
         state.add_trace(
             "runtime_gate",
             status="checking",
@@ -419,6 +420,7 @@ class WorkflowRuntimeExecutor:
 
     def _finish_cancelled(self, state: RuntimeState) -> RuntimeResult:
         state.status = "cancelled"
+        state.finalize_ledger()
         state.add_trace("runtime_status", status="cancelled", metadata={"cancel_reason": state.cancel_token.reason})
         complete = build_complete_payload(
             state=state,
@@ -437,6 +439,7 @@ class WorkflowRuntimeExecutor:
 
 
 def _runtime_result(state: RuntimeState, *, status: str, final_content: str) -> RuntimeResult:
+    state.finalize_ledger()
     complete = build_complete_payload(state=state, status=status, final_content=final_content)  # type: ignore[arg-type]
     return RuntimeResult(
         status=status,  # type: ignore[arg-type]

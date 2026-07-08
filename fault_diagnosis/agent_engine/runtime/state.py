@@ -8,6 +8,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..contracts import EvidenceLedger, ExecutionPlan, NodeResult, NodeStatus
+from ..evidence import create_ledger, finalize_ledger
+from ..evidence.ledger import EvidenceLedgerWriter
 from ...security.contracts import AuthContext
 
 RuntimeStatus = Literal["completed", "blocked", "failed", "cancelled"]
@@ -74,41 +76,36 @@ class RuntimeState(BaseModel):
         self.node_results.append(result)
 
     def commit_evidence(self, node: dict[str, Any], evidence_items: list[dict[str, Any]]) -> list[str]:
-        refs: list[str] = []
-        for index, item in enumerate(evidence_items, start=1):
-            payload = dict(item)
-            evidence_id = str(payload.get("evidence_id") or f"ev_{node.get('node_id')}_{index}")
-            payload["evidence_id"] = evidence_id
-            payload.setdefault("node_id", node.get("node_id"))
-            payload.setdefault("node_type", node.get("node_type"))
-            self.evidence_ledger.evidence_items.append(payload)
-            refs.append(evidence_id)
-        self.evidence_ledger.quality_checks = {
-            **self.evidence_ledger.quality_checks,
-            "evidence_count": len(self.evidence_ledger.evidence_items),
-            "claim_count": len(self.evidence_ledger.claims),
-        }
-        return refs
+        return EvidenceLedgerWriter(self.evidence_ledger, auth_context=self.auth_context).commit_evidence(
+            evidence_items,
+            node=node,
+        ).refs
 
     def commit_claims(self, claims: list[dict[str, Any]]) -> list[str]:
-        refs: list[str] = []
-        for index, item in enumerate(claims, start=1):
-            payload = dict(item)
-            claim_id = str(payload.get("claim_id") or f"claim_{len(self.evidence_ledger.claims) + index}")
-            payload["claim_id"] = claim_id
-            self.evidence_ledger.claims.append(payload)
-            refs.append(claim_id)
-        self.evidence_ledger.final_claim_ids = [
-            str(item.get("claim_id"))
-            for item in self.evidence_ledger.claims
-            if item.get("claim_id") and item.get("status", "candidate") in {"candidate", "confirmed", "final"}
+        return EvidenceLedgerWriter(self.evidence_ledger, auth_context=self.auth_context).commit_claims(claims).refs
+
+    def initialize_ledger(self) -> None:
+        if self.evidence_ledger.ledger_id:
+            return
+        self.evidence_ledger = create_ledger(
+            trace_id=self.trace_id or self.request_id or self.plan.plan_id,
+            task={
+                "trace_id": self.trace_id,
+                "thread_id": self.thread_id,
+                "request_id": self.request_id,
+                "plan_id": self.plan.plan_id,
+                "required_evidence": list(self.plan.required_evidence),
+            },
+            auth_context=self.auth_context,
+        )
+
+    def finalize_ledger(self) -> None:
+        artifact_refs = [
+            {"artifact_type": key, "available": True}
+            for key, value in self.artifacts.items()
+            if value is not None
         ]
-        self.evidence_ledger.quality_checks = {
-            **self.evidence_ledger.quality_checks,
-            "evidence_count": len(self.evidence_ledger.evidence_items),
-            "claim_count": len(self.evidence_ledger.claims),
-        }
-        return refs
+        finalize_ledger(self.evidence_ledger, auth_context=self.auth_context, artifact_refs=artifact_refs)
 
     def trace_payload(self) -> dict[str, Any]:
         events = [event.model_dump(mode="json") for event in self.trace_events]
@@ -127,6 +124,7 @@ class RuntimeState(BaseModel):
             "events": events,
             "errors": list(self.errors),
             "interrupts": list(self.interrupts),
+            "evidence_quality": dict(self.evidence_ledger.quality_checks),
         }
 
 

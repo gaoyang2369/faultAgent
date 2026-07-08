@@ -7,8 +7,11 @@ from fault_diagnosis.agent_engine import (
     CancelToken,
     ContextFrame,
     EvidenceLedger,
+    EvidenceLedgerWriter,
     ExecutionPlan,
     IntentFrame,
+    LedgerCommitResult,
+    LedgerValidationResult,
     NodeResult,
     OutputFrame,
     PlanSnapshotV2,
@@ -18,6 +21,7 @@ from fault_diagnosis.agent_engine import (
     SkillRoute,
     ToolRuntime,
     WorkflowRuntimeExecutor,
+    project_ledger_to_evidence_bundle,
 )
 
 
@@ -118,4 +122,8 @@ def test_v2_runtime_public_interfaces_are_exported() -> None:
     assert token.reason == "test_stop"
     assert WorkflowRuntimeExecutor
     assert ToolRuntime
+    assert EvidenceLedgerWriter
+    assert LedgerCommitResult
+    assert LedgerValidationResult
+    assert project_ledger_to_evidence_bundle
     assert RuntimeState(plan=ExecutionPlan(plan_id="plan.test", plan_version="v2.test.validated")).status == "running"
