@@ -28,5 +28,8 @@ def test_trace_jsonl_writes_canonical_trace_and_legacy_events(tmp_path, monkeypa
     assert written["metadata"]["trace_id"] == "trace.jsonl"
     assert written["metadata"]["thread_id"] == "thread.jsonl"
     assert written["metadata"]["status"] == "completed"
+    assert written["metadata"]["event_count"] == 0
+    assert written["metadata"]["top_level_event_count"] == 0
+    assert written["metadata"]["nested_event_count"] == 0
+    assert written["runtime_events"] == [{"event_type": "node_status"}]
     assert written["legacy_runtime_events"] == [{"event_type": "node_status"}]
-

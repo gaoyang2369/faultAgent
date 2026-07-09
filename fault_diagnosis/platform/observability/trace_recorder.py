@@ -190,9 +190,11 @@ class TraceRecorder:
             node_id = node.node_id
             node_type = node.node_type
             result_item = by_node.get(node_id)
-            final_event = _final_event(event_by_node.get(node_id, []))
+            node_events = event_by_node.get(node_id, [])
+            final_event = _final_event(node_events)
             status = str(getattr(result_item, "status", "") or final_event.get("status") or "skipped")
             duration_ms = float(getattr(result_item, "duration_ms", 0.0) or final_event.get("duration_ms") or 0.0)
+            span_start, span_end, duration_ms = _node_span_timing(node_events, fallback_duration_ms=duration_ms)
             output = getattr(result_item, "output", {}) if result_item is not None else {}
             error = getattr(result_item, "error", None) if result_item is not None else final_event.get("error")
             attributes = {
@@ -217,8 +219,10 @@ class TraceRecorder:
                 kind="node",
                 status=status,
                 duration_ms=duration_ms,
+                start_time=span_start,
+                end_time=span_end,
                 attributes=attributes,
-                events=_lifecycle_events(event_by_node.get(node_id, [])),
+                events=_lifecycle_events(node_events),
                 error=error,
                 retry_count=int(getattr(result_item, "retry_count", 0) if result_item else final_event.get("retry_count") or 0),
             )
@@ -272,7 +276,7 @@ class TraceRecorder:
             events=self.events,
             errors=_sanitize(self.errors),
             evidence_refs=list(dict.fromkeys(self.evidence_refs)),
-            artifact_refs=_sanitize(self.artifact_refs),
+            artifact_refs=_sanitize(_dedupe_artifact_refs(self.artifact_refs)),
         )
         return envelope
 
@@ -280,24 +284,28 @@ class TraceRecorder:
         output = getattr(result_item, "output", {}) if result_item is not None else {}
         if node_type == "rag":
             artifact = _knowledge_artifact_from_output(output)
-            self._add_kb_search_span(node_span.span_id, artifact)
+            self._add_kb_search_span(node_span.span_id, artifact, _tool_metric(output, "kb.search"))
             self._add_fault_code_parse_spans(node_span.span_id, artifact)
         if node_type == "kg" and isinstance(output, dict) and output.get("skipped_reason"):
             node_span.attributes["reason"] = output.get("skipped_reason")
 
-    def _add_kb_search_span(self, parent_span_id: str, artifact: KnowledgeStepArtifact | None) -> None:
+    def _add_kb_search_span(self, parent_span_id: str, artifact: KnowledgeStepArtifact | None, metric: dict[str, Any]) -> None:
         if artifact is None:
             return
         selected = [_source_from_entry(entry) for entry in artifact.fault_code_entries[:5]]
         if not selected:
             selected = _sources_from_snippets(artifact.snippets)
         match_type = _best_match_type(artifact)
+        duration_ms = _float_or_zero(metric.get("duration_ms") or metric.get("latency_ms"))
         self._add_span(
             span_id=f"{parent_span_id}.tool.kb.search",
             parent_span_id=parent_span_id,
             name="tool.kb.search",
             kind="tool",
             status="completed" if artifact.success else "failed",
+            duration_ms=duration_ms,
+            start_time=str(metric.get("started_at") or "") or None,
+            end_time=str(metric.get("ended_at") or "") or None,
             attributes={
                 "query": _safe_text(artifact.query),
                 "normalized_query": " ".join(str(artifact.query or "").split()).upper(),
@@ -307,7 +315,8 @@ class TraceRecorder:
                 "hit_count": artifact.hit_count if artifact.hit_count is not None else len(artifact.snippets),
                 "match_type": match_type,
                 "selected_sources": selected,
-                "latency_ms": None,
+                "latency_ms": _float_or_none(metric.get("latency_ms") or duration_ms),
+                "phase_latencies_ms": metric.get("phase_latencies_ms") or ({"total": duration_ms} if duration_ms else {}),
             },
             error={"message": artifact.error} if artifact.error else None,
         )
@@ -356,10 +365,11 @@ class TraceRecorder:
                 "evidence_ids": evidence_ids,
                 "claim_count": len(ledger.claims),
                 "claim_types": claim_types,
+                "final_claim_ids": list(ledger.final_claim_ids),
                 "all_final_claims_have_evidence": _all_final_claims_have_evidence(ledger),
                 "unauthorized_evidence_count": quality.get("unauthorized_evidence_count", 0),
                 "stale_evidence_count": quality.get("stale_evidence_count", 0),
-                "passed": not quality.get("missing_evidence") and not quality.get("final_claims_without_evidence"),
+                "passed": bool(quality.get("passed", not quality.get("missing_evidence") and not quality.get("final_claims_without_evidence"))),
                 "warnings": quality.get("warnings", []),
             },
         )
@@ -417,13 +427,17 @@ class TraceRecorder:
             final_event = _final_event(events)
             node_type = str(final_event.get("node_type") or "")
             status = str(final_event.get("status") or "completed")
+            duration_ms = float(final_event.get("duration_ms") or 0.0)
+            span_start, span_end, duration_ms = _node_span_timing(events, fallback_duration_ms=duration_ms)
             self._add_span(
                 span_id=f"span.node.{node_id}",
                 parent_span_id=runtime_span.span_id,
                 name=f"node.{node_type or 'unknown'}",
                 kind="node",
                 status=status,
-                duration_ms=float(final_event.get("duration_ms") or 0.0),
+                duration_ms=duration_ms,
+                start_time=span_start,
+                end_time=span_end,
                 attributes={
                     "node_id": node_id,
                     "node_type": node_type,
@@ -448,10 +462,17 @@ class TraceRecorder:
         events: list[TraceEvent] | None = None,
         error: dict[str, Any] | None = None,
         retry_count: int = 0,
+        start_time: str | None = None,
+        end_time: str | None = None,
     ) -> TraceSpan:
         unique_span_id = _unique_span_id(span_id, self._span_ids)
         self._span_ids.add(unique_span_id)
         now = utc_now_iso()
+        resolved_start = start_time or now
+        resolved_end = end_time or start_time or now
+        resolved_duration = _duration_between_ms(resolved_start, resolved_end) if (start_time or end_time) else None
+        if resolved_duration is not None and (resolved_duration > 0 or duration_ms <= 0):
+            duration_ms = resolved_duration
         span = TraceSpan(
             trace_id=self.trace_id,
             span_id=unique_span_id,
@@ -459,8 +480,8 @@ class TraceRecorder:
             name=name,
             kind=kind,  # type: ignore[arg-type]
             status=status,  # type: ignore[arg-type]
-            start_time=now,
-            end_time=now,
+            start_time=resolved_start,
+            end_time=resolved_end,
             duration_ms=duration_ms,
             attributes=_sanitize(attributes or {}),
             events=events or [],
@@ -545,6 +566,74 @@ def _unique_span_id(span_id: str, existing: set[str]) -> str:
     while f"{span_id}.{index}" in existing:
         index += 1
     return f"{span_id}.{index}"
+
+
+def _node_span_timing(events: list[dict[str, Any]], *, fallback_duration_ms: float) -> tuple[str | None, str | None, float]:
+    running = _first_node_status_event(events, "running") or _first_node_status_event(events, "pending")
+    final = _first_final_node_status_event(events)
+    start_time = str((running or {}).get("timestamp") or "") or None
+    end_time = str((final or {}).get("timestamp") or "") or None
+    duration = _duration_between_ms(start_time, end_time)
+    if duration is not None and (duration > 0 or fallback_duration_ms <= 0):
+        return start_time, end_time, duration
+    event_duration = _float_or_none((final or {}).get("duration_ms"))
+    if event_duration is not None:
+        return start_time, end_time, event_duration
+    return start_time, end_time, fallback_duration_ms
+
+
+def _first_node_status_event(events: list[dict[str, Any]], status: str) -> dict[str, Any] | None:
+    return next((event for event in events if event.get("event_type") == "node_status" and event.get("status") == status), None)
+
+
+def _first_final_node_status_event(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for event in events:
+        if event.get("event_type") == "node_status" and event.get("status") in _FINAL_NODE_STATUSES:
+            return event
+    return None
+
+
+def _duration_between_ms(start_time: str | None, end_time: str | None) -> float | None:
+    start = _parse_iso_datetime(start_time)
+    end = _parse_iso_datetime(end_time)
+    if start is None or end is None:
+        return None
+    return round((end - start).total_seconds() * 1000, 1)
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _tool_metric(output: Any, tool_name: str) -> dict[str, Any]:
+    if not isinstance(output, dict):
+        return {}
+    metrics = output.get("tool_metrics")
+    if not isinstance(metrics, dict):
+        return {}
+    metric = metrics.get(tool_name)
+    return dict(metric) if isinstance(metric, dict) else {}
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_zero(value: Any) -> float:
+    return _float_or_none(value) or 0.0
 
 
 def _dump_goal(goal: Any) -> dict[str, Any]:
@@ -689,7 +778,23 @@ def _artifact_refs(result: Any) -> list[dict[str, Any]]:
         if value is not None:
             refs.append({"artifact_type": key, "available": True})
     refs.extend(list(result.evidence_ledger.artifact_refs or []))
-    return refs
+    return _dedupe_artifact_refs(refs)
+
+
+def _dedupe_artifact_refs(refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        artifact_type = str(ref.get("artifact_type") or ref.get("type") or "")
+        artifact_id = str(ref.get("artifact_id") or ref.get("id") or "")
+        key = (artifact_type, artifact_id or artifact_type or str(ref))
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(ref)
+    return output
 
 
 def _all_final_claims_have_evidence(ledger: Any) -> bool:
@@ -713,4 +818,3 @@ def _output_mode(answer_variant: str) -> str:
     if answer_variant == "report_ready":
         return "detailed"
     return "concise"
-

@@ -53,11 +53,29 @@ def test_fault_code_query_trace_contains_retrieval_parse_answer_and_guardrail() 
     assert by_name["goal.build"].attributes["task_family"] == "knowledge_lookup"
     assert any(goal["goal_type"] == "explain_fault_code" for goal in by_name["goal.build"].attributes["goals"])
     assert by_name["tool.kb.search"].attributes["match_type"] == "exact_match"
+    assert by_name["tool.kb.search"].duration_ms > 0
+    assert by_name["tool.kb.search"].attributes["latency_ms"] > 0
     assert by_name["tool.kb.search"].attributes["selected_sources"][0]["file"] == "S120_故障手册.pdf"
     assert by_name["tool.kb.search"].attributes["selected_sources"][0]["page"] == "232"
     assert by_name["fault_code.entry_parse"].attributes["code"] == "A07089"
     assert by_name["fault_code.entry_parse"].attributes["has_cause"] is True
     assert by_name["fault_code.entry_parse"].attributes["has_remedy"] is True
     assert by_name["answer.render"].attributes["answer_template"] == "fault_code_concise_v1"
+    assert by_name["answer.render"].attributes["citation_count"] >= 1
     assert by_name["guardrail.check"].attributes["blocked"] is False
+    assert by_name["evidence.ledger"].attributes["evidence_count"] >= 1
+    assert by_name["evidence.ledger"].attributes["claim_count"] >= 1
+    assert by_name["evidence.ledger"].attributes["final_claim_ids"]
 
+    claim = result.evidence_ledger.claims[0]
+    evidence_ids = {item["evidence_id"] for item in result.evidence_ledger.evidence_items}
+    assert claim["claim_type"] == "fault_code_explanation"
+    assert claim["supporting_evidence_ids"]
+    assert set(claim["supporting_evidence_ids"]).issubset(evidence_ids)
+
+    rag_span = by_name["node.rag"]
+    running = next(event for event in rag_span.events if event.name == "node.running")
+    completed = next(event for event in rag_span.events if event.name == "node.completed")
+    assert rag_span.start_time == running.timestamp
+    assert rag_span.end_time == completed.timestamp
+    assert rag_span.duration_ms > 0

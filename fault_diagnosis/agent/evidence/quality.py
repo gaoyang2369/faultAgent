@@ -45,9 +45,13 @@ def validate_ledger(ledger: EvidenceLedger) -> LedgerValidationResult:
     stale_ids = [_evidence_id(item) for item in ledger.evidence_items if _is_stale(item)]
     stale_disclosed = not stale_ids or _has_disclosure(ledger, "stale_evidence_disclosure") or _has_current_refresh(ledger)
     missing_disclosed = not missing_evidence or _has_disclosure(ledger, "missing_evidence_disclosure")
+    final_claim_ids = eligible_final_claim_ids(ledger)
+    no_final_claims = bool(ledger.evidence_items) and not final_claim_ids
     checks = {
         "evidence_count": len(ledger.evidence_items),
         "claim_count": len(ledger.claims),
+        "has_final_claims": bool(final_claim_ids),
+        "no_final_claims": no_final_claims,
         "all_final_claims_have_evidence": not final_claims_without_evidence,
         "final_claims_without_evidence": [item for item in final_claims_without_evidence if item],
         "all_claims_have_evidence": bool(ledger.claims) and not all_claims_without_evidence,
@@ -66,6 +70,7 @@ def validate_ledger(ledger: EvidenceLedger) -> LedgerValidationResult:
     warnings = [
         key
         for key, failed in (
+            ("no_final_claims", no_final_claims),
             ("final_claim_without_evidence", bool(final_claims_without_evidence)),
             ("dangling_evidence_refs", bool(dangling_refs)),
             ("missing_evidence_not_disclosed", not missing_disclosed),

@@ -26,7 +26,12 @@ from fault_diagnosis.platform.settings import (
     APP_ENV,
 )
 from .payloads import sanitize_trace_value
-from .trace_exporters import export_langfuse_trace_envelope, write_console_trace_envelope, write_local_trace_envelope
+from .trace_exporters import (
+    export_langfuse_trace_envelope,
+    write_console_trace_envelope,
+    write_local_trace_envelope,
+    write_trace_side_artifacts,
+)
 from .trace_recorder import canonical_trace_from_payload
 from .trace_schema import TraceEnvelope
 
@@ -734,12 +739,24 @@ def export_trace_snapshot(
         output=output,
         error=error,
     )
+    runtime_events = legacy_runtime_events if legacy_runtime_events is not None else _legacy_events(trace_payload)
     local_path = write_local_trace_envelope(
         envelope,
         metadata=metadata,
-        legacy_runtime_events=legacy_runtime_events if legacy_runtime_events is not None else _legacy_events(trace_payload),
+        legacy_runtime_events=runtime_events,
     )
-    write_console_trace_envelope(envelope)
+    side_paths = write_trace_side_artifacts(
+        envelope,
+        metadata=metadata,
+        runtime_events=runtime_events,
+        trace_path=local_path,
+    )
+    write_console_trace_envelope(
+        envelope,
+        trace_path=local_path,
+        pretty_json_path=side_paths.get("pretty_json_path"),
+        markdown_path=side_paths.get("markdown_path"),
+    )
     if trace_context is not None:
         export_langfuse_trace_envelope(
             envelope,

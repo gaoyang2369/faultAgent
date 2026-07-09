@@ -301,9 +301,11 @@ def _dedupe(values: list[str]) -> list[str]:
 
 def _dedupe_dicts(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for item in values:
-        key = str(item)
+        artifact_type = str(item.get("artifact_type") or item.get("type") or "")
+        artifact_id = str(item.get("artifact_id") or item.get("id") or "")
+        key = (artifact_type, artifact_id or artifact_type or str(item))
         if key in seen:
             continue
         seen.add(key)

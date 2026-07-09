@@ -76,6 +76,23 @@ def test_dangling_evidence_refs_are_detected_and_not_promoted() -> None:
     assert validation.checks["dangling_evidence_refs"] == ["ev_missing"]
 
 
+def test_evidence_without_final_claim_warns_no_final_claims() -> None:
+    ledger = create_ledger(trace_id="trace.no.final.claim")
+    writer = EvidenceLedgerWriter(ledger)
+    writer.commit_evidence(
+        map_manual_evidence(evidence_id="ev_manual_1", summary="已有知识库证据。", content="A07089 说明"),
+        node={"node_id": "rag_1", "node_type": "rag"},
+    )
+    validation = writer.finalize()
+
+    assert validation.checks["evidence_count"] == 1
+    assert validation.checks["claim_count"] == 0
+    assert validation.checks["has_final_claims"] is False
+    assert validation.checks["no_final_claims"] is True
+    assert "no_final_claims" in validation.warnings
+    assert validation.passed is False
+
+
 def test_missing_evidence_is_disclosed_and_projected_to_legacy_bundle() -> None:
     ledger = create_ledger(trace_id="trace.missing")
     writer = EvidenceLedgerWriter(ledger)
