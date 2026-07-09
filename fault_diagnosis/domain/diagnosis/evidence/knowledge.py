@@ -38,6 +38,32 @@ def build_knowledge_evidence_items(
         ]
 
     items: list[EvidenceItem] = []
+    if knowledge_artifact.fault_code_entries:
+        for index, entry in enumerate(knowledge_artifact.fault_code_entries[:3], start=1):
+            item_id = f"ev_kb_{index:03d}"
+            summary = f"{entry.code}：{entry.meaning or entry.title or '手册未明确给出'}"
+            items.append(
+                EvidenceItem(
+                    evidence_id=item_id,
+                    evidence_type="fault_code_reference",
+                    source_type="knowledge_base",
+                    source_name=entry.source_file or "knowledge_base",
+                    asset_id=request.equipment_hint if request else None,
+                    content={"query": knowledge_artifact.query, "fault_code_entry": entry.model_dump(mode="json")},
+                    summary=summary,
+                    quality=EvidenceQuality(reliability="high", freshness="unknown", relevance="high", completeness="partial"),
+                    metadata={
+                        "query": knowledge_artifact.query,
+                        "source_file": entry.source_file,
+                        "page": entry.page,
+                        "match_type": entry.match_type,
+                    },
+                    title="故障码手册条目",
+                    importance="high",
+                )
+            )
+        return items
+
     blocks = [block.strip() for block in raw_output.split("\n\n") if block.strip()][:3]
     for index, block in enumerate(blocks, start=1):
         metadata = _knowledge_metadata(block)

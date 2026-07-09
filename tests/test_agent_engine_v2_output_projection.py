@@ -18,6 +18,7 @@ from fault_diagnosis.domain.diagnosis.contracts import (
     DiagnosisRequest,
     EvidenceBundle,
     EvidenceItem,
+    FaultCodeEntry,
     KnowledgeStepArtifact,
     ReportStepArtifact,
     SqlStepArtifact,
@@ -72,6 +73,26 @@ def _plan(nodes: list[dict] | None = None) -> ExecutionPlan:
     )
 
 
+def _fault_code_entry(*, match_type: str = "exact_match", cause: str = "尝试激活功能块。转换单位后不允许此操作。", remedy: str = "将单位恢复到出厂设置。") -> FaultCodeEntry:
+    return FaultCodeEntry(
+        code="A07089",
+        title="单位转换： 转换单位后不能激活功能块",
+        meaning="转换单位后不能激活功能块",
+        cause=cause,
+        remedy=remedy,
+        category="参数设置 / 配置 / 调试过程出错 (18)",
+        drive_object="所有目标",
+        component="无",
+        propagation="LOCAL",
+        reaction="无",
+        acknowledgement="无",
+        references=["p0100 ( 标准 IEC/NEMA)", "p0349 ( 电机等效电路图数据单位制 )", "p0505 ( 单位制选择 )"],
+        source_file="S120_故障手册.pdf",
+        page="232",
+        match_type=match_type,
+    )
+
+
 def test_build_output_frame_variants_are_stable() -> None:
     sql = SqlStepArtifact(success=True, summary="SQL 查询完成，解析出 1 条运行记录。", data_state="ok")
     knowledge = KnowledgeStepArtifact(
@@ -114,6 +135,72 @@ def test_build_output_frame_variants_are_stable() -> None:
     assert "fake failure" in error_frame.final_answer
     assert clarification_frame.answer_variant == "clarification"
     assert "补充" in clarification_frame.final_answer
+
+
+def test_fault_code_answer_uses_concise_structured_template_by_default() -> None:
+    artifact = KnowledgeStepArtifact(
+        success=True,
+        query="A07089 是什么意思",
+        fault_codes=["A07089"],
+        fault_code_entries=[_fault_code_entry()],
+    )
+
+    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact})
+
+    assert frame.answer_variant == "knowledge_answer"
+    assert "一句话解释：A07089：转换单位后不能激活功能块" in frame.final_answer
+    assert "可能原因：尝试激活功能块。转换单位后不允许此操作。" in frame.final_answer
+    assert "建议处理：将单位恢复到出厂设置。" in frame.final_answer
+    assert "p0100" in frame.final_answer
+    assert "来源：S120_故障手册.pdf，第 232 页" in frame.final_answer
+    assert "- 传播：LOCAL" not in frame.final_answer
+    assert "- 反应：无" not in frame.final_answer
+
+
+def test_fault_code_answer_expands_manual_fields_when_requested() -> None:
+    artifact = KnowledgeStepArtifact(
+        success=True,
+        query="A07089 详细点，给出手册字段",
+        fault_codes=["A07089"],
+        fault_code_entries=[_fault_code_entry()],
+    )
+
+    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact})
+
+    assert "详细手册信息：" in frame.final_answer
+    assert "- 信息类别：参数设置 / 配置 / 调试过程出错 (18)" in frame.final_answer
+    assert "- 传播：LOCAL" in frame.final_answer
+    assert "- 反应：无" in frame.final_answer
+    assert "- 应答：无" in frame.final_answer
+
+
+def test_fault_code_answer_does_not_invent_missing_cause_or_remedy() -> None:
+    artifact = KnowledgeStepArtifact(
+        success=True,
+        query="A07089 是什么意思",
+        fault_codes=["A07089"],
+        fault_code_entries=[_fault_code_entry(cause="", remedy="")],
+    )
+
+    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact})
+
+    assert "可能原因：手册未明确给出" in frame.final_answer
+    assert "建议处理：手册未明确给出" in frame.final_answer
+
+
+def test_fault_code_answer_warns_when_no_exact_match() -> None:
+    artifact = KnowledgeStepArtifact(
+        success=True,
+        query="A07088 是什么意思",
+        fault_codes=["A07089"],
+        fault_code_entries=[_fault_code_entry(match_type="candidate_match")],
+    )
+
+    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact})
+
+    assert "未找到精确匹配：A07088。" in frame.final_answer
+    assert "候选：" in frame.final_answer
+    assert "A07089：单位转换： 转换单位后不能激活功能块" in frame.final_answer
 
 
 def test_runtime_complete_payload_contains_frontend_compat_fields() -> None:

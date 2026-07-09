@@ -7,10 +7,12 @@ from typing import Any
 from fault_diagnosis.domain.diagnosis.contracts import (
     AnalysisStepArtifact,
     EvidenceBundle,
+    FaultCodeEntry,
     KnowledgeStepArtifact,
     ReportStepArtifact,
     SqlStepArtifact,
 )
+from fault_diagnosis.domain.diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from ..contracts import NodeResult, OutputFrame
 
 
@@ -184,6 +186,10 @@ def _render_knowledge_answer(
     knowledge_artifact: KnowledgeStepArtifact | None,
     evidence_bundle: EvidenceBundle | None,
 ) -> str:
+    entries = list(knowledge_artifact.fault_code_entries if knowledge_artifact else [])
+    if entries:
+        return _render_fault_code_entries(knowledge_artifact, entries)
+
     snippets = _dedupe(list(knowledge_artifact.snippets if knowledge_artifact else []))
     if not snippets and evidence_bundle:
         snippets = _dedupe(
@@ -202,6 +208,89 @@ def _render_knowledge_answer(
     if parts:
         return "\n".join([*parts, *stale_lines]).strip()
     return "未检索到当前权限范围内可用的故障码说明。"
+
+
+def _render_fault_code_entries(knowledge_artifact: KnowledgeStepArtifact | None, entries: list[FaultCodeEntry]) -> str:
+    requested_codes = extract_fault_codes_from_text(knowledge_artifact.query if knowledge_artifact else "")
+    exact_entries = [
+        entry
+        for entry in entries
+        if entry.match_type == "exact_match" and (not requested_codes or entry.code.upper() in requested_codes)
+    ]
+    if not exact_entries:
+        requested = "、".join(requested_codes) if requested_codes else "请求中的故障码"
+        lines = [f"未找到精确匹配：{requested}。"]
+        lines.extend(_numbered("候选", [_candidate_line(entry) for entry in entries]))
+        return "\n".join(lines).strip()
+
+    entry = exact_entries[0]
+    detailed = _wants_fault_code_detail(knowledge_artifact.query if knowledge_artifact else "")
+    return _render_fault_code_entry_detail(entry) if detailed else _render_fault_code_entry_concise(entry)
+
+
+def _render_fault_code_entry_concise(entry: FaultCodeEntry) -> str:
+    parts = [
+        _line("一句话解释", f"{entry.code}：{_entry_meaning(entry)}"),
+        _line("可能原因", _manual_or_missing(entry.cause)),
+        _line("建议处理", _manual_or_missing(entry.remedy)),
+        _line("相关参数", _references_text(entry.references)),
+        _line("来源", _source_text(entry)),
+        "详细信息：如需查看信息类别、驱动对象、传播、反应、应答等手册字段，请继续追问“详细点”或“手册字段”。",
+    ]
+    return "\n".join(item for item in parts if item).strip()
+
+
+def _render_fault_code_entry_detail(entry: FaultCodeEntry) -> str:
+    parts = [
+        _render_fault_code_entry_concise(entry),
+        "",
+        "详细手册信息：",
+        f"- 故障码：{entry.code}",
+        f"- 标题：{_manual_or_missing(entry.title)}",
+        f"- 含义：{_manual_or_missing(entry.meaning)}",
+        f"- 信息类别：{_manual_or_missing(entry.category)}",
+        f"- 驱动对象：{_manual_or_missing(entry.drive_object)}",
+        f"- 组件：{_manual_or_missing(entry.component)}",
+        f"- 传播：{_manual_or_missing(entry.propagation)}",
+        f"- 反应：{_manual_or_missing(entry.reaction)}",
+        f"- 应答：{_manual_or_missing(entry.acknowledgement)}",
+        f"- 原因：{_manual_or_missing(entry.cause)}",
+        f"- 处理：{_manual_or_missing(entry.remedy)}",
+        f"- 参见：{_references_text(entry.references)}",
+        f"- 匹配方式：{entry.match_type}",
+        f"- 来源文件：{_manual_or_missing(entry.source_file)}",
+        f"- 页码：{_manual_or_missing(entry.page)}",
+    ]
+    return "\n".join(parts).strip()
+
+
+def _entry_meaning(entry: FaultCodeEntry) -> str:
+    return entry.meaning or entry.title or "手册未明确给出"
+
+
+def _manual_or_missing(value: Any) -> str:
+    text = str(value or "").strip()
+    return text or "手册未明确给出"
+
+
+def _references_text(references: list[str]) -> str:
+    return "、".join(_dedupe(references)) if references else "手册未明确给出"
+
+
+def _source_text(entry: FaultCodeEntry) -> str:
+    source = entry.source_file or "知识库"
+    page = f"，第 {entry.page} 页" if entry.page else ""
+    return f"{source}{page}"
+
+
+def _candidate_line(entry: FaultCodeEntry) -> str:
+    source = _source_text(entry)
+    title = entry.title or entry.meaning or "手册未明确给出"
+    return f"{entry.code}：{title}（来源：{source}，匹配方式：{entry.match_type}）"
+
+
+def _wants_fault_code_detail(query: str) -> bool:
+    return any(keyword in str(query or "") for keyword in ("详细", "原文", "手册字段", "完整字段", "展开"))
 
 
 def _clean_knowledge_snippet(value: str) -> str:

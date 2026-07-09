@@ -162,6 +162,26 @@ class SqlStepArtifact(BaseModel):
     data_state: str = "ok"
 
 
+class FaultCodeEntry(BaseModel):
+    """Structured manual entry extracted from knowledge chunks."""
+
+    code: str = ""
+    title: str = ""
+    meaning: str = ""
+    cause: str = ""
+    remedy: str = ""
+    category: str = ""
+    drive_object: str = ""
+    component: str = ""
+    propagation: str = ""
+    reaction: str = ""
+    acknowledgement: str = ""
+    references: list[str] = Field(default_factory=list)
+    source_file: str = ""
+    page: str = ""
+    match_type: str = "candidate_match"
+
+
 class KnowledgeStepArtifact(BaseModel):
     """知识检索阶段产物。"""
 
@@ -172,6 +192,7 @@ class KnowledgeStepArtifact(BaseModel):
     error: str | None = None
     hit_count: int | None = None
     fault_codes: list[str] = Field(default_factory=list)
+    fault_code_entries: list[FaultCodeEntry] = Field(default_factory=list)
 
 
 class AnalysisStepArtifact(BaseModel):

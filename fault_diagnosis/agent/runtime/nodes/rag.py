@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fault_diagnosis.domain.diagnosis.contracts import KnowledgeStepArtifact
-from fault_diagnosis.domain.diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
+from fault_diagnosis.domain.diagnosis.steps.knowledge_lookup import extract_fault_code_entries, extract_fault_codes_from_text
 from fault_diagnosis.domain.security.runtime_context import reset_current_auth_context, set_current_auth_context
 from fault_diagnosis.domain.diagnosis.evidence.knowledge import build_knowledge_evidence_items
 from ..executor import NodeExecutionOutput
@@ -38,6 +38,9 @@ class RagNode:
         text = str(raw_output or "").strip()
         success = bool(text) and "未检索到" not in text and "知识库不可用" not in text
         snippets = [block.strip() for block in text.split("\n\n") if block.strip()][:3]
+        requested_codes = extract_fault_codes_from_text(query)
+        entries = extract_fault_code_entries(text, requested_codes=requested_codes)
+        fault_codes = [entry.code for entry in entries] or extract_fault_codes_from_text(text)
         artifact = KnowledgeStepArtifact(
             success=success,
             query=query,
@@ -45,7 +48,8 @@ class RagNode:
             raw_output=text,
             error=None if success else text or "知识库未返回内容",
             hit_count=len(snippets),
-            fault_codes=extract_fault_codes_from_text(text),
+            fault_codes=fault_codes,
+            fault_code_entries=entries,
         )
         request = build_request(state, node, goal="知识库检索")
         state.artifacts["knowledge_artifact"] = artifact
