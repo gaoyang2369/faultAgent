@@ -23,7 +23,7 @@ from fault_diagnosis.agent.output import project_start, project_task_update, pro
 from fault_diagnosis.agent.runtime import CancelToken
 from fault_diagnosis.domain.security.contracts import AuthContext
 from fault_diagnosis.domain.security.permissions import build_auth_context
-from fault_diagnosis.platform.observability import TraceRunContext, export_trace_snapshot
+from fault_diagnosis.platform.observability import TraceRecorder, TraceRunContext, export_trace_snapshot
 
 _log = get_logger("streaming")
 
@@ -92,6 +92,15 @@ async def token_stream_events(
     trace_id = _build_trace_id(request_id)
     stream_id = (stream_id or "").strip()
     set_namespace({"__builtins__": __builtins__})
+    recorder = TraceRecorder(
+        trace_id=trace_id,
+        request_id=request_id,
+        thread_id=thread_id,
+        stream_id=stream_id,
+        endpoint="/chat/stream",
+        user_message=message,
+        metadata={"source": "chat_stream"},
+    )
 
     try:
         if getattr(app.state, "dev_mode", False):
@@ -121,10 +130,12 @@ async def token_stream_events(
             conversation_context=conversation_context,
             metadata={"stream_id": stream_id, "source": "chat_stream"},
         )
+        recorder.add_plan_snapshot(v2_snapshot)
         v2_plan = prepare_v2_execution_plan(snapshot=v2_snapshot, thread_id=thread_id, auth_context=effective_auth)
         async for chunk in _stream_v2_runtime(
             app=app,
             plan=v2_plan,
+            recorder=recorder,
             user_message=message,
             thread_id=thread_id,
             request_id=request_id,
@@ -137,6 +148,18 @@ async def token_stream_events(
             yield chunk
         return
     except asyncio.CancelledError:
+        recorder.add_error(error="stream_cancelled", status="cancelled")
+        _export_canonical_trace(
+            recorder.finish(status="cancelled"),
+            trace_id=trace_id,
+            thread_id=thread_id,
+            request_id=request_id,
+            stream_id=stream_id,
+            user_identity=user_identity,
+            user_message=message,
+            legacy_runtime_events=[],
+            error="stream_cancelled",
+        )
         _log.warning(
             "流式请求被取消",
             thread_id=summarize_identifier_for_log(thread_id, keep=10),
@@ -144,6 +167,18 @@ async def token_stream_events(
         )
         return
     except Exception as exc:
+        recorder.add_error(error=exc, status="failed")
+        _export_canonical_trace(
+            recorder.finish(status="failed"),
+            trace_id=trace_id,
+            thread_id=thread_id,
+            request_id=request_id,
+            stream_id=stream_id,
+            user_identity=user_identity,
+            user_message=message,
+            legacy_runtime_events=[],
+            error=str(exc),
+        )
         error_id = request_id or new_request_id()
         error_category, error_message = classify_stream_error(exc)
         _log.exception(
@@ -180,6 +215,7 @@ async def _stream_v2_runtime(
     *,
     app: FastAPI,
     plan,
+    recorder: TraceRecorder,
     user_message: str,
     thread_id: str,
     request_id: str,
@@ -223,14 +259,18 @@ async def _stream_v2_runtime(
         cancel_token=token,
         auth_context=auth_context,
     )
-    _export_v2_runtime_trace(
-        result,
+    recorder.add_runtime_result(plan=plan, result=result)
+    canonical_trace = recorder.finish(status=result.status)
+    _export_canonical_trace(
+        canonical_trace,
         trace_id=trace_id,
         thread_id=thread_id,
         request_id=request_id,
         stream_id=stream_id,
         user_identity=auth_context.display_name or auth_context.user_id,
         user_message=user_message,
+        legacy_runtime_events=result.trace.get("events", []) if isinstance(result.trace, dict) else [],
+        error=_trace_error(result.trace),
     )
     state_for_progress = _state_from_result(
         plan=plan,
@@ -250,6 +290,7 @@ async def _stream_v2_runtime(
     if result.output_frame.final_answer and not result.complete_payload.get("cancelled"):
         yield encode_sse_event("token", project_token(result.output_frame), trace_id=trace_id)
     complete = dict(result.complete_payload)
+    _attach_canonical_trace(complete, canonical_trace.model_dump(mode="json"))
     if complete_payload_enricher is not None:
         try:
             complete = complete_payload_enricher(complete)
@@ -259,8 +300,8 @@ async def _stream_v2_runtime(
     yield encode_sse_event("complete", complete, trace_id=trace_id)
 
 
-def _export_v2_runtime_trace(
-    result,
+def _export_canonical_trace(
+    canonical_trace,
     *,
     trace_id: str,
     thread_id: str,
@@ -268,17 +309,21 @@ def _export_v2_runtime_trace(
     stream_id: str,
     user_identity: str,
     user_message: str,
+    legacy_runtime_events: list[dict[str, Any]] | None = None,
+    error: str | None = None,
 ) -> None:
     try:
+        canonical_payload = canonical_trace.model_dump(mode="json")
         export_trace_snapshot(
-            result.trace,
+            canonical_payload,
             metadata={
                 "request_id": request_id,
                 "thread_id": thread_id,
                 "trace_id": trace_id,
                 "stream_id": stream_id,
-                "status": result.status,
-                "event_count": len(result.trace.get("events", [])) if isinstance(result.trace, dict) else 0,
+                "status": canonical_trace.status,
+                "span_count": len(canonical_trace.spans),
+                "event_count": len(canonical_trace.events),
             },
             trace_context=TraceRunContext(
                 trace_id=trace_id,
@@ -288,11 +333,23 @@ def _export_v2_runtime_trace(
                 user_message=user_message,
                 stream_id=stream_id,
             ),
-            output={"status": result.status, "final_answer": result.output_frame.final_answer},
-            error=_trace_error(result.trace),
+            output={"status": canonical_trace.status},
+            error=error,
+            legacy_runtime_events=legacy_runtime_events or [],
         )
     except Exception as exc:  # noqa: BLE001 - trace export must not break streaming.
         _log.warning("V2 runtime trace export failed", trace_id=trace_id, thread_id=thread_id, error=str(exc))
+
+
+def _attach_canonical_trace(complete: dict[str, Any], canonical_trace: dict[str, Any]) -> None:
+    complete["canonical_trace"] = canonical_trace
+    artifact = complete.get("artifact")
+    if isinstance(artifact, dict):
+        payload = artifact.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+            artifact["payload"] = payload
+        payload["canonical_trace"] = canonical_trace
 
 
 def _trace_error(trace_payload: dict[str, Any]) -> str | None:

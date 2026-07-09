@@ -90,6 +90,9 @@ async def _assert_default_stream_exports_v2_trace(monkeypatch) -> None:
 
     complete = next(event for event in _events(chunks) if event["type"] == "chat_complete")
     assert captured["trace_payload"]["trace_id"] == complete["trace_id"]
+    assert complete["canonical_trace"]["schema_version"] == "agent_trace.v1"
+    assert complete["canonical_trace"]["trace_id"] == complete["trace_id"]
+    assert complete["trace"]["trace_id"] == complete["trace_id"]
     assert captured["kwargs"]["metadata"]["thread_id"] == "thread.v2.trace"
     assert captured["kwargs"]["metadata"]["stream_id"] == "stream.v2.trace"
     assert captured["kwargs"]["trace_context"].user_message == "A07089 是什么意思"

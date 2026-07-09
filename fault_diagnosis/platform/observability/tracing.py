@@ -26,6 +26,9 @@ from fault_diagnosis.platform.settings import (
     APP_ENV,
 )
 from .payloads import sanitize_trace_value
+from .trace_exporters import export_langfuse_trace_envelope, write_console_trace_envelope, write_local_trace_envelope
+from .trace_recorder import canonical_trace_from_payload
+from .trace_schema import TraceEnvelope
 
 _log = get_logger("observability.trace")
 _TRACE_EXPORTER_LOCK = RLock()
@@ -705,84 +708,53 @@ def shutdown_trace_exporter() -> None:
         _log.warning("Trace exporter shutdown failed", error=str(exc))
 
 
-def write_local_trace(trace_payload: dict[str, Any], *, metadata: dict[str, Any] | None = None) -> str | None:
+def write_local_trace(trace_payload: dict[str, Any] | TraceEnvelope, *, metadata: dict[str, Any] | None = None) -> str | None:
     """Persist one completed trace snapshot locally as JSONL when enabled."""
 
-    if not AGENT_TRACE_LOCAL_LOG:
-        return None
-    envelope = {
-        "written_at": datetime.now(timezone.utc).isoformat(),
-        "metadata": sanitize_trace_value(
-            metadata or {},
-            capture_content=True,
-            preview_chars=AGENT_TRACE_PREVIEW_CHARS,
-        ),
-        "trace": sanitize_trace_value(
-            trace_payload,
-            capture_content=AGENT_TRACE_CAPTURE_CONTENT,
-            preview_chars=AGENT_TRACE_PREVIEW_CHARS,
-        ),
-    }
-    try:
-        os.makedirs(os.path.dirname(AGENT_TRACE_LOCAL_LOG_PATH), exist_ok=True)
-        with open(AGENT_TRACE_LOCAL_LOG_PATH, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(envelope, ensure_ascii=False, default=str))
-            handle.write("\n")
-        return AGENT_TRACE_LOCAL_LOG_PATH
-    except Exception as exc:  # pragma: no cover - local diagnostics are best effort
-        _log.warning("本地 trace 写入失败", path=AGENT_TRACE_LOCAL_LOG_PATH, error=str(exc))
-        return None
+    envelope = _ensure_canonical_envelope(trace_payload, metadata=metadata)
+    legacy_events = _legacy_events(trace_payload)
+    return write_local_trace_envelope(envelope, metadata=metadata, legacy_runtime_events=legacy_events)
 
 
 def export_trace_snapshot(
-    trace_payload: dict[str, Any],
+    trace_payload: dict[str, Any] | TraceEnvelope,
     *,
     metadata: dict[str, Any] | None = None,
     trace_context: TraceRunContext | None = None,
     output: Any | None = None,
     error: str | None = None,
+    legacy_runtime_events: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """Export one completed runtime trace to configured local, console, and backend sinks."""
 
-    if not isinstance(trace_payload, dict):
-        trace_payload = {}
-    local_path = write_local_trace(trace_payload, metadata=metadata)
-    write_console_trace(trace_payload, metadata=metadata)
+    envelope = _ensure_canonical_envelope(
+        trace_payload,
+        metadata=metadata,
+        trace_context=trace_context,
+        output=output,
+        error=error,
+    )
+    local_path = write_local_trace_envelope(
+        envelope,
+        metadata=metadata,
+        legacy_runtime_events=legacy_runtime_events if legacy_runtime_events is not None else _legacy_events(trace_payload),
+    )
+    write_console_trace_envelope(envelope)
     if trace_context is not None:
-        _export_backend_trace(trace_payload, trace_context=trace_context, output=output, error=error)
+        export_langfuse_trace_envelope(
+            envelope,
+            trace_context=trace_context,
+            start_run=get_trace_exporter().start_run,
+            output=output,
+            error=error,
+        )
     return local_path
 
 
-def write_console_trace(trace_payload: dict[str, Any], *, metadata: dict[str, Any] | None = None) -> None:
+def write_console_trace(trace_payload: dict[str, Any] | TraceEnvelope, *, metadata: dict[str, Any] | None = None) -> None:
     """Print a compact step-by-step runtime trace to the backend console when enabled."""
 
-    if not AGENT_TRACE_CONSOLE:
-        return
-    if not isinstance(trace_payload, dict):
-        trace_payload = {}
-    metadata = metadata or {}
-    events = trace_payload.get("events")
-    if not isinstance(events, list):
-        events = []
-    trace_id = str(trace_payload.get("trace_id") or metadata.get("trace_id") or "")
-    thread_id = str(trace_payload.get("thread_id") or metadata.get("thread_id") or "")
-    stream_id = str(metadata.get("stream_id") or "")
-    status = str(trace_payload.get("status") or metadata.get("status") or "")
-    node_order = trace_payload.get("node_order") if isinstance(trace_payload.get("node_order"), list) else []
-
-    _log.info(
-        "Agent trace completed",
-        trace_id=trace_id,
-        thread_id=thread_id,
-        stream_id=stream_id,
-        status=status,
-        event_count=len(events),
-        summary=_preview(f"node_order={node_order}", AGENT_TRACE_CONSOLE_PREVIEW_CHARS),
-    )
-    for event in events:
-        if not isinstance(event, dict):
-            continue
-        _write_console_trace_event(event, trace_id=trace_id, thread_id=thread_id, stream_id=stream_id)
+    write_console_trace_envelope(_ensure_canonical_envelope(trace_payload, metadata=metadata))
 
 
 def _write_console_trace_event(event: dict[str, Any], *, trace_id: str, thread_id: str, stream_id: str) -> None:
@@ -867,3 +839,35 @@ def _observation_name(event: dict[str, Any]) -> str:
 def _preview(value: Any, limit: int) -> str:
     text = str(value or "")
     return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def _ensure_canonical_envelope(
+    trace_payload: dict[str, Any] | TraceEnvelope,
+    *,
+    metadata: dict[str, Any] | None = None,
+    trace_context: TraceRunContext | None = None,
+    output: Any | None = None,
+    error: str | None = None,
+) -> TraceEnvelope:
+    if isinstance(trace_payload, TraceEnvelope):
+        return trace_payload
+    if isinstance(trace_payload, dict) and trace_payload.get("schema_version") == "agent_trace.v1":
+        return TraceEnvelope.model_validate(trace_payload)
+    payload = trace_payload if isinstance(trace_payload, dict) else {}
+    return canonical_trace_from_payload(
+        trace_payload=payload,
+        trace_context=trace_context,
+        metadata=metadata,
+        output=output,
+        error=error,
+    )
+
+
+def _legacy_events(trace_payload: dict[str, Any] | TraceEnvelope) -> list[dict[str, Any]]:
+    if isinstance(trace_payload, TraceEnvelope):
+        return []
+    if isinstance(trace_payload, dict):
+        events = trace_payload.get("events")
+        if isinstance(events, list):
+            return [event for event in events if isinstance(event, dict)]
+    return []

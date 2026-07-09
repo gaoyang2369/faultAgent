@@ -13,12 +13,18 @@ from .tracing import (
     write_local_trace,
     write_console_trace,
 )
+from .trace_recorder import TraceRecorder
+from .trace_schema import TraceEnvelope, TraceEvent, TraceSpan
 
 __all__ = [
+    "TraceEnvelope",
+    "TraceEvent",
     "NoopTraceRun",
+    "TraceRecorder",
     "TraceObservationHandle",
     "TraceRunContext",
     "TraceRunHandle",
+    "TraceSpan",
     "build_trace_exporter",
     "export_trace_snapshot",
     "get_trace_exporter",
