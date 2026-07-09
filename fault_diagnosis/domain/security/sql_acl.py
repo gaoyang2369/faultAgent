@@ -6,7 +6,12 @@ import re
 import os
 from typing import Any
 
-from .assets import asset_is_in_scope, data_source_terms_for_table
+from .assets import (
+    asset_is_in_scope,
+    assets_have_data_source_for_table,
+    assets_include_table_scoped_source,
+    data_source_terms_for_table,
+)
 from .sql_safety import (
     ALLOWED_SQL_TABLES,
     extract_sql_table_names,
@@ -24,6 +29,7 @@ _UNSUPPORTED_SQL_RE = re.compile(
     r"(?:--|/\*|\*/|#)|\b(union|intersect|except|for\s+update|into\s+outfile)\b",
     re.IGNORECASE,
 )
+_SQL_TIME_ANCHOR_MODES = {"now", "latest_row_if_stale"}
 
 
 def _deny(reason: str, code: str) -> SqlAclResult:
@@ -57,6 +63,19 @@ def _enforce_limit(sql_query: str, max_rows: int) -> tuple[str, bool]:
     return rewritten, rewritten != sql_query
 
 
+def _sql_time_anchor_mode() -> str:
+    explicit = os.getenv("DCMA_SQL_TIME_ANCHOR", "").strip().lower()
+    if explicit in _SQL_TIME_ANCHOR_MODES:
+        return explicit
+    try:
+        from fault_diagnosis import config
+
+        configured = str(getattr(config, "SQL_TIME_ANCHOR_MODE", "") or "").strip().lower()
+    except Exception:
+        configured = ""
+    return configured if configured in _SQL_TIME_ANCHOR_MODES else "now"
+
+
 def _time_window_predicate(
     table_name: str,
     column: str,
@@ -67,7 +86,7 @@ def _time_window_predicate(
     force_latest_if_stale: bool = False,
 ) -> str:
     live_window = f"{column} >= NOW() - INTERVAL {amount} {unit}"
-    if not force_latest_if_stale and os.getenv("DCMA_SQL_TIME_ANCHOR", "now") != "latest_row_if_stale":
+    if not force_latest_if_stale and _sql_time_anchor_mode() != "latest_row_if_stale":
         return live_window
     subquery_window = live_window
     max_time_source = f"(SELECT MAX({column}) FROM {table_name})"
@@ -100,6 +119,8 @@ def _in_predicate(column: str, values: list[str]) -> str:
 
 
 def _asset_predicate(table_name: str, assets: list[str]) -> str:
+    if table_name.startswith("real_data_") and assets_include_table_scoped_source(table_name, assets):
+        return ""
     terms = data_source_terms_for_table(table_name, assets)
     if table_name.startswith("real_data_"):
         predicates = [
@@ -187,6 +208,8 @@ def apply_sql_acl(
             asset_filter_predicate = predicate
             query = _insert_predicate(query, predicate)
             filters.append(f"{auth.role}_asset_scope")
+        elif assets_have_data_source_for_table(table_name, scoped_assets):
+            filters.append(f"{auth.role}_asset_table_scope")
         elif requested_assets or auth.role in {"guest", "engineer"}:
             return _deny("当前账号负责设备没有匹配该数据表的数据源。", "asset_filter_not_supported")
 

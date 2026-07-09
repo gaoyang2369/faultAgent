@@ -1,0 +1,40 @@
+{
+  "assets": [
+    {
+      "asset_id": "g120_motor_1",
+      "display_name": "G120电机1",
+      "aliases": ["G120电机1", "J1号机", "1号机", "DCMA一号电机", "real_data_01"],
+      "data_sources": [
+        {
+          "table": "real_data_01"
+        }
+      ],
+      "system": "DCMA_LINE_1",
+      "location": "一号车间"
+    },
+    {
+      "asset_id": "g120_motor_2",
+      "display_name": "G120电机2",
+      "aliases": ["G120电机2", "J2号机", "2号机", "DCMA二号电机", "real_data_02"],
+      "data_sources": [
+        {
+          "table": "real_data_02"
+        }
+      ],
+      "system": "DCMA_LINE_1",
+      "location": "一号车间"
+    },
+    {
+      "asset_id": "g120_motor_3",
+      "display_name": "G120电机3",
+      "aliases": ["G120电机3", "J3号机", "3号机", "DCMA三号电机", "real_data_03"],
+      "data_sources": [
+        {
+          "table": "real_data_03"
+        }
+      ],
+      "system": "DCMA_LINE_1",
+      "location": "一号车间"
+    }
+  ]
+}

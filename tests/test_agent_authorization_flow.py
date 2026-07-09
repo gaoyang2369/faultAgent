@@ -191,7 +191,8 @@ def test_guest_can_only_query_real_data_01_for_the_last_hour() -> None:
     denied = apply_sql_acl("SELECT * FROM device_alarm LIMIT 10", auth=guest)
 
     assert allowed.allowed is True
-    assert "device_name IN ('G120电机1')" in allowed.sql_query
+    assert "FROM real_data_01" in allowed.sql_query
+    assert "guest_asset_table_scope" in allowed.filters_applied
     assert "create_time >= NOW() - INTERVAL 1 HOUR" in allowed.sql_query
     assert allowed.sql_query.endswith("LIMIT 50")
     assert denied.allowed is False
@@ -297,4 +298,3 @@ def test_local_sse_authorization_tool_and_report_contract() -> None:
     assert admin_complete["authorization"]["mode"] == "allow"
     assert "save_report" in admin_tools
     assert admin_complete["report_url"].startswith("/reports/local_dev_report_")
-

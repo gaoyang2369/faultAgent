@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from fault_diagnosis.platform.persistence.repositories.user_repository import FileUserRepository, hash_password, verify_password
+from fault_diagnosis.domain.security.assets import load_asset_registry
 from fault_diagnosis.domain.security.permissions import build_auth_context
 from fault_diagnosis.domain.security.policy_engine import authorize_workflow
 from fault_diagnosis.domain.security.rag_acl import filter_kb_documents
@@ -144,10 +145,10 @@ def test_guest_sql_acl_forces_table_time_and_limit() -> None:
     )
 
     assert result.allowed is True
-    assert "device_name IN ('G120电机1')" in result.sql_query
+    assert "FROM real_data_01" in result.sql_query
     assert "create_time >= NOW() - INTERVAL 1 HOUR" in result.sql_query
-    assert "SELECT MAX(create_time) FROM real_data_01 WHERE" in result.sql_query
-    assert "device_name IN ('G120电机1')" in result.sql_query.split("SELECT MAX(create_time)", 1)[1]
+    assert "SELECT MAX(create_time) FROM real_data_01" in result.sql_query
+    assert "guest_asset_table_scope" in result.filters_applied
     assert result.sql_query.endswith("LIMIT 50")
     assert apply_sql_acl(
         "SELECT * FROM device_alarm LIMIT 10",
@@ -157,6 +158,33 @@ def test_guest_sql_acl_forces_table_time_and_limit() -> None:
         "SELECT * FROM real_data_01 /* create_time >= NOW() - INTERVAL 1 HOUR */ LIMIT 10",
         auth=build_auth_context(role="guest"),
     ).blocked_reason_code == "unsupported_sql_shape"
+
+
+def test_admin_sql_acl_uses_latest_row_anchor_when_configured(monkeypatch) -> None:
+    monkeypatch.delenv("DCMA_SQL_TIME_ANCHOR", raising=False)
+    result = apply_sql_acl(
+        "SELECT * FROM real_data_01 ORDER BY create_time DESC LIMIT 500",
+        auth=build_auth_context(role="admin"),
+    )
+
+    assert result.allowed is True
+    assert "create_time >= NOW() - INTERVAL 7 DAY" in result.sql_query
+    assert "NOT EXISTS (SELECT 1 FROM real_data_01" in result.sql_query
+    assert "SELECT MAX(create_time) FROM real_data_01" in result.sql_query
+    assert result.sql_query.endswith("LIMIT 50")
+
+
+def test_admin_sql_acl_respects_explicit_now_time_anchor(monkeypatch) -> None:
+    monkeypatch.setenv("DCMA_SQL_TIME_ANCHOR", "now")
+    result = apply_sql_acl(
+        "SELECT * FROM real_data_01 ORDER BY create_time DESC LIMIT 500",
+        auth=build_auth_context(role="admin"),
+    )
+
+    assert result.allowed is True
+    assert "create_time >= NOW() - INTERVAL 7 DAY" in result.sql_query
+    assert "NOT EXISTS" not in result.sql_query
+    assert "SELECT MAX(create_time)" not in result.sql_query
 
 
 def test_guest_sql_acl_denies_unassigned_asset() -> None:
@@ -187,8 +215,9 @@ def test_engineer_sql_acl_injects_asset_scope() -> None:
     )
 
     assert result.allowed is True
-    assert "device_name IN ('G120电机1', 'pump_001')" in result.sql_query
-    assert "engineer_asset_scope" in result.filters_applied
+    assert "FROM real_data_01" in result.sql_query
+    assert "pump_001" not in result.sql_query
+    assert "engineer_asset_table_scope" in result.filters_applied
 
 
 def test_engineer_asset_scope_allows_registered_aliases() -> None:
@@ -206,7 +235,46 @@ def test_engineer_asset_scope_allows_registered_aliases() -> None:
     )
 
     assert result.allowed is True
-    assert "device_name IN ('G120电机1')" in result.sql_query
+    assert "FROM real_data_01" in result.sql_query
+    assert "device_name IN ('G120电机1')" not in result.sql_query
+    assert "engineer_asset_table_scope" in result.filters_applied
+
+
+def test_sql_acl_uses_configured_row_level_asset_terms(tmp_path, monkeypatch) -> None:
+    registry_path = tmp_path / "asset_registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "assets": [
+                    {
+                        "asset_id": "g120_motor_1",
+                        "display_name": "G120电机1",
+                        "aliases": ["G120电机1", "J1号机"],
+                        "data_sources": [{"table": "real_data_01", "device_name": "DB-G120-1"}],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ASSET_REGISTRY_PATH", str(registry_path))
+    load_asset_registry.cache_clear()
+    auth = build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"])
+
+    try:
+        result = apply_sql_acl(
+            "SELECT * FROM real_data_01 ORDER BY create_time DESC",
+            auth=auth,
+            request=SimpleNamespace(equipment_hint="G120电机1"),
+            decision=_decision(objects={"device_ids": ["G120电机1"]}),
+        )
+    finally:
+        load_asset_registry.cache_clear()
+
+    assert result.allowed is True
+    assert "device_name IN ('DB-G120-1')" in result.sql_query
+    assert "engineer_asset_scope" in result.filters_applied
 
 
 def test_rag_acl_filters_uploaded_documents_by_role() -> None:

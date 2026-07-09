@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisRequest
+from fault_diagnosis.domain.security.assets import load_asset_registry
 from fault_diagnosis.domain.security.sql_safety import (
     ALLOWED_SQL_TABLES,
     REAL_DATA_LATEST_TABLE,
@@ -44,7 +47,7 @@ def test_fallback_sql_uses_current_real_data_columns() -> None:
     sql = build_fallback_sql_query(_request(equipment_hint="G120电机1", fault_code_hint="42"))
 
     assert f"FROM {REAL_DATA_LATEST_TABLE}" in sql
-    assert "device_name IN ('G120电机1')" in sql
+    assert "device_name IN ('G120电机1')" not in sql
     assert "fault_code = '42' OR alarm_code = '42'" in sql
     assert "device_id" not in sql
     assert "spindle_" not in sql
@@ -57,7 +60,7 @@ def test_fallback_sql_resolves_asset_alias_to_real_data_source() -> None:
     sql = build_fallback_sql_query(_request(equipment_hint="J1号机"))
 
     assert f"FROM {REAL_DATA_LATEST_TABLE}" in sql
-    assert "device_name IN ('G120电机1')" in sql
+    assert "WHERE 1=1" in sql
     assert "J1号机" not in sql
 
 
@@ -71,8 +74,8 @@ def test_fallback_sql_queries_latest_rows_without_default_device_filter() -> Non
 def test_report_sql_can_inherit_decision_asset_filters() -> None:
     sql = build_fallback_sql_query(_request(), asset_filters=["J1号机"])
 
-    assert "WHERE 1=1" not in sql
-    assert "device_name IN ('G120电机1')" in sql
+    assert "WHERE 1=1" in sql
+    assert "device_name IN ('G120电机1')" not in sql
     assert "inverter_name IN" not in sql
 
 
@@ -115,7 +118,7 @@ def test_fast_sql_plan_handles_device_fault_diagnosis_requests() -> None:
     assert plan is not None
     sql, summary = plan
     assert f"FROM {REAL_DATA_LATEST_TABLE}" in sql
-    assert "device_name IN ('G120电机1')" in sql
+    assert "device_name IN ('G120电机1')" not in sql
     assert f"ORDER BY {REAL_DATA_LATEST_TABLE}.create_time DESC, id DESC LIMIT 50" in sql
     assert f"{REAL_DATA_LATEST_TABLE} 最近 50 条" in summary
 
@@ -128,5 +131,35 @@ def test_fast_sql_plan_inherits_asset_filters_for_single_device_report() -> None
 
     assert plan is not None
     sql, _summary = plan
-    assert "WHERE 1=1" not in sql
-    assert "device_name IN ('G120电机1')" in sql
+    assert "WHERE 1=1" in sql
+    assert "device_name IN ('G120电机1')" not in sql
+
+
+def test_configured_real_data_row_filter_is_used_when_present(tmp_path, monkeypatch) -> None:
+    registry_path = tmp_path / "asset_registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "assets": [
+                    {
+                        "asset_id": "g120_motor_1",
+                        "display_name": "G120电机1",
+                        "aliases": ["G120电机1", "J1号机"],
+                        "data_sources": [{"table": "real_data_01", "device_name": "DB-G120-1"}],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ASSET_REGISTRY_PATH", str(registry_path))
+    load_asset_registry.cache_clear()
+
+    try:
+        sql = build_fallback_sql_query(_request(equipment_hint="J1号机"))
+    finally:
+        load_asset_registry.cache_clear()
+
+    assert "device_name IN ('DB-G120-1')" in sql
+    assert "J1号机" not in sql

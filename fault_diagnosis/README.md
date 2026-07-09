@@ -47,9 +47,10 @@ gunicorn -w 4 -k uvicorn.workers.UvicornWorker fault_diagnosis.app:app --bind 0.
 - PostgreSQL artifact/health：`POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`。
 - Session / auth：`SESSION_SECRET`、`SESSION_SECRET_FILE`、`SESSION_COOKIE_SECURE`、`SESSION_COOKIE_SAMESITE`、`SESSION_COOKIE_DOMAIN`、`SESSION_COOKIE_PATH`、`USER_STORE_PATH`、`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`ALLOW_DEFAULT_ADMIN_PASSWORD`、`ADMIN_AUTH_MAX_AGE`。
 - 语音身份：`VOICE_AUTH_SHARED_SECRET`、`VOICE_AUTH_MAX_AGE_SECONDS`。
+- 资产注册表：默认读取 `config/asset_registry.json`，可用 `ASSET_REGISTRY_PATH` 指向其他 JSON 文件。它维护设备显示名/别名与数据库表、可选行级 `device_name` / `inverter_name` 的映射。
 - 报告与本地状态：报告目录固定为 `trash/run/reports/`，由 `platform/paths.py` 的 `REPORTS_DIR` 定义；当前没有独立 `REPORTS_DIR` 环境变量。
 - 审计与 trace：`SECURITY_AUDIT_PATH`、`AGENT_TRACE_BACKEND`、`AGENT_TRACE_CAPTURE_CONTENT`、`AGENT_TRACE_PREVIEW_CHARS`、`AGENT_TRACE_FLUSH_ON_RUN`、`AGENT_TRACE_FLUSH_TIMEOUT_SECONDS`、`AGENT_TRACE_LOCAL_LOG`、`AGENT_TRACE_LOCAL_LOG_PATH`、`AGENT_TRACE_CONSOLE`、`AGENT_TRACE_CONSOLE_VERBOSE`、`AGENT_TRACE_CONSOLE_PREVIEW_CHARS`、`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`、`LANGFUSE_HOST`、`LANGFUSE_BASE_URL`。
-- 其他外部能力：`TTS_SYNTHESIZE_URL`、`TTS_SYNTHESIZE_TIMEOUT_SECONDS`、`TTS_SYNTHESIZE_MAX_CHARS`、`ASSET_REGISTRY_PATH`、`HISTORY_INDEX_PATH`、`WORKORDER_DIR`、`DCMA_SQL_TIME_ANCHOR=now|latest_row_if_stale`、`HEALTHCHECK_TIMEOUT_SECONDS`。
+- 其他外部能力：`TTS_SYNTHESIZE_URL`、`TTS_SYNTHESIZE_TIMEOUT_SECONDS`、`TTS_SYNTHESIZE_MAX_CHARS`、`ASSET_REGISTRY_PATH`、`HISTORY_INDEX_PATH`、`WORKORDER_DIR`、`DCMA_SQL_TIME_ANCHOR=now|latest_row_if_stale`、`HEALTHCHECK_TIMEOUT_SECONDS`。`DCMA_SQL_TIME_ANCHOR` 生产默认 `now`；非生产默认 `latest_row_if_stale`，用于历史快照库在最近窗口为空时回退到最新采样窗口。
 
 `LOCAL_DEV_MODE=true` 会跳过真实 MySQL/知识库初始化，走 `server/devtools/dev_mode.py` 的本地模拟流。
 
@@ -221,7 +222,7 @@ SQL：
 - SQL safety helper 将 `SELECT` / `WITH` 识别为只读形态，但当前执行前的 `sql_acl.py` 只支持可安全重写的单表 `SELECT`，会拒绝 `WITH`、多语句、注释、`UNION`、`FOR UPDATE`、`INTO OUTFILE` 等超出安全重写能力的结构。
 - 只允许白名单表：`real_data_01`、`real_data_02`、`real_data_03`、`device_alarm`、`device_metric`、`device_fault_data`、`fault_records`。
 - 禁止旧表 `real_data` 和未知表。
-- 当前/最近运行状态默认查 `real_data_01`；如果设备能在资产目录解析，则优先使用绑定数据源。
+- 当前/最近运行状态默认查 `real_data_01`；如果设备能在资产注册表解析，则优先使用绑定数据源。`real_data_01~03` 默认按“表级数据源”处理：表本身代表 G120 电机 1~3，不额外注入 `device_name` 过滤；如果某个表是多设备共表，可在对应 `data_sources` 中配置 `device_name` 或 `inverter_name`，ACL 和快速 SQL 会自动注入行级过滤。
 - `build_fast_sql_plan()` 会为常见状态/报告请求生成确定性 SQL 并跳过 checker；否则使用 LLM 规划后仍经只读、表名和 ACL 校验。
 - `apply_sql_acl()` 会结合 `allowed_tables`、`asset_scope`、角色时间窗口和 `LIMIT` 重写 SQL。访客仅 `real_data_01` 最近 1 小时；工程师受表和设备范围限制；管理员可访问授权业务表全集。
 

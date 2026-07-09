@@ -31,7 +31,7 @@ DEFAULT_ASSET_REGISTRY: tuple[AssetRecord, ...] = (
         asset_id="g120_motor_1",
         display_name="G120电机1",
         aliases=["G120电机1", "J1号机", "1号机", "DCMA一号电机", "real_data_01"],
-        data_sources=[AssetDataSource(table="real_data_01", device_name="G120电机1")],
+        data_sources=[AssetDataSource(table="real_data_01")],
         system="DCMA_LINE_1",
         location="一号车间",
     ),
@@ -39,7 +39,7 @@ DEFAULT_ASSET_REGISTRY: tuple[AssetRecord, ...] = (
         asset_id="g120_motor_2",
         display_name="G120电机2",
         aliases=["G120电机2", "J2号机", "2号机", "DCMA二号电机", "real_data_02"],
-        data_sources=[AssetDataSource(table="real_data_02", device_name="G120电机2")],
+        data_sources=[AssetDataSource(table="real_data_02")],
         system="DCMA_LINE_1",
         location="一号车间",
     ),
@@ -47,7 +47,7 @@ DEFAULT_ASSET_REGISTRY: tuple[AssetRecord, ...] = (
         asset_id="g120_motor_3",
         display_name="G120电机3",
         aliases=["G120电机3", "J3号机", "3号机", "DCMA三号电机", "real_data_03"],
-        data_sources=[AssetDataSource(table="real_data_03", device_name="G120电机3")],
+        data_sources=[AssetDataSource(table="real_data_03")],
         system="DCMA_LINE_1",
         location="一号车间",
     ),
@@ -56,7 +56,12 @@ DEFAULT_ASSET_REGISTRY: tuple[AssetRecord, ...] = (
 
 def _registry_path() -> Path:
     configured = os.getenv("ASSET_REGISTRY_PATH", "").strip()
-    return Path(configured) if configured else Path("trash/run") / "asset_registry.json"
+    if configured:
+        return Path(configured)
+    repo_config = Path("config") / "asset_registry.json"
+    if repo_config.exists():
+        return repo_config
+    return Path("trash/run") / "asset_registry.json"
 
 
 def _scope_key(value: str) -> str:
@@ -145,6 +150,57 @@ def select_asset_table(asset: str | None, *, allowed_tables: set[str]) -> str | 
         (source.table for source in record.data_sources if source.table in allowed_tables),
         None,
     )
+
+
+def asset_has_data_source_for_table(asset: str | None, table_name: str) -> bool:
+    record = resolve_asset(asset)
+    if record is None:
+        return False
+    return any(source.table == table_name for source in record.data_sources)
+
+
+def assets_have_data_source_for_table(table_name: str, assets: list[str]) -> bool:
+    cleaned = [asset for asset in (str(value or "").strip() for value in assets) if asset]
+    return bool(cleaned) and any(asset_has_data_source_for_table(asset, table_name) for asset in cleaned)
+
+
+def assets_include_table_scoped_source(table_name: str, assets: list[str]) -> bool:
+    cleaned = [asset for asset in (str(value or "").strip() for value in assets) if asset]
+    for asset in cleaned:
+        record = resolve_asset(asset)
+        if record is None:
+            continue
+        if any(
+            source.table == table_name and not source.device_name and not source.inverter_name
+            for source in record.data_sources
+        ):
+            return True
+    return False
+
+
+def assets_are_table_scoped_for_table(table_name: str, assets: list[str]) -> bool:
+    """Return true when the table itself is the configured asset boundary.
+
+    A real_data data source without device_name/inverter_name means the shard is
+    already scoped to that asset, so adding a row-level device predicate would
+    be both redundant and, for real installations, often wrong.
+    """
+
+    cleaned = [asset for asset in (str(value or "").strip() for value in assets) if asset]
+    if not cleaned:
+        return False
+    matched = False
+    for asset in cleaned:
+        record = resolve_asset(asset)
+        if record is None:
+            return False
+        sources = [source for source in record.data_sources if source.table == table_name]
+        if not sources:
+            continue
+        matched = True
+        if any(source.device_name or source.inverter_name for source in sources):
+            return False
+    return matched
 
 
 def data_source_terms_for_table(table_name: str, assets: list[str]) -> dict[str, list[str]]:

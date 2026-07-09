@@ -120,7 +120,7 @@ def test_real_sql_node_applies_acl_and_executes_rewritten_read_query() -> None:
     executed_sql = fake.sql_calls[-1][1]
     assert executed_sql.startswith("SELECT")
     assert "real_data_01" in executed_sql
-    assert "device_name IN ('G120电机1')" in executed_sql
+    assert "device_name IN ('G120电机1')" not in executed_sql
     assert "LIMIT 50" in executed_sql
     assert result.evidence_ledger.evidence_items
 

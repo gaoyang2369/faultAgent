@@ -5,7 +5,13 @@ from __future__ import annotations
 import re
 
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisRequest
-from .assets import data_source_terms_for_table, select_asset_table
+from .assets import (
+    assets_are_table_scoped_for_table,
+    assets_include_table_scoped_source,
+    data_source_terms_for_table,
+    resolve_asset,
+    select_asset_table,
+)
 
 _SQL_TABLE_RE = re.compile(r"\b(?:from|join)\s+`?([a-zA-Z_][\w]*)`?", re.IGNORECASE)
 
@@ -49,7 +55,7 @@ SQL_SCHEMA_CONTEXT = """
 - fault_records(fault_code, description, possible_cause, suggestion, severity)
 禁止使用旧表 real_data；DCMA 运行数据只使用 real_data_01、real_data_02、real_data_03。
 最近/当前/最新运行情况默认查询 real_data_01；只有用户明确要求历史分表时才查询 real_data_02 或 real_data_03。
-real_data_01/02/03 中没有 device_id、spindle_current、spindle_speed、spindle_load、vibration、alarm_status 字段；设备过滤必须使用 device_name 或 inverter_name。
+real_data_01/02/03 中没有 device_id、spindle_current、spindle_speed、spindle_load、vibration、alarm_status 字段；设备与表的对应关系以资产注册表为准，只有注册表配置了行级 device_name 或 inverter_name 时才追加设备过滤。
 状态/报警优先查询 real_data_01/02/03 的 status、fault_code、alarm_code、control_word、status_word。
 运行指标优先查询 dc_voltage、speed_setpoint、speed_actual、current_actual、torque_setpoint、torque_actual、air_intake_temp、motor_temp、inverter_temp、actual_power、field_current、torque_current、inverter_radiator_temp、inverter_load_rate、motor_load_rate、pulse_frequency、motor_power、feedback_power。
 最近数据优先按 create_time DESC, id DESC 排序；date/time 是字符串字段，只有明确需要展示原始采集时间时再选择。
@@ -169,8 +175,15 @@ def _real_data_asset_predicate(table_name: str, assets: list[str]) -> str:
     ]
     if predicates:
         return "(" + " OR ".join(predicates) + ")"
+    if assets_are_table_scoped_for_table(table_name, cleaned_assets) or assets_include_table_scoped_source(
+        table_name,
+        cleaned_assets,
+    ):
+        return ""
     fallback_predicates = []
     for asset in cleaned_assets:
+        if resolve_asset(asset) is not None:
+            continue
         equipment_literal = sql_literal(asset)
         fallback_predicates.extend(
             [
