@@ -88,7 +88,8 @@ def run_check(root: Path = ROOT) -> dict[str, object]:
 def main() -> int:
     payload = run_check(ROOT)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    return 1 if payload["summary"]["forbidden_hits"] else 0
+    summary = payload["summary"]
+    return 1 if summary["forbidden_hits"] or summary["domain_platform_dependency_hits"] else 0
 
 
 def _iter_python_files(root: Path) -> Iterable[Path]:

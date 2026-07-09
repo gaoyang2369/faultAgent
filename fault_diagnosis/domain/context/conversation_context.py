@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact
-from fault_diagnosis.platform.persistence.repositories.conversation_store import ConversationRepository
+from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
 from fault_diagnosis.domain.security.contracts import AuthContext
 from .case_store import ArtifactBackedCaseStore
+
+ArtifactGetter = Callable[[str], DiagnosisArtifactEnvelope | None]
 
 
 class ConversationContextAssembler:
@@ -16,12 +18,14 @@ class ConversationContextAssembler:
     def __init__(
         self,
         *,
-        conversation_repository: ConversationRepository,
+        conversation_repository: Any,
         case_store: ArtifactBackedCaseStore | None = None,
+        artifact_getter: ArtifactGetter | None = None,
         recent_message_limit: int = 8,
     ) -> None:
         self.conversation_repository = conversation_repository
         self.case_store = case_store or ArtifactBackedCaseStore()
+        self.artifact_getter = artifact_getter or _empty_artifact_getter
         self.recent_message_limit = max(2, int(recent_message_limit))
 
     def build(
@@ -38,7 +42,7 @@ class ConversationContextAssembler:
         )
         case_state = self.case_store.load(thread_id)
         active_case = case_state.active_case
-        artifact_refs = _latest_artifact_refs(thread_id)
+        artifact_refs = _latest_artifact_refs(thread_id, artifact_getter=self.artifact_getter)
         previous_assistant_turn = self._previous_assistant_turn(recent_messages)
         package = {
             "version": "conversation_context_package.v1",
@@ -98,9 +102,13 @@ class ConversationContextAssembler:
         return {}
 
 
-def _latest_artifact_refs(thread_id: str) -> list[dict[str, Any]]:
+def _empty_artifact_getter(thread_id: str) -> DiagnosisArtifactEnvelope | None:  # noqa: ARG001
+    return None
+
+
+def _latest_artifact_refs(thread_id: str, *, artifact_getter: ArtifactGetter) -> list[dict[str, Any]]:
     try:
-        envelope = get_thread_artifact(thread_id)
+        envelope = artifact_getter(thread_id)
     except Exception:
         return []
     if not envelope:

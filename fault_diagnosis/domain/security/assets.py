@@ -10,8 +10,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from fault_diagnosis.platform.paths import RUN_STATE_DIR
-
 
 class AssetDataSource(BaseModel):
     table: str
@@ -58,7 +56,7 @@ DEFAULT_ASSET_REGISTRY: tuple[AssetRecord, ...] = (
 
 def _registry_path() -> Path:
     configured = os.getenv("ASSET_REGISTRY_PATH", "").strip()
-    return Path(configured) if configured else Path(RUN_STATE_DIR) / "asset_registry.json"
+    return Path(configured) if configured else Path("trash/run") / "asset_registry.json"
 
 
 def _scope_key(value: str) -> str:

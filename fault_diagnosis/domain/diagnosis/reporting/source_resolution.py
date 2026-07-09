@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import list_thread_artifacts
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType, SqlStepArtifact
 from fault_diagnosis.domain.security.assets import asset_is_in_scope
 from fault_diagnosis.domain.security.contracts import AuthContext
 
 ReportSourceMode = Literal["reuse_artifact", "refresh_sql", "blocked_missing_context", "ambiguous"]
+ArtifactLister = Callable[[str, int], list[DiagnosisArtifactEnvelope]]
 
 _REPORT_WORDS = ("报告", "出报告", "生成报告", "导出报告", "整理成报告", "形成报告", "导出一下")
 _FRESH_WORDS = ("最新", "当前", "现在", "重新查", "重新查询", "刷新", "今天")
@@ -48,6 +49,7 @@ def resolve_report_source(
     current_payload: dict[str, Any],
     resolved_context: Any,
     conversation_context: dict[str, Any] | None = None,
+    artifact_lister: ArtifactLister | None = None,
     artifact_limit: int = 10,
 ) -> ReportSourceDecision:
     """Resolve the report source once so plan and stream use identical rules."""
@@ -66,7 +68,7 @@ def resolve_report_source(
         or ""
     ).strip()
     previous_artifact_ids = _previous_turn_artifact_ids(conversation_context)
-    artifacts = list_thread_artifacts(thread_id, limit=artifact_limit)
+    artifacts = artifact_lister(thread_id, artifact_limit) if artifact_lister is not None else []
     scanned: list[tuple[DiagnosisArtifactEnvelope, dict[str, Any], dict[str, Any]]] = []
     rejected: list[str] = []
     for envelope in artifacts:
@@ -228,13 +230,21 @@ def apply_report_source_decision(
             context_resolution["inherited_slots"] = merged
 
 
-def find_referenced_artifact(thread_id: str, artifact_id: str | None, *, limit: int = 20) -> DiagnosisArtifactEnvelope | None:
+def find_referenced_artifact(
+    thread_id: str,
+    artifact_id: str | None,
+    *,
+    limit: int = 20,
+    artifact_lister: ArtifactLister | None = None,
+) -> DiagnosisArtifactEnvelope | None:
     """Find a referenced artifact by any stable id used in context projection."""
 
     target = str(artifact_id or "").strip()
     if not target:
         return None
-    for envelope in list_thread_artifacts(thread_id, limit=limit):
+    if artifact_lister is None:
+        return None
+    for envelope in artifact_lister(thread_id, limit):
         if target in _artifact_ids(envelope):
             return envelope
     return None

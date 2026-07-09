@@ -1,23 +1,29 @@
 ﻿# 工业设备故障诊断专家系统
 
-这是一个面向 DCMA 工业设备的故障诊断 Agent 项目。当前后端已经收敛为限制型单 Agent 主链路：受控地查询设备数据、检索 PDF 知识库、形成诊断结论，并按需生成可视化 HTML 报告。
+这是一个面向 DCMA 工业设备的故障诊断 Agent 项目。当前后端主链路已经收敛为 Agent Engine V2：受控地查询设备数据、检索 PDF 知识库、形成有证据约束的诊断结论，并按需生成可视化 HTML 报告或工单建议草稿。
 
 ## 当前架构
 
 ```text
 Vue 3 frontend
   -> FastAPI HTTP/SSE
-    -> services.chat
-      -> agent_runtime.streaming
-        -> single_agent.RestrictedSingleAgentRunner
-          -> SQL / knowledge base / report tools
+    -> server/http/routers/chat.py
+      -> ChatService
+        -> server/agent_gateway/streaming.token_stream_events
+          -> AgentEngineV2.build_plan_snapshot
+          -> runtime/plan_preparer
+          -> WorkflowRuntimeExecutor
+          -> typed nodes
+          -> EvidenceLedger
+          -> OutputFrame
+          -> SSE/artifact projection
 ```
 
-后端源码只保留在 `fault_diagnosis/` 下，不再维护根目录 shim、多 agent、多流程分流或在线质量评估链路。
+后端源码只保留在 `fault_diagnosis/` 下，不再维护根目录 shim、多 agent、多流程分流或迁移期双轨执行链路。
 
 ## 核心能力
 
-- 单 Agent 故障诊断：请求理解、受限 SQL、知识库检索、诊断分析、最终回答。
+- Agent Engine V2 故障诊断：请求理解、上下文解析、skill routing、typed ExecutionPlan、受限 SQL、知识库检索、诊断分析、最终回答。
 - 受限 SQL：只允许白名单表和只读查询，异常 SQL 自动回退到安全查询。
 - PDF 知识库：基于 FAISS/Ollama embeddings 查询设备手册和故障码资料。
 - 可视化 HTML 报告：通过 `save_report` 保存到私有报告目录，并经受保护的 `/reports/{filename}` 访问。
@@ -30,16 +36,11 @@ Vue 3 frontend
 .
 ├── fault_diagnosis/        # 后端源码根
 │   ├── app.py              # 后端入口
-│   ├── app_factory.py      # FastAPI app 组装
-│   ├── api/                # HTTP/SSE 路由
-│   ├── services/           # 应用服务
-│   ├── single_agent/       # 限制型单 Agent
-│   ├── agent_runtime/      # SSE、流控、错误分类
-│   ├── diagnosis/          # 诊断合同、step、artifact store
-│   ├── tools/              # SQL、知识库、HTML 报告工具
-│   ├── knowledge/          # FAISS/Ollama 知识库
-│   ├── repositories/       # 文件/索引仓储
-│   └── infrastructure/     # lifespan、CORS、模型、数据库池
+│   ├── server/             # HTTP/SSE、session、use cases、Agent gateway
+│   ├── agent/              # Agent Engine V2 understanding、planning、runtime、output
+│   ├── domain/             # 诊断、上下文、权限领域合同与规则
+│   ├── platform/           # persistence、tools、knowledge、integrations、observability
+│   └── shared/             # 无业务语义的通用工具
 ├── agent_fronted/          # Vue 3 前端
 ├── pdfs/                   # 知识库 PDF 源文档
 ├── faiss_db/               # FAISS 索引
@@ -177,7 +178,7 @@ python rebuild_kb.py --incremental --no-force-rebuild
 LOCAL_DEV_MODE=true
 ```
 
-该模式使用 `fault_diagnosis/runtime/dev_mode.py` 的模拟 SSE 和本地状态；模拟流同样经过正式的 workflow 权限策略，并在 `complete.authorization` 中返回授权结果。
+该模式使用 `server/devtools/dev_mode.py` 的模拟 SSE 和本地状态；模拟流同样经过正式的 workflow 权限策略，并在 `complete.authorization` 中返回授权结果。
 
 本地权限验收可直接运行：
 
@@ -187,4 +188,3 @@ scripts/auth_acceptance_test.sh
 ```
 
 如需在非 `LOCAL_DEV_MODE` 的开发进程中单独开放开发身份接口，可设置 `ENABLE_DEV_AUTH=true`。`POST /auth/dev-login` 仅在这两个开关之一启用且 `APP_ENV` 不是生产环境时可用；生产环境固定返回 404。
-

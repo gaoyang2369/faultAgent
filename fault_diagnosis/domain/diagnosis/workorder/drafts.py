@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
 from fault_diagnosis.domain.context.contracts import PendingAction
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import list_thread_artifacts
 from ..contracts import DiagnosisArtifactEnvelope, WorkOrderDraftArtifact, WorkOrderSuggestion
 from fault_diagnosis.domain.security.assets import asset_is_in_scope
 from fault_diagnosis.domain.security.contracts import AuthContext
@@ -102,10 +102,20 @@ def validate_pending_workorder_draft_action(
     return True, ""
 
 
-def find_existing_workorder_draft(thread_id: str, source_hash: str | None) -> WorkOrderDraftArtifact | None:
+ArtifactLister = Callable[[str, int], list[DiagnosisArtifactEnvelope]]
+
+
+def find_existing_workorder_draft(
+    thread_id: str,
+    source_hash: str | None,
+    *,
+    artifact_lister: ArtifactLister | None = None,
+) -> WorkOrderDraftArtifact | None:
     if not source_hash:
         return None
-    for envelope in list_thread_artifacts(thread_id, limit=20):
+    if artifact_lister is None:
+        return None
+    for envelope in artifact_lister(thread_id, 20):
         payload = envelope.payload or {}
         raw = payload.get("workorder_draft")
         if isinstance(raw, dict) and raw.get("source_hash") == source_hash:

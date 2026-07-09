@@ -5,14 +5,23 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from fault_diagnosis.domain.security.contracts import AuthContext, AuthorizationDecision
 from fault_diagnosis.domain.security.permissions import build_auth_context
 from fault_diagnosis.domain.security.policy_engine import authorize_workflow
 from fault_diagnosis.domain.security.tool_gateway import authorize_tool_call
 
-from ..contracts import ExecutionPlan, IntentFrame, SkillRoute
+from ..contracts import (
+    ApprovalNodeInputs,
+    ExecutionPlan,
+    IntentFrame,
+    RagNodeInputs,
+    ReportNodeInputs,
+    SkillRoute,
+    SqlNodeInputs,
+    WorkorderNodeInputs,
+)
 from .policy_bridge import (
     BLOCKING_FORBIDDEN_TOOLS,
     GLOBAL_FORBIDDEN_TOOLS,
@@ -63,6 +72,7 @@ class PlanValidator:
         skill_route: SkillRoute,
         intent_frame: IntentFrame,
         auth_context: AuthContext | None = None,
+        require_runtime_inputs: bool = False,
     ) -> PlanValidationResult:
         auth = auth_context or build_auth_context(role="guest")
         validated = candidate_plan.model_copy(deep=True)
@@ -179,6 +189,7 @@ class PlanValidator:
             )
 
         validated.nodes = _sanitize_nodes(validated.nodes, removed_tools, issues)
+        _validate_node_inputs(validated, issues, require_runtime_inputs=require_runtime_inputs)
         removed_tools = _dedupe(removed_tools)
         validated.plan_id = validated.plan_id or f"validated_{uuid4().hex[:12]}"
         if not validated.plan_version.endswith(".validated"):
@@ -315,6 +326,83 @@ def _sanitize_nodes(
             continue
         sanitized.append(copied)
     return sanitized
+
+
+def _validate_node_inputs(
+    plan: ExecutionPlan,
+    issues: list[PlanValidationIssue],
+    *,
+    require_runtime_inputs: bool,
+) -> None:
+    for node in plan.nodes:
+        node_id = str(node.get("node_id") or "")
+        node_type = str(node.get("node_type") or "")
+        if not node_id:
+            issues.append(
+                PlanValidationIssue(
+                    code="plan_node_missing_node_id",
+                    severity="error",
+                    message="Plan node must include node_id.",
+                    node_id=node_id,
+                )
+            )
+        if not node_type:
+            issues.append(
+                PlanValidationIssue(
+                    code="plan_node_missing_node_type",
+                    severity="error",
+                    message="Plan node must include node_type.",
+                    node_id=node_id,
+                )
+            )
+            continue
+        inputs = dict(node.get("inputs") or {})
+        try:
+            _coerce_node_inputs(node_type, inputs)
+        except ValidationError as exc:
+            issues.append(
+                PlanValidationIssue(
+                    code=f"{node_type}_inputs_schema_invalid",
+                    severity="error",
+                    message=f"{node_type} node inputs do not match schema: {exc.errors()[0].get('msg')}",
+                    node_id=node_id,
+                )
+            )
+            continue
+        if not require_runtime_inputs:
+            continue
+        missing = _missing_runtime_inputs(node_type, inputs)
+        for field_name in missing:
+            issues.append(
+                PlanValidationIssue(
+                    code=f"missing_{field_name}",
+                    severity="error",
+                    message=f"{node_type} node requires inputs.{field_name} before runtime execution.",
+                    node_id=node_id,
+                )
+            )
+
+
+def _coerce_node_inputs(node_type: str, inputs: dict[str, Any]) -> Any:
+    model_by_node = {
+        "sql": SqlNodeInputs,
+        "rag": RagNodeInputs,
+        "report": ReportNodeInputs,
+        "workorder": WorkorderNodeInputs,
+        "approval": ApprovalNodeInputs,
+    }
+    model = model_by_node.get(node_type)
+    return model.model_validate(inputs) if model is not None else inputs
+
+
+def _missing_runtime_inputs(node_type: str, inputs: dict[str, Any]) -> list[str]:
+    if node_type == "sql" and not str(inputs.get("sql_query") or "").strip():
+        return ["sql_query"]
+    if node_type == "rag" and not str(inputs.get("query") or inputs.get("kb_query") or "").strip():
+        return ["query"]
+    if node_type == "report" and not str(inputs.get("operation_report_payload") or "").strip():
+        return ["operation_report_payload"]
+    return []
 
 
 def _status(issues: list[PlanValidationIssue], removed_tools: list[str]) -> ValidationStatus:

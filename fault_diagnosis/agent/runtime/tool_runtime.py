@@ -15,8 +15,9 @@ class ToolRuntime:
     def sql_tools(self) -> dict[str, Any]:
         if self._sql_tools is None:
             from fault_diagnosis.domain.diagnosis.adapters import build_sql_tools_map
+            from fault_diagnosis.platform.tools.sql_tools import get_sqltools
 
-            self._sql_tools = build_sql_tools_map()
+            self._sql_tools = build_sql_tools_map(get_sqltools())
         return self._sql_tools
 
     def invoke_sql_tool(self, tool_name: str, payload: Any) -> Any:

@@ -210,10 +210,10 @@ def test_registry_discovers_skills_and_loader_only_loads_selected_skill() -> Non
     assert all(item.startswith("runtime_status/") for item in loaded["runtime_status"].loaded_files)
 
 
-def test_agent_engine_v2_plan_only_includes_context_and_skill_route_without_execution() -> None:
+def test_agent_engine_v2_build_plan_snapshot_includes_context_and_skill_route_without_execution() -> None:
     manager = _manager_with_artifacts(_artifact())
 
-    snapshot = AgentEngineV2().plan_only(
+    snapshot = AgentEngineV2().build_plan_snapshot(
         raw_message="基于刚才结果生成报告",
         thread_id="thread.v2.context",
         request_id="request.phase3",

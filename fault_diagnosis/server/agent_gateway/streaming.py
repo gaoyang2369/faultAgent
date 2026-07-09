@@ -18,7 +18,7 @@ from fault_diagnosis.shared.utils import summarize_identifier_for_log
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import save_thread_artifact
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
 from fault_diagnosis.agent import AgentEngineV2, WorkflowRuntimeExecutor
-from fault_diagnosis.agent.cutover import prepare_v2_execution_plan
+from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_plan
 from fault_diagnosis.agent.output import project_start, project_task_update, project_token, project_tool_end, project_tool_start
 from fault_diagnosis.agent.runtime import CancelToken
 from fault_diagnosis.domain.security.contracts import AuthContext
@@ -112,7 +112,7 @@ async def token_stream_events(
             return
 
         effective_auth = auth_context or _fallback_auth_context(user_identity)
-        v2_snapshot = AgentEngineV2().plan_only(
+        v2_snapshot = AgentEngineV2().build_plan_snapshot(
             raw_message=message,
             thread_id=thread_id,
             request_id=request_id,
@@ -120,7 +120,7 @@ async def token_stream_events(
             conversation_context=conversation_context,
             metadata={"stream_id": stream_id, "source": "chat_stream"},
         )
-        v2_plan = prepare_v2_execution_plan(snapshot=v2_snapshot, thread_id=thread_id)
+        v2_plan = prepare_v2_execution_plan(snapshot=v2_snapshot, thread_id=thread_id, auth_context=effective_auth)
         async for chunk in _stream_v2_runtime(
             app=app,
             plan=v2_plan,

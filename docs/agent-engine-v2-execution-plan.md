@@ -1,5 +1,7 @@
 # Agent Engine V2 架构迁移执行计划
 
+> 历史迁移记录：本文记录 V2 切换过程中的阶段性方案和迁移术语，不代表当前生产架构。当前主链路以 `docs/current-architecture.md` 和 `fault_diagnosis/README.md` 为准。
+
 本文是 faultAgent 从当前限制型单 Agent 主链路迁移到 `Agent Engine V2` 的目标态执行计划。它是规划文档，不代表当前生产链路已经具备这些能力。
 
 迁移采用同仓库旁路重建方式：保留现有 API、Session、Auth、SSE、artifact、报告和工单合同，在新目录中逐步实现 V2 引擎，通过 feature flag、plan-only、shadow compare 和分 skill 切流替换旧 `single_agent/flow.py` 主链路。

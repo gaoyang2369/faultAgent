@@ -1,9 +1,4 @@
-"""Agent Engine V2 sidecar contracts.
-
-These models are intentionally independent from the legacy single-agent
-runtime. Phase 1 only defines serializable contracts for later plan-only,
-shadow, and runtime work.
-"""
+"""Agent Engine V2 contracts."""
 
 from __future__ import annotations
 
@@ -23,7 +18,7 @@ RiskLevel = Literal["low", "medium", "high", "critical"]
 class AgentEngineContract(BaseModel):
     """Base model for V2 contracts."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
 
 class IntentFrame(AgentEngineContract):
@@ -88,15 +83,134 @@ class SkillRoute(AgentEngineContract):
     blocked_skills: dict[str, str] = Field(default_factory=dict)
 
 
+class _DictCompatContract(AgentEngineContract):
+    """Small mapping-style bridge for older runtime/projection code."""
+
+    def get(self, key: str, default: Any = None) -> Any:
+        field = self._field_for_key(key)
+        return getattr(self, field, default) if field else default
+
+    def __getitem__(self, key: str) -> Any:
+        field = self._field_for_key(key)
+        if not field:
+            raise KeyError(key)
+        return getattr(self, field)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        field = self._field_for_key(key)
+        if not field:
+            raise KeyError(key)
+        setattr(self, field, value)
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and self._field_for_key(key) is not None
+
+    @classmethod
+    def _field_for_key(cls, key: str) -> str | None:
+        if key in cls.model_fields:
+            return key
+        for field_name, field_info in cls.model_fields.items():
+            if field_info.alias == key:
+                return field_name
+        return None
+
+
+class PlanGoal(_DictCompatContract):
+    """Normalized goal in a V2 execution snapshot."""
+
+    goal_id: str = ""
+    goal: str = ""
+    skill: str = ""
+    goal_type: str = ""
+    description: str = ""
+    device_refs: list[str] = Field(default_factory=list)
+    fault_code_refs: list[str] = Field(default_factory=list)
+    expected_outputs: list[str] = Field(default_factory=list)
+    risk_level: RiskLevel = "low"
+    source: str = "skill_compiler"
+
+
+class PlanEdge(_DictCompatContract):
+    """Directed dependency between typed execution nodes."""
+
+    source: str = Field(default="", alias="from")
+    target: str = Field(default="", alias="to")
+    condition: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class SqlNodeInputs(AgentEngineContract):
+    sql_query: str = ""
+    use_checker: bool = False
+    equipment_hint: str = ""
+    fault_code_hint: str = ""
+    device_refs: list[str] = Field(default_factory=list)
+    fault_code_refs: list[str] = Field(default_factory=list)
+    requested_tables: list[str] = Field(default_factory=list)
+    context_relation: str = ""
+
+
+class RagNodeInputs(AgentEngineContract):
+    query: str = ""
+    device_refs: list[str] = Field(default_factory=list)
+    fault_code_refs: list[str] = Field(default_factory=list)
+    context_relation: str = ""
+
+
+class ReportNodeInputs(AgentEngineContract):
+    title: str = ""
+    chart_payload: Any = None
+    operation_report_payload: str = ""
+    report_filename: str = ""
+    diagnosis_type: str = ""
+    device_refs: list[str] = Field(default_factory=list)
+    fault_code_refs: list[str] = Field(default_factory=list)
+    context_relation: str = ""
+
+
+class WorkorderNodeInputs(AgentEngineContract):
+    create_draft: bool = True
+    action_type: str = ""
+    workorder_action: str = ""
+    stale_refresh_required: bool = False
+    device_refs: list[str] = Field(default_factory=list)
+    fault_code_refs: list[str] = Field(default_factory=list)
+    context_relation: str = ""
+
+
+class ApprovalNodeInputs(AgentEngineContract):
+    approval_requirements: list[dict[str, Any]] = Field(default_factory=list)
+    interrupt_id: str = ""
+    device_refs: list[str] = Field(default_factory=list)
+    fault_code_refs: list[str] = Field(default_factory=list)
+    context_relation: str = ""
+
+
+class PlanNode(_DictCompatContract):
+    """Typed execution node contract consumed by WorkflowRuntimeExecutor."""
+
+    node_id: str = ""
+    node_type: str = ""
+    skill: str = ""
+    goal_id: str = ""
+    status: NodeStatus = "pending"
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    required_tools: list[str] = Field(default_factory=list)
+    retry: dict[str, Any] = Field(default_factory=dict)
+    condition: dict[str, Any] = Field(default_factory=dict)
+    requested_tables: list[str] = Field(default_factory=list)
+
+
 class ExecutionPlan(AgentEngineContract):
-    """Validated or candidate plan shape consumed by the future V2 runtime."""
+    """Validated or candidate plan shape consumed by the V2 runtime."""
 
     schema_version: str = "execution_plan.v1"
     plan_id: str = ""
     plan_version: str = "v2.empty"
-    goals: list[dict[str, Any]] = Field(default_factory=list)
-    nodes: list[dict[str, Any]] = Field(default_factory=list)
-    edges: list[dict[str, Any]] = Field(default_factory=list)
+    goals: list[PlanGoal] = Field(default_factory=list)
+    nodes: list[PlanNode] = Field(default_factory=list)
+    edges: list[PlanEdge] = Field(default_factory=list)
     required_evidence: list[str] = Field(default_factory=list)
     allowed_tools: list[str] = Field(default_factory=list)
     forbidden_tools: list[str] = Field(default_factory=list)

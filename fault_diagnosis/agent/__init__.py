@@ -1,4 +1,4 @@
-"""Agent Engine V2 sidecar package."""
+"""Agent Engine V2 package."""
 
 from .contracts import (
     EvidenceLedger,
@@ -7,12 +7,19 @@ from .contracts import (
     NodeResult,
     OutputFrame,
     PlanSnapshotV2,
+    PlanGoal,
+    PlanNode,
+    PlanEdge,
+    SqlNodeInputs,
+    RagNodeInputs,
+    ReportNodeInputs,
+    WorkorderNodeInputs,
+    ApprovalNodeInputs,
     RewriteFrame,
     ContextFrame,
     SkillRoute,
 )
 from .context import ContextFrameAdapter
-from .cutover import V2ExecutionDecision, decide_v2_execution, prepare_v2_execution_plan
 from .engine import AgentEngineV2
 from .evidence import EvidenceLedgerWriter, LedgerCommitResult, LedgerValidationResult, project_ledger_to_evidence_bundle
 from .flags import AgentEngineFlags, effective_skill_mode, load_agent_engine_flags, should_build_v2_compare
@@ -29,6 +36,7 @@ from .output import (
 )
 from .planning import PlanCompiler, PlanPolicyBridge, PlanValidationResult, PlanValidator
 from .runtime import CancelToken, RuntimeResult, RuntimeState, ToolRuntime, TypedNode, WorkflowRuntimeExecutor
+from .runtime.plan_preparer import V2ExecutionDecision, decide_v2_execution, prepare_v2_execution_plan
 from .skills import LoadedSkill, SkillLoader, SkillMetadata, SkillRegistry, SkillRouter
 from .understanding import IntentFrameBuilder, RewriteFrameBuilder
 
@@ -49,6 +57,9 @@ __all__ = [
     "NodeResult",
     "OutputFrame",
     "PlanCompiler",
+    "PlanEdge",
+    "PlanGoal",
+    "PlanNode",
     "PlanPolicyBridge",
     "PlanSnapshotV2",
     "PlanValidationResult",
@@ -66,6 +77,11 @@ __all__ = [
     "ToolRuntime",
     "V2ExecutionDecision",
     "WorkflowRuntimeExecutor",
+    "ApprovalNodeInputs",
+    "RagNodeInputs",
+    "ReportNodeInputs",
+    "SqlNodeInputs",
+    "WorkorderNodeInputs",
     "build_output_frame",
     "build_reportable_payload",
     "decide_v2_execution",

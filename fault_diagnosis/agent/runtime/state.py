@@ -16,7 +16,7 @@ RuntimeStatus = Literal["completed", "blocked", "failed", "cancelled"]
 
 
 class CancelToken:
-    """Small cancellation handle used by the sidecar runtime."""
+    """Small cancellation handle used by the V2 runtime."""
 
     def __init__(self) -> None:
         self.cancelled = False

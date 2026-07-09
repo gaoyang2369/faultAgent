@@ -1,4 +1,4 @@
-"""Thin adapters over existing tools for the single-agent diagnosis path."""
+"""Thin domain-neutral adapters over callable tools."""
 
 from __future__ import annotations
 
@@ -16,13 +16,14 @@ async def invoke_tool(tool: Any, payload: Any) -> Any:
     return await asyncio.to_thread(tool, payload)
 
 
-def build_sql_tools_map() -> dict[str, Any]:
+def build_sql_tools_map(tools: list[Any] | tuple[Any, ...] | None = None) -> dict[str, Any]:
     """Build a name -> SQL tool mapping."""
 
-    from fault_diagnosis.platform.tools.sql_tools import get_sqltools
+    if tools is None:
+        raise RuntimeError("SQL tools must be provided by the platform layer.")
 
     tools_map: dict[str, Any] = {}
-    for tool in get_sqltools():
+    for tool in tools:
         tool_name = getattr(tool, "name", "").strip()
         if tool_name:
             tools_map[tool_name] = tool

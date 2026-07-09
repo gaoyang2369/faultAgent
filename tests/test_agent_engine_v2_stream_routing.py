@@ -65,7 +65,7 @@ def test_v2_failure_returns_server_error_without_legacy_fallback(monkeypatch) ->
 
 async def _assert_v2_failure_returns_server_error_without_legacy_fallback(monkeypatch) -> None:
     class BrokenEngine:
-        def plan_only(self, **kwargs):  # noqa: ANN001, ARG002
+        def build_plan_snapshot(self, **kwargs):  # noqa: ANN001, ARG002
             raise RuntimeError("v2 boom")
 
     monkeypatch.setattr(config, "AGENT_ENGINE_VERSION", "v2")

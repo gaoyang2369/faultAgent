@@ -6,7 +6,9 @@ import json
 from typing import Any, AsyncGenerator
 
 from fault_diagnosis.shared.utils import summarize_identifier_for_log
+from fault_diagnosis.domain.context import ArtifactBackedCaseStore
 from fault_diagnosis.domain.context.conversation_context import ConversationContextAssembler
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact, list_thread_artifacts
 from fault_diagnosis.platform.persistence.repositories.conversation_store import ConversationRepository
 
 
@@ -70,7 +72,13 @@ class ConversationPersistenceService:
                 },
             )
             context.user_message_id = str(user_message.get("id") or "")
-            assembler = ConversationContextAssembler(conversation_repository=self.repository)
+            assembler = ConversationContextAssembler(
+                conversation_repository=self.repository,
+                case_store=ArtifactBackedCaseStore(
+                    artifact_lister=lambda thread_id, limit: list_thread_artifacts(thread_id, limit=limit)
+                ),
+                artifact_getter=get_thread_artifact,
+            )
             context.conversation_context = assembler.build(
                 thread_id=context.thread_id,
                 current_user_message=context.message,

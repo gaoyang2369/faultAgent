@@ -1,4 +1,4 @@
-"""Agent Engine V2 sidecar engine."""
+"""Agent Engine V2 snapshot builder."""
 
 from __future__ import annotations
 
@@ -16,14 +16,9 @@ from .understanding import IntentFrameBuilder, RewriteFrameBuilder
 
 
 class AgentEngineV2:
-    """Plan-only V2 sidecar.
+    """Build side-effect-free V2 plan snapshots."""
 
-    Phase 4 still avoids real tools, LLM calls, artifact writes, and legacy
-    route integration. It does produce a candidate plan and a server-validated
-    plan snapshot for policy and shadow-comparison work.
-    """
-
-    def plan_only(
+    def build_plan_snapshot(
         self,
         *,
         raw_message: str,
@@ -96,7 +91,7 @@ class AgentEngineV2:
             ),
             trace={
                 "engine": "agent_engine_v2",
-                "mode": "plan_only",
+                "mode": "build_plan_snapshot",
                 "status": snapshot_status,
                 "request_understanding": {
                     "raw_message": raw_message,
@@ -128,3 +123,8 @@ class AgentEngineV2:
             warnings=[issue.message for issue in validation.issues],
             metadata=snapshot_metadata,
         )
+
+    def plan_only(self, **kwargs: Any) -> PlanSnapshotV2:
+        """Deprecated compatibility wrapper; use build_plan_snapshot()."""
+
+        return self.build_plan_snapshot(**kwargs)

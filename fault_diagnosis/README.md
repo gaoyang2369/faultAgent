@@ -116,8 +116,12 @@ GET /chat/stream
   -> server/http/routers/chat.py
   -> ChatService.stream_chat
   -> server/agent_gateway/streaming.token_stream_events
-  -> AgentEngineV2.plan_only
+  -> AgentEngineV2.build_plan_snapshot
+  -> runtime/plan_preparer
   -> WorkflowRuntimeExecutor
+  -> typed nodes
+  -> EvidenceLedger
+  -> OutputFrame
   -> agent/output SSE/artifact projection
   -> platform persistence artifact save
 ```
@@ -236,7 +240,7 @@ SQL：
 运行态依赖：
 
 - MySQL：运行数据和健康检查。
-- OpenAI-compatible LLM：请求理解、SQL 规划 fallback、分析和最终回答。
+- OpenAI-compatible LLM：请求理解、SQL 规划降级、分析和最终回答。
 - Ollama / FAISS：本地 PDF 知识库。
 - PostgreSQL：可选 diagnosis artifact backend。
 - 本地文件系统：报告、artifact、历史索引、用户文件、知识文件 registry、工单 mock、审计和 trace。

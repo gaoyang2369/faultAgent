@@ -21,6 +21,7 @@ from fault_diagnosis.platform.persistence.repositories.conversation_store import
     get_conversation_repository,
     messages_to_history_payload,
 )
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact, list_thread_artifacts
 from fault_diagnosis.platform.persistence.repositories.history_index import get_history_index_repository
 from fault_diagnosis.server.use_cases.history_service import load_artifact_history_messages
 from fault_diagnosis.server.auth.session_scope import resolve_request_scope
@@ -32,7 +33,7 @@ from fault_diagnosis.server.agent_gateway.stream_control import (
 )
 from fault_diagnosis.server.agent_gateway.streaming import token_stream_events as default_token_stream_events
 from fault_diagnosis.agent import AgentEngineV2
-from fault_diagnosis.agent.cutover import prepare_v2_execution_plan
+from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_plan
 from fault_diagnosis.agent.planning import PlanPolicyBridge
 from .conversation_persistence import ConversationPersistenceService, parse_sse_payloads
 from fault_diagnosis.shared.utils import (
@@ -191,11 +192,11 @@ def _v2_plan_compat_payload(*, snapshot: Any, plan: Any) -> dict[str, Any]:
         "resolved_context": resolved_context,
         "goal_set": {
             "primary_goal_id": str(plan.goals[0].get("goal_id") or "") if plan.goals else "",
-            "goals": list(plan.goals),
+            "goals": [_dump_model(goal) for goal in plan.goals],
             "goal_types": [str(goal.get("goal_type") or "") for goal in plan.goals if goal.get("goal_type")],
             "expected_outputs": list(plan.expected_outputs),
         },
-        "goals": list(plan.goals),
+        "goals": [_dump_model(goal) for goal in plan.goals],
         "workflow_route": {
             "task_family": task_family,
             "policy_id": policy_id,
@@ -219,6 +220,12 @@ def _v2_plan_compat_payload(*, snapshot: Any, plan: Any) -> dict[str, Any]:
         "manual_confirmation": {},
         "authorization": authz,
     }
+
+
+def _dump_model(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return dict(value) if isinstance(value, dict) else value
 
 
 def _v2_plan_skip_reasons(enabled_nodes: dict[str, bool]) -> dict[str, str]:
@@ -296,8 +303,14 @@ class ChatService:
 
     def _build_read_only_conversation_context(self, app, context: AgentInvocationContext) -> dict[str, Any] | None:
         try:
+            from fault_diagnosis.domain.context import ArtifactBackedCaseStore
+
             return ConversationContextAssembler(
-                conversation_repository=self._conversation_repository(app)
+                conversation_repository=self._conversation_repository(app),
+                case_store=ArtifactBackedCaseStore(
+                    artifact_lister=lambda thread_id, limit: list_thread_artifacts(thread_id, limit=limit)
+                ),
+                artifact_getter=get_thread_artifact,
             ).build(
                 thread_id=context.thread_id,
                 current_user_message=context.message,
@@ -437,7 +450,7 @@ class ChatService:
             message_preview=summarize_text_for_log(message, limit=72),
         )
         conversation_context = self._build_read_only_conversation_context(request.app, context)
-        snapshot = AgentEngineV2().plan_only(
+        snapshot = AgentEngineV2().build_plan_snapshot(
             raw_message=context.message,
             thread_id=context.thread_id,
             request_id=context.request_id,
@@ -445,7 +458,7 @@ class ChatService:
             conversation_context=conversation_context,
             metadata={"source": "chat_plan"},
         )
-        plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id=context.thread_id)
+        plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id=context.thread_id, auth_context=context.auth_context)
         payload = snapshot.model_dump(mode="json", exclude_none=True)
         payload.update(_v2_plan_compat_payload(snapshot=snapshot, plan=plan))
         payload["thread_id"] = context.thread_id

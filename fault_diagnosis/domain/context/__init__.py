@@ -1,6 +1,6 @@
 """Context resolution public API."""
 
-from .case_store import ArtifactBackedCaseStore, build_case_state_snapshot, case_state_from_artifact
+from .case_store import ArtifactBackedCaseStore, build_case_state_snapshot, case_state_from_artifact, set_default_artifact_lister
 from .contracts import (
     CASE_STATE_SNAPSHOT_VERSION,
     CaseState,
@@ -15,6 +15,7 @@ from .resolver import ContextResolver
 
 __all__ = [
     "ArtifactBackedCaseStore",
+    "set_default_artifact_lister",
     "CASE_STATE_SNAPSHOT_VERSION",
     "CaseState",
     "ContextManager",

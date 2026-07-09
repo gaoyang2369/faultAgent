@@ -10,6 +10,7 @@ from fault_diagnosis.agent import (
     RewriteFrameBuilder,
     SkillRouter,
 )
+from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_plan
 from fault_diagnosis.agent.planning.plan_diff import diff_plans
 from fault_diagnosis.domain.security.permissions import build_auth_context
 
@@ -50,7 +51,7 @@ def test_guest_blocks_report_root_cause_and_workorder_plans() -> None:
     ]
 
     for message, skill in cases:
-        snapshot = AgentEngineV2().plan_only(raw_message=message, auth_context=build_auth_context(role="guest"))
+        snapshot = AgentEngineV2().build_plan_snapshot(raw_message=message, auth_context=build_auth_context(role="guest"))
 
         assert snapshot.skill_route.primary_skill == skill
         assert snapshot.status == "blocked"
@@ -60,15 +61,15 @@ def test_guest_blocks_report_root_cause_and_workorder_plans() -> None:
 
 
 def test_engineer_scope_checks_assets_and_tables() -> None:
-    denied_asset = AgentEngineV2().plan_only(
+    denied_asset = AgentEngineV2().build_plan_snapshot(
         raw_message="查询 J2 当前运行状态",
         auth_context=_engineer(assets=["J1号机"], tables=["real_data_01", "real_data_02"]),
     )
-    denied_table = AgentEngineV2().plan_only(
+    denied_table = AgentEngineV2().build_plan_snapshot(
         raw_message="查询 J2 当前运行状态",
         auth_context=_engineer(assets=["J2号机"], tables=["real_data_01"]),
     )
-    allowed = AgentEngineV2().plan_only(
+    allowed = AgentEngineV2().build_plan_snapshot(
         raw_message="查询 J2 当前运行状态",
         auth_context=_engineer(assets=["J2号机"], tables=["real_data_02"]),
     )
@@ -83,7 +84,7 @@ def test_engineer_scope_checks_assets_and_tables() -> None:
 
 
 def test_workorder_and_device_action_generate_approval_requirements() -> None:
-    workorder = AgentEngineV2().plan_only(
+    workorder = AgentEngineV2().build_plan_snapshot(
         raw_message="判断 J1 A07089 是否需要工单草稿",
         auth_context=_engineer(),
     )
@@ -159,3 +160,101 @@ def test_plan_diff_compares_legacy_and_v2_surfaces() -> None:
     assert diff["added"]["nodes"] == []
     assert diff["removed"]["nodes"] == []
     assert diff["changed"]["expected_outputs"] == ["answer", "status_brief"]
+
+
+def test_build_plan_snapshot_replaces_plan_only_with_compat_wrapper() -> None:
+    engine = AgentEngineV2()
+    direct = engine.build_plan_snapshot(raw_message="J1 当前状态", auth_context=_engineer())
+    compat = engine.plan_only(raw_message="J1 当前状态", auth_context=_engineer())
+
+    assert direct.schema_version == compat.schema_version
+    assert direct.execution_plan.nodes[0].node_type == "sql"
+
+
+def test_prepare_v2_execution_plan_wrapper_remains_compatible() -> None:
+    from fault_diagnosis.agent.cutover import prepare_v2_execution_plan as deprecated_prepare
+
+    snapshot = AgentEngineV2().build_plan_snapshot(raw_message="J1 当前状态", auth_context=_engineer())
+    prepared = deprecated_prepare(snapshot=snapshot, thread_id="thread.compat", auth_context=_engineer())
+
+    assert prepared.nodes[0].inputs["sql_query"]
+
+
+def test_validator_blocks_missing_runtime_inputs_before_runtime() -> None:
+    intent, _context, route = _route("J1 当前运行状态怎么样")
+    candidate = ExecutionPlan(
+        plan_id="candidate.missing.sql",
+        plan_version="v2.candidate.test",
+        goals=[{"goal_id": "goal_runtime", "skill": "runtime_status"}],
+        nodes=[
+            {
+                "node_id": "sql_1",
+                "node_type": "sql",
+                "skill": "runtime_status",
+                "goal_id": "goal_runtime",
+                "required_tools": ["sql.read"],
+                "inputs": {"device_refs": ["J1号机"]},
+            }
+        ],
+        allowed_tools=["sql.read"],
+    )
+
+    result = PlanValidator().validate(
+        candidate_plan=candidate,
+        skill_route=route,
+        intent_frame=intent,
+        auth_context=_engineer(),
+        require_runtime_inputs=True,
+    )
+
+    assert result.status == "blocked"
+    assert any(issue.code == "missing_sql_query" for issue in result.issues)
+
+
+def test_composite_alarm_status_workorder_plan_dedupes_shared_nodes() -> None:
+    snapshot = AgentEngineV2().build_plan_snapshot(
+        raw_message="A07089 是什么？现在 J1 还故障吗？要不要工单？",
+        auth_context=_engineer(),
+    )
+    plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id="thread.composite", auth_context=_engineer())
+    node_types = [node.node_type for node in plan.nodes]
+    edges = {(edge.get("from"), edge.get("to")) for edge in plan.edges}
+
+    assert node_types.count("sql") == 1
+    assert node_types.count("rag") == 1
+    assert node_types.count("analysis") == 1
+    assert "workorder" in node_types
+    assert ("sql_1", "analysis_1") in edges
+    assert ("rag_1", "analysis_1") in edges
+    assert ("analysis_1", "workorder_1") in edges
+
+
+def test_status_then_report_plan_shares_analysis_dependency() -> None:
+    snapshot = AgentEngineV2().build_plan_snapshot(
+        raw_message="查一下 J1 当前状态，如果有问题就生成报告",
+        auth_context=_engineer(),
+    )
+    plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id="thread.report", auth_context=_engineer())
+    node_types = [node.node_type for node in plan.nodes]
+    edges = {(edge.get("from"), edge.get("to")) for edge in plan.edges}
+
+    assert node_types.count("sql") == 1
+    assert node_types.count("analysis") == 1
+    assert node_types.count("report") == 1
+    assert ("analysis_1", "report_1") in edges
+
+
+def test_report_then_workorder_plan_reuses_analysis_for_workorder() -> None:
+    snapshot = AgentEngineV2().build_plan_snapshot(
+        raw_message="J1 生成报告，然后看看是否需要工单",
+        auth_context=_engineer(),
+    )
+    plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id="thread.report.workorder", auth_context=_engineer())
+    node_types = [node.node_type for node in plan.nodes]
+    edges = {(edge.get("from"), edge.get("to")) for edge in plan.edges}
+
+    assert node_types.count("analysis") == 1
+    assert node_types.count("report") == 1
+    assert node_types.count("workorder") == 1
+    assert ("analysis_1", "report_1") in edges
+    assert ("analysis_1", "workorder_1") in edges

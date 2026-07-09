@@ -88,8 +88,8 @@ def test_plan_snapshot_v2_schema_exposes_expected_top_level_fields() -> None:
         assert field_name in properties
 
 
-def test_agent_engine_v2_plan_only_returns_validated_phase4_snapshot() -> None:
-    snapshot = AgentEngineV2().plan_only(
+def test_agent_engine_v2_build_plan_snapshot_returns_validated_snapshot() -> None:
+    snapshot = AgentEngineV2().build_plan_snapshot(
         raw_message="  诊断 J1 A07089  ",
         thread_id="thread.phase1",
         request_id="request.phase1",

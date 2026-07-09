@@ -1,4 +1,4 @@
-"""Skill registry for Agent Engine V2 sidecar planning."""
+"""Skill registry for Agent Engine V2 planning."""
 
 from __future__ import annotations
 

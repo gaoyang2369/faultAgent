@@ -15,7 +15,7 @@ def test_plan_compare_covers_required_surfaces_and_writes_jsonl(tmp_path) -> Non
         "evidence_gaps": {"required_evidence": ["latest_runtime_status"]},
         "requested_output": "answer",
     }
-    v2 = AgentEngineV2().plan_only(
+    v2 = AgentEngineV2().build_plan_snapshot(
         raw_message="J1 当前运行状态怎么样",
         auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
         legacy_plan=legacy,
@@ -55,7 +55,7 @@ def test_plan_compare_marks_dangerous_tool_difference_for_review() -> None:
         risk_level="high",
         approval_requirements=[],
     )
-    v2 = AgentEngineV2().plan_only(
+    v2 = AgentEngineV2().build_plan_snapshot(
         raw_message="判断 J1 是否需要工单",
         auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
         llm_candidate_plan=candidate,

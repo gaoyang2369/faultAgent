@@ -9,10 +9,13 @@ GET /chat/stream
   -> server/http/routers/chat.py
   -> ChatService.stream_chat
   -> server/agent_gateway/streaming.token_stream_events
-  -> AgentEngineV2.plan_only
+  -> AgentEngineV2.build_plan_snapshot
+  -> runtime/plan_preparer
   -> WorkflowRuntimeExecutor
-  -> agent/output SSE/artifact projection
-  -> platform persistence artifact save
+  -> typed nodes
+  -> EvidenceLedger
+  -> OutputFrame
+  -> SSE/artifact projection
 ```
 
 Agent 内部核心链路：
@@ -23,11 +26,12 @@ user request
   -> ContextFrame
   -> RewriteFrame
   -> SkillRoute
-  -> ExecutionPlan validation
-  -> V2 typed runtime nodes
+  -> AgentEngineV2 plan snapshot
+  -> WorkflowRuntimeExecutor
+  -> typed nodes
   -> EvidenceLedger
   -> OutputFrame
-  -> SSE/artifact compat projection
+  -> SSE/artifact projection
   -> save artifact
 ```
 
@@ -43,7 +47,7 @@ user request
 - V2 artifacts
 - `OutputFrame`
 
-`workflow_*`、旧任务类型和旧意图字段只作为 SSE、artifact 和前端兼容投影存在，由 V2 output 层单向生成，不驱动 V2 skill 路由、计划、节点启停或 readiness。
+`workflow_*`、旧任务类型和旧意图字段只作为 SSE、artifact 和前端兼容投影存在，由 V2 output 层单向生成，不驱动 V2 skill routing、plan、节点启停或 readiness。
 
 ## 后端分层
 
@@ -71,7 +75,7 @@ start
   -> complete
 ```
 
-节点是否出现由 `SkillRoute` 和 `ExecutionPlan` 决定。缺设备、缺报告来源、权限不足或高风险动作由 V2 clarification/blocked/error 输出表达，不隐式回落到 legacy。
+节点是否出现由 `SkillRoute` 和 `ExecutionPlan` 决定。缺设备、缺报告来源、权限不足或高风险动作由 V2 clarification/blocked/error 输出表达。
 
 当前 typed nodes：
 
@@ -124,7 +128,7 @@ start
 运行依赖：
 
 - MySQL：运行数据。
-- OpenAI-compatible LLM：请求理解、SQL 规划 fallback、分析和最终回答。
+- OpenAI-compatible LLM：请求理解、SQL 规划降级、分析和最终回答。
 - Ollama / FAISS：PDF 知识库。
 - PostgreSQL：可选 diagnosis artifact backend。
 - 本地文件系统：报告、artifact、用户文件、历史索引、知识文件 registry、工单 mock、审计和 trace。

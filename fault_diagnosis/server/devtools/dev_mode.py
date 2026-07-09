@@ -19,7 +19,7 @@ from fault_diagnosis.shared.utils import safe_json_dumps
 from fault_diagnosis.shared.utils import summarize_identifier_for_log, summarize_text_for_log
 from fault_diagnosis.platform.paths import REPORTS_DIR
 from fault_diagnosis.agent import AgentEngineV2
-from fault_diagnosis.agent.cutover import prepare_v2_execution_plan
+from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_plan
 from fault_diagnosis.agent.planning import PlanPolicyBridge
 from fault_diagnosis.domain.security.contracts import AuthContext
 from fault_diagnosis.domain.security.permissions import build_auth_context
@@ -150,13 +150,13 @@ def build_dev_authorization(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run the local mock through V2 planning and policy validation."""
 
-    snapshot = AgentEngineV2().plan_only(
+    snapshot = AgentEngineV2().build_plan_snapshot(
         raw_message=message,
         thread_id="local-dev",
         auth_context=auth_context,
         metadata={"source": "local_dev"},
     )
-    plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id="local-dev")
+    plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id="local-dev", auth_context=auth_context)
     bridge = PlanPolicyBridge()
     primary_skill = snapshot.skill_route.primary_skill or "clarification"
     task_family = bridge.task_family_for_skill(primary_skill)
@@ -183,7 +183,7 @@ def build_dev_authorization(
         workflow_policy={"policy_id": policy_id},
         enabled_nodes=enabled_nodes,
         runtime_tools=runtime_tools,
-        goal_set={"goals": list(plan.goals)},
+        goal_set={"goals": [_dump_model(goal) for goal in plan.goals]},
         goals=[],
         objects=objects,
         action_target="workorder" if task_family == "action_or_workorder" else None,
@@ -200,7 +200,7 @@ def build_dev_authorization(
         "requested_output": requested_output,
         "risk_level": plan.risk_level,
         "goal_set": {
-            "goals": list(plan.goals),
+            "goals": [_dump_model(goal) for goal in plan.goals],
             "goal_types": [str(goal.get("goal_type") or "") for goal in plan.goals if goal.get("goal_type")],
         },
         "workflow_policy": {
@@ -220,6 +220,12 @@ def build_dev_authorization(
         },
     }
     return decision_payload, authorization
+
+
+def _dump_model(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return dict(value) if isinstance(value, dict) else value
 
 
 def _compat_task_from_v2(*, task_family: str, requested_output: str, goal_types: list[str]) -> str:

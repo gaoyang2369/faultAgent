@@ -53,8 +53,8 @@ def test_model_failure_uses_rule_fallback_and_records_trace() -> None:
     assert frame.model_trace["fallback_reason"] == "model_error:RuntimeError"
 
 
-def test_plan_only_includes_understanding_frames_and_trace() -> None:
-    snapshot = AgentEngineV2().plan_only(raw_message="A07089 是什么，现在 J1 还故障吗")
+def test_build_plan_snapshot_includes_understanding_frames_and_trace() -> None:
+    snapshot = AgentEngineV2().build_plan_snapshot(raw_message="A07089 是什么，现在 J1 还故障吗")
 
     assert snapshot.status == "validated"
     assert snapshot.intent_frame.fault_code_refs == ["A07089"]

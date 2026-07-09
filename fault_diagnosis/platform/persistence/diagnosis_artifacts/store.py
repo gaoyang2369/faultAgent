@@ -58,6 +58,7 @@ def configure_artifact_store_backend(backend: ArtifactStoreBackend) -> ArtifactS
     global _BACKEND
     with _BACKEND_LOCK:
         _BACKEND = backend
+        _register_domain_artifact_lister()
         return _BACKEND
 
 
@@ -76,6 +77,7 @@ def get_artifact_store_backend() -> ArtifactStoreBackend:
     with _BACKEND_LOCK:
         if _BACKEND is None:
             _BACKEND = _build_backend_from_env()
+            _register_domain_artifact_lister()
         return _BACKEND
 
 
@@ -95,6 +97,15 @@ def list_thread_artifacts(thread_id: str, limit: int = 20) -> list[DiagnosisArti
     """读取指定 thread_id 最近若干条结构化产物。"""
 
     return get_artifact_store_backend().list_thread_artifacts(thread_id, limit=limit)
+
+
+def _register_domain_artifact_lister() -> None:
+    try:
+        from fault_diagnosis.domain.context import set_default_artifact_lister
+
+        set_default_artifact_lister(lambda thread_id, limit: list_thread_artifacts(thread_id, limit=limit))
+    except Exception:
+        return
 
 
 def clear_thread_artifact(thread_id: str) -> None:

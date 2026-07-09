@@ -13,8 +13,8 @@
 /chat/stream
   -> ChatService.stream_chat
   -> server/agent_gateway/streaming.token_stream_events
-  -> AgentEngineV2.plan_only
-  -> prepare_v2_execution_plan
+  -> AgentEngineV2.build_plan_snapshot
+  -> runtime/plan_preparer
   -> WorkflowRuntimeExecutor
   -> agent/output projection
   -> DiagnosisArtifactEnvelope

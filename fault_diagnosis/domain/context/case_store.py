@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import list_thread_artifacts
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
 from .contracts import (
     CASE_STATE_SNAPSHOT_VERSION,
@@ -16,16 +16,21 @@ from .contracts import (
 _STALE_MARKERS = ("已滞后", "滞后", "stale", "STALE", "非实时", "不代表实时")
 
 
+ArtifactLister = Callable[[str, int], list[DiagnosisArtifactEnvelope]]
+_DEFAULT_ARTIFACT_LISTER: ArtifactLister | None = None
+
+
 class ArtifactBackedCaseStore:
     """Project thread-local CaseState objects from diagnosis artifacts."""
 
-    def __init__(self, *, limit: int = 5):
+    def __init__(self, *, limit: int = 5, artifact_lister: ArtifactLister | None = None):
         self.limit = max(1, limit)
+        self.artifact_lister = artifact_lister or _DEFAULT_ARTIFACT_LISTER or _empty_artifact_lister
 
     def load(self, thread_id: str) -> ConversationDiagnosisState:
         cases: list[CaseState] = []
         try:
-            artifacts = list_thread_artifacts(thread_id, limit=self.limit)
+            artifacts = self.artifact_lister(thread_id, self.limit)
         except Exception:
             artifacts = []
         for envelope in artifacts:
@@ -37,6 +42,15 @@ class ArtifactBackedCaseStore:
             active_case_id=cases[0].case_id if cases else None,
             cases=cases,
         )
+
+
+def _empty_artifact_lister(thread_id: str, limit: int) -> list[DiagnosisArtifactEnvelope]:  # noqa: ARG001
+    return []
+
+
+def set_default_artifact_lister(artifact_lister: ArtifactLister | None) -> None:
+    global _DEFAULT_ARTIFACT_LISTER
+    _DEFAULT_ARTIFACT_LISTER = artifact_lister
 
 
 def case_state_from_artifact(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:

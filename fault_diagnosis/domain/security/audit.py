@@ -9,7 +9,6 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from fault_diagnosis.platform.paths import RUN_STATE_DIR
 from .contracts import AuthContext, AuthorizationDecision
 
 _LOCK = RLock()
@@ -17,7 +16,7 @@ _LOCK = RLock()
 
 class SecurityAuditLogger:
     def __init__(self, path: str | os.PathLike[str] | None = None) -> None:
-        self.path = Path(path or os.getenv("SECURITY_AUDIT_PATH") or Path(RUN_STATE_DIR) / "security-audit.jsonl")
+        self.path = Path(path or os.getenv("SECURITY_AUDIT_PATH") or Path("trash/run") / "security-audit.jsonl")
 
     def record(
         self,

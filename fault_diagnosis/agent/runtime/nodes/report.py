@@ -29,6 +29,8 @@ class ReportNode:
         )
         chart_payload = input_value(node, "chart_payload", None)
         operation_report_payload = str(input_value(node, "operation_report_payload", "") or "")
+        if operation_report_payload == "__runtime_artifacts__":
+            operation_report_payload = ""
         if not operation_report_payload:
             if not _has_reportable_material(state):
                 artifact = ReportStepArtifact(

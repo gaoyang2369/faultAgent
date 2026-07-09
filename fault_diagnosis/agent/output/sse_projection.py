@@ -291,15 +291,17 @@ def _policy_id(plan: ExecutionPlan) -> str:
 
 
 def _goal_set(plan: ExecutionPlan) -> dict[str, Any]:
-    return {"goals": list(plan.goals), "expected_outputs": list(plan.expected_outputs)}
+    return {
+        "goals": [_dump_model(goal) for goal in plan.goals],
+        "expected_outputs": list(plan.expected_outputs),
+    }
 
 
 def _request_summary(plan: ExecutionPlan) -> str:
     for goal in plan.goals:
-        if isinstance(goal, dict):
-            text = str(goal.get("description") or goal.get("goal") or "").strip()
-            if text:
-                return text
+        text = str(goal.get("description") or goal.get("goal") or "").strip()
+        if text:
+            return text
     return plan.plan_id or "Agent Engine V2 output"
 
 
@@ -312,6 +314,12 @@ def _artifact_dict(artifacts: dict[str, Any], key: str) -> dict[str, Any]:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json", exclude_none=True)
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _dump_model(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return dict(value) if isinstance(value, dict) else value
 
 
 def _produced_artifacts(artifact: Any) -> list[dict[str, Any]]:

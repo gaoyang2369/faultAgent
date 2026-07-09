@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
+import os
 from typing import Any
 
-import fault_diagnosis.platform.settings as config
 from .assets import asset_is_in_scope, data_source_terms_for_table
 from .sql_safety import (
     ALLOWED_SQL_TABLES,
@@ -67,7 +67,7 @@ def _time_window_predicate(
     force_latest_if_stale: bool = False,
 ) -> str:
     live_window = f"{column} >= NOW() - INTERVAL {amount} {unit}"
-    if not force_latest_if_stale and config.SQL_TIME_ANCHOR_MODE != "latest_row_if_stale":
+    if not force_latest_if_stale and os.getenv("DCMA_SQL_TIME_ANCHOR", "now") != "latest_row_if_stale":
         return live_window
     subquery_window = live_window
     max_time_source = f"(SELECT MAX({column}) FROM {table_name})"
