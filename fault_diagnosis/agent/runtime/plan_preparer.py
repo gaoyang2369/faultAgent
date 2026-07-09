@@ -79,10 +79,9 @@ def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: s
                 inputs.setdefault("operation_report_payload", "__runtime_artifacts__")
         if node_type == "workorder":
             inputs.setdefault("create_draft", True)
-            previous = _previous_artifact_payload(thread_id)
-            for key in ("sql_artifact", "knowledge_artifact", "analysis_artifact", "report_artifact"):
-                if isinstance(previous.get(key), dict):
-                    inputs.setdefault(f"previous_{key}", previous[key])
+            inputs.setdefault("manual_confirmation_required", True)
+            inputs.setdefault("draft_only", True)
+            inputs.update(_workorder_manifest_inputs(thread_id, snapshot=snapshot, inputs=inputs))
         if inputs:
             node["inputs"] = inputs
     return prepared
@@ -152,13 +151,89 @@ def _effective_fault_codes(snapshot: PlanSnapshotV2) -> list[str]:
     return list(snapshot.effective_request_frame.effective_fault_code_refs or snapshot.intent_frame.fault_code_refs)
 
 
-def _previous_artifact_payload(thread_id: str) -> dict[str, Any]:
+def _artifact_payload(thread_id: str) -> dict[str, Any]:
     if not thread_id:
         return {}
     artifact = get_thread_artifact(thread_id)
     if artifact is None or not isinstance(artifact.payload, dict):
         return {}
     return dict(artifact.payload)
+
+
+def _workorder_manifest_inputs(thread_id: str, *, snapshot: PlanSnapshotV2, inputs: dict[str, Any]) -> dict[str, Any]:
+    manifests = _artifact_manifests(thread_id)
+    target_id = str(
+        inputs.get("target_artifact_id")
+        or snapshot.effective_request_frame.target_artifact_id
+        or ""
+    )
+    selected = _select_manifest(manifests, target_id=target_id)
+    refs = _source_artifact_refs(selected, target_id=target_id, target_type=str(inputs.get("target_artifact_type") or ""))
+    result: dict[str, Any] = {}
+    if refs:
+        result["source_artifact_refs"] = refs
+    if selected:
+        result["selected_findings_summary"] = _as_text_list(selected.get("findings"))[:6]
+        result["risk_level"] = str(selected.get("risk_level") or selected.get("severity") or "")
+        result["diagnosis_summary"] = str(selected.get("diagnosis_summary") or "")
+        result["evidence_freshness"] = str(selected.get("freshness") or "")
+        result["report_url"] = str(selected.get("report_url") or selected.get("report_filename") or "")
+        if str(selected.get("freshness") or "") == "stale":
+            result["stale_refresh_required"] = True
+            result["stale_evidence_disclosure_required"] = True
+    if snapshot.effective_request_frame.stale_evidence_disclosure_required:
+        result["stale_refresh_required"] = True
+        result["stale_evidence_disclosure_required"] = True
+    return result
+
+
+def _artifact_manifests(thread_id: str) -> list[dict[str, Any]]:
+    payload = _artifact_payload(thread_id)
+    raw = payload.get("artifact_manifests")
+    return [dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+
+
+def _select_manifest(manifests: list[dict[str, Any]], *, target_id: str) -> dict[str, Any]:
+    if target_id:
+        for item in manifests:
+            if str(item.get("artifact_id") or "") == target_id:
+                return item
+    priority = {
+        "report_artifact": 0,
+        "structured_analysis_artifact": 1,
+        "analysis_artifact": 2,
+    }
+    candidates = [
+        item
+        for item in manifests
+        if str(item.get("status") or "completed") == "completed"
+        and str(item.get("artifact_type") or "") in priority
+    ]
+    return sorted(candidates, key=lambda item: priority.get(str(item.get("artifact_type") or ""), 99))[0] if candidates else {}
+
+
+def _source_artifact_refs(selected: dict[str, Any], *, target_id: str, target_type: str) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    artifact_id = str(selected.get("artifact_id") or target_id or "")
+    artifact_type = str(selected.get("artifact_type") or target_type or "")
+    if artifact_id:
+        refs.append({"artifact_id": artifact_id, "artifact_type": artifact_type})
+    for key, artifact_type in (
+        ("linked_analysis_artifact_id", "analysis_artifact"),
+        ("linked_sql_artifact_id", "sql_artifact"),
+    ):
+        value = str(selected.get(key) or "")
+        if value:
+            refs.append({"artifact_id": value, "artifact_type": artifact_type})
+    return refs
+
+
+def _as_text_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    return [str(value)] if str(value).strip() else []
 
 
 def _reportable_payload(thread_id: str) -> dict[str, Any]:

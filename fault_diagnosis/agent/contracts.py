@@ -300,10 +300,14 @@ class WorkorderNodeInputs(AgentEngineContract):
     target_evidence_bundle_id: str | None = None
     target_report_id: str | None = None
     stale_evidence_disclosure_required: bool = False
-    previous_sql_artifact: dict[str, Any] = Field(default_factory=dict)
-    previous_knowledge_artifact: dict[str, Any] = Field(default_factory=dict)
-    previous_analysis_artifact: dict[str, Any] = Field(default_factory=dict)
-    previous_report_artifact: dict[str, Any] = Field(default_factory=dict)
+    source_artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
+    selected_findings_summary: list[str] = Field(default_factory=list)
+    risk_level: str = ""
+    diagnosis_summary: str = ""
+    evidence_freshness: str = ""
+    report_url: str = ""
+    manual_confirmation_required: bool = True
+    draft_only: bool = True
 
 
 class ApprovalNodeInputs(AgentEngineContract):

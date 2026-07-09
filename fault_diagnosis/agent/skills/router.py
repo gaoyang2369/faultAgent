@@ -141,8 +141,11 @@ def _needs_clarification(
     intent_frame: IntentFrame,
     effective_request_frame: EffectiveRequestFrame | None = None,
 ) -> bool:
-    if effective_request_frame is not None and effective_request_frame.needs_clarification:
-        return True
+    if effective_request_frame is not None:
+        if effective_request_frame.needs_clarification:
+            return True
+        if _effective_request_has_executable_target(effective_request_frame):
+            return False
     if context_frame.relation_to_previous == "ambiguous":
         return True
     if context_frame.missing_context and any(item in intent_frame.ambiguities for item in ("missing_device", "deictic_reference_without_context")):
@@ -191,10 +194,23 @@ def _skill_inputs(
         "device_refs": device_refs,
         "fault_code_refs": fault_code_refs,
         "requested_outputs": list(dict.fromkeys(requested_outputs)),
+        "requested_output_mode": effective_request_frame.requested_output_mode if effective_request_frame is not None else "",
+        "requested_action": effective_request_frame.requested_action if effective_request_frame is not None else "",
+        "semantic_intent": effective_request_frame.semantic_intent if effective_request_frame is not None else "",
+        "target_artifact_id": effective_request_frame.target_artifact_id if effective_request_frame is not None else None,
+        "target_artifact_type": effective_request_frame.target_artifact_type if effective_request_frame is not None else None,
+        "target_evidence_bundle_id": effective_request_frame.target_evidence_bundle_id if effective_request_frame is not None else None,
+        "target_report_id": effective_request_frame.target_report_id if effective_request_frame is not None else None,
+        "stale_evidence_disclosure_required": (
+            effective_request_frame.stale_evidence_disclosure_required if effective_request_frame is not None else False
+        ),
         "user_rewrite": rewrite_frame.user_rewrite,
         "retrieval_queries": list(rewrite_frame.retrieval_queries),
         "context_relation": context_frame.relation_to_previous,
-        "inherited_slots": dict(context_frame.inherited_slots),
+        "debug_context_relation": context_frame.relation_to_previous,
+        "debug_missing_context": list(context_frame.missing_context),
+        "debug_reuse_blockers": list(context_frame.reuse_blockers),
+        "debug_inherited_slots": dict(context_frame.inherited_slots),
         "effective_request": effective_request_frame.model_dump(mode="json", exclude_none=True) if effective_request_frame is not None else {},
         "loaded_skill_names": list(loaded_skills),
     }
@@ -212,6 +228,19 @@ def _confidence(intent_frame: IntentFrame, selected: list[str], context_frame: C
 
 def _dedupe(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))
+
+
+def _effective_request_has_executable_target(frame: EffectiveRequestFrame) -> bool:
+    if frame.target_artifact_id:
+        return True
+    semantic = frame.semantic_intent
+    if semantic in {"explain_fault_code", "expand_previous_answer", "show_manual_fields"}:
+        return bool(frame.effective_fault_code_refs)
+    if semantic in {"create_workorder_draft", "decide_workorder", "refresh_then_decide_workorder"}:
+        return bool(frame.effective_device_refs)
+    if semantic in {"generate_report", "generate_report_from_previous", "check_runtime_status", "diagnose_from_runtime"}:
+        return bool(frame.effective_device_refs or frame.effective_fault_code_refs)
+    return bool(frame.effective_device_refs or frame.effective_fault_code_refs)
 
 
 class _EmptyLoaded:

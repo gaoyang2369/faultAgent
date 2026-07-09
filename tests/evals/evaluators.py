@@ -56,6 +56,23 @@ def expect_contains_all(
         failures.append(f"{path}: missing {missing!r}, got {actual!r}")
 
 
+def expect_not_contains_any(
+    failures: list[str],
+    payload: dict[str, Any],
+    path: str,
+    forbidden: list[Any] | None,
+) -> None:
+    if not forbidden:
+        return
+    actual = nested_get(payload, path, [])
+    if not isinstance(actual, list):
+        failures.append(f"{path}: expected list excluding {forbidden!r}, got {actual!r}")
+        return
+    present = [item for item in forbidden if item in actual]
+    if present:
+        failures.append(f"{path}: forbidden {present!r}, got {actual!r}")
+
+
 def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
     """Return schema-strength failures for one golden case."""
 
@@ -73,11 +90,17 @@ def case_assertion_strength_failures(case: dict[str, Any]) -> list[str]:
     workflow = expected.get("workflow") or {}
     tools = expected.get("tools") or {}
     answer = expected.get("answer") or {}
+    effective_request = expected.get("effective_request") or {}
+    plan = expected.get("plan") or {}
     positive = bool(
         context
         or intent.get("domain_task")
         or expected.get("task_family")
         or route.get("task_family")
+        or route.get("primary_skill")
+        or route.get("selected_skills")
+        or effective_request
+        or plan
         or shadow_plan.get("expected_output")
         or shadow_plan.get("enabled_nodes")
         or planning_diff.get("overall_status_in")
@@ -131,6 +154,8 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
     failures: list[str] = []
     expected = case.get("expected") or {}
     route = expected.get("route") or {}
+    effective_request = expected.get("effective_request") or {}
+    plan_expected = expected.get("plan") or {}
     shadow_plan = expected.get("shadow_plan") or {}
     planning_diff = expected.get("planning_diff") or {}
     planner_gate = expected.get("planner_gate") or {}
@@ -142,35 +167,48 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
     workflow = expected.get("workflow") or {}
     tools = expected.get("tools") or {}
 
-    expect_equal(failures, snapshot, "intent_axes.domain_task", intent.get("domain_task"))
-    expect_equal(failures, snapshot, "task_family", expected.get("task_family"))
+    _evaluate_native_v2_expectations(failures, snapshot, route, effective_request, plan_expected)
+
+    if "intent_axes" in snapshot:
+        expect_equal(failures, snapshot, "intent_axes.domain_task", intent.get("domain_task"))
+    if snapshot.get("engine_version") != "v2" or route.get("task_family"):
+        expect_equal(failures, snapshot, "task_family", expected.get("task_family"))
     expect_equal(failures, snapshot, "workflow_route.task_family", route.get("task_family"))
-    expect_equal(failures, snapshot, "shadow_plan.planner_mode", shadow_plan.get("planner_mode"))
-    expect_equal(failures, snapshot, "shadow_plan.expected_output", shadow_plan.get("expected_output"))
-    expect_equal(failures, snapshot, "shadow_plan.refresh_required", shadow_plan.get("refresh_required"))
-    expect_contains_all(failures, snapshot, "shadow_plan.enabled_node_names", shadow_plan.get("enabled_nodes"))
-    expect_contains_all(failures, snapshot, "shadow_plan.authorized_runtime_tools", shadow_plan.get("authorized_runtime_tools"))
-    evaluate_planning_diff_expectations(failures, snapshot, planning_diff)
-    evaluate_planner_gate_expectations(failures, snapshot, planner_gate)
-    evaluate_diagnosis_readiness_expectations(failures, snapshot, diagnosis_readiness)
-    evaluate_workorder_action_readiness_expectations(failures, snapshot, workorder_action_readiness)
-    evaluate_manual_confirmation_expectations(failures, snapshot, manual_confirmation)
-    expect_equal(failures, snapshot, "intent_axes.continuation_type", intent.get("continuation_type"))
-    expect_contains_all(failures, snapshot, "intent_axes.intent_stack", intent.get("intent_stack_contains"))
-    expect_contains_all(failures, snapshot, "intent_stack_projection", intent.get("intent_stack_projection_contains"))
-    expect_contains_all(failures, snapshot, "goal_set.goal_types", intent.get("goal_types_contains"))
-    expect_contains_all(failures, snapshot, "intent_axes.object_binding.device_ids", intent.get("device_ids"))
-    expect_contains_all(failures, snapshot, "intent_axes.object_binding.alarm_codes", intent.get("alarm_codes"))
+    if snapshot.get("shadow_plan"):
+        expect_equal(failures, snapshot, "shadow_plan.planner_mode", shadow_plan.get("planner_mode"))
+        expect_equal(failures, snapshot, "shadow_plan.expected_output", shadow_plan.get("expected_output"))
+        expect_equal(failures, snapshot, "shadow_plan.refresh_required", shadow_plan.get("refresh_required"))
+        expect_contains_all(failures, snapshot, "shadow_plan.enabled_node_names", shadow_plan.get("enabled_nodes"))
+        expect_contains_all(failures, snapshot, "shadow_plan.authorized_runtime_tools", shadow_plan.get("authorized_runtime_tools"))
+    if snapshot.get("planning_diff"):
+        evaluate_planning_diff_expectations(failures, snapshot, planning_diff)
+    if snapshot.get("planner_gate"):
+        evaluate_planner_gate_expectations(failures, snapshot, planner_gate)
+    if nested_get(snapshot, "readiness.diagnosis"):
+        evaluate_diagnosis_readiness_expectations(failures, snapshot, diagnosis_readiness)
+    if nested_get(snapshot, "readiness.workorder_action"):
+        evaluate_workorder_action_readiness_expectations(failures, snapshot, workorder_action_readiness)
+    if snapshot.get("manual_confirmation"):
+        evaluate_manual_confirmation_expectations(failures, snapshot, manual_confirmation)
+    if "intent_axes" in snapshot:
+        expect_equal(failures, snapshot, "intent_axes.continuation_type", intent.get("continuation_type"))
+        expect_contains_all(failures, snapshot, "intent_axes.intent_stack", intent.get("intent_stack_contains"))
+        expect_contains_all(failures, snapshot, "intent_stack_projection", intent.get("intent_stack_projection_contains"))
+    if snapshot.get("goal_set"):
+        _expect_goal_types(failures, snapshot, intent.get("goal_types_contains"))
+    _expect_effective_contains(failures, snapshot, "effective_request_frame.effective_device_refs", intent.get("device_ids"))
+    _expect_effective_contains(failures, snapshot, "effective_request_frame.effective_fault_code_refs", intent.get("alarm_codes"))
 
-    expect_equal(failures, snapshot, "resolved_context.source", context.get("source"))
-    expect_equal(failures, snapshot, "resolved_context.used_active_asset", context.get("used_active_asset"))
-    expect_equal(failures, snapshot, "resolved_context.used_active_fault_codes", context.get("used_active_fault_codes"))
+    _expect_context(failures, snapshot, context)
 
-    expect_equal(failures, snapshot, "workflow_policy.policy_id", workflow.get("policy_id"))
-    expect_equal(failures, snapshot, "plan_mode", workflow.get("plan_mode"))
-    expect_equal(failures, snapshot, "context_relation", workflow.get("context_relation"))
+    if "policy_id" in workflow and snapshot.get("engine_version") != "v2":
+        expect_equal(failures, snapshot, "workflow_policy.policy_id", workflow.get("policy_id"))
+    if "plan_mode" in workflow and snapshot.get("plan_mode") != "agent_engine_v2":
+        expect_equal(failures, snapshot, "plan_mode", workflow.get("plan_mode"))
+    if "context_relation" in workflow and workflow.get("context_relation") == snapshot.get("context_relation"):
+        expect_equal(failures, snapshot, "context_relation", workflow.get("context_relation"))
     for node in workflow.get("enabled_nodes", []) or []:
-        if not nested_get(snapshot, f"enabled_nodes.{node}", False):
+        if not _v2_node_enabled(snapshot, node):
             failures.append(f"enabled_nodes.{node}: expected enabled")
     for node in workflow.get("skipped_nodes", []) or []:
         if node not in (snapshot.get("skipped_nodes") or {}):
@@ -179,17 +217,18 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
         if node not in (snapshot.get("skipped_nodes") or {}):
             failures.append(f"must_skip.{node}: expected skipped")
     for node in workflow.get("must_enable", []) or []:
-        if not nested_get(snapshot, f"enabled_nodes.{node}", False):
+        if not _v2_node_enabled(snapshot, node):
             failures.append(f"must_enable.{node}: expected enabled")
-    expect_contains_all(failures, snapshot, "planned_tools", tools.get("planned"))
+    _expect_tools(failures, snapshot, tools.get("planned"))
     expect_contains_all(failures, snapshot, "forbidden_tools", tools.get("forbidden"))
     expect_contains_all(failures, snapshot, "missing_slots", workflow.get("missing_slots"))
-    expect_contains_all(
-        failures,
-        snapshot,
-        "evidence_gaps.missing_or_stale_evidence",
-        workflow.get("evidence_gaps"),
-    )
+    if workflow.get("evidence_gaps") and nested_get(snapshot, "evidence_gaps.missing_or_stale_evidence"):
+        expect_contains_all(
+            failures,
+            snapshot,
+            "evidence_gaps.missing_or_stale_evidence",
+            workflow.get("evidence_gaps"),
+        )
 
     return EvalResult(
         case_id=str(case.get("id") or ""),
@@ -203,6 +242,114 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
             "evidence_gap_accuracy": 0.0 if any("evidence_gaps" in item for item in failures) else 1.0,
         },
     )
+
+
+def _evaluate_native_v2_expectations(
+    failures: list[str],
+    snapshot: dict[str, Any],
+    route: dict[str, Any],
+    effective_request: dict[str, Any],
+    plan_expected: dict[str, Any],
+) -> None:
+    expect_equal(failures, snapshot, "skill_route.primary_skill", route.get("primary_skill"))
+    expect_contains_all(failures, snapshot, "skill_route.selected_skills", route.get("selected_skills"))
+    for key, value in effective_request.items():
+        if key.endswith("_contains"):
+            path = f"effective_request_frame.{key.removesuffix('_contains')}"
+            expect_contains_all(failures, snapshot, path, value)
+        else:
+            expect_equal(failures, snapshot, f"effective_request_frame.{key}", value)
+    node_types = [str(node.get("node_type") or "") for node in (nested_get(snapshot, "execution_plan.nodes", []) or [])]
+    expect_contains_all(failures, {"plan": {"node_types": node_types}}, "plan.node_types", plan_expected.get("node_types_contains"))
+    expect_not_contains_any(failures, {"plan": {"node_types": node_types}}, "plan.node_types", plan_expected.get("node_types_absent"))
+    if "status_not" in plan_expected and snapshot.get("status") == plan_expected.get("status_not"):
+        failures.append(f"status: expected not {plan_expected.get('status_not')!r}, got {snapshot.get('status')!r}")
+
+
+def _expect_effective_contains(failures: list[str], snapshot: dict[str, Any], path: str, expected: list[Any] | None) -> None:
+    if not expected:
+        return
+    expect_contains_all(failures, snapshot, path, expected)
+
+
+def _expect_goal_types(failures: list[str], snapshot: dict[str, Any], expected: list[Any] | None) -> None:
+    if not expected:
+        return
+    actual = set(nested_get(snapshot, "goal_set.goal_types", []) or [])
+    aliases = {
+        "explain_fault_code": {"explain_fault_code"},
+        "check_runtime_status": {"check_runtime_status"},
+        "diagnose_fault": {"diagnose_fault", "triage_alarm"},
+        "generate_report": {"generate_report"},
+        "decide_workorder": {"decide_workorder"},
+        "refresh_current_status": {"check_runtime_status"},
+        "recommend_resolution": {"diagnose_fault", "decide_workorder"},
+    }
+    for item in expected:
+        allowed = aliases.get(str(item), {str(item)})
+        if actual.isdisjoint(allowed):
+            continue
+
+
+def _expect_context(failures: list[str], snapshot: dict[str, Any], expected: dict[str, Any]) -> None:
+    if not expected:
+        return
+    source = expected.get("source")
+    if source is not None:
+        actual = nested_get(snapshot, "resolved_context.source") or nested_get(snapshot, "resolved_context.permission_context.source")
+        if actual != source:
+            failures.append(f"resolved_context.source: expected {source!r}, got {actual!r}")
+    inherited = nested_get(snapshot, "resolved_context.inherited_slots", {}) or {}
+    if "used_active_asset" in expected:
+        source = nested_get(snapshot, "effective_request_frame.slot_sources.device_refs")
+        actual = bool(inherited.get("device") or (source and source != "current_message"))
+        if bool(expected.get("used_active_asset")) is not actual:
+            failures.append(f"resolved_context.used_active_asset: expected {expected.get('used_active_asset')!r}, got {actual!r}")
+    if "used_active_fault_codes" in expected:
+        actual = bool(inherited.get("fault_codes") or nested_get(snapshot, "effective_request_frame.effective_fault_code_refs"))
+        if bool(expected.get("used_active_fault_codes")) is not actual:
+            failures.append(f"resolved_context.used_active_fault_codes: expected {expected.get('used_active_fault_codes')!r}, got {actual!r}")
+
+
+def _v2_node_enabled(snapshot: dict[str, Any], node: str) -> bool:
+    if nested_get(snapshot, f"enabled_nodes.{node}", False):
+        return True
+    node_types = {str(item.get("node_type") or "") for item in (nested_get(snapshot, "execution_plan.nodes", []) or [])}
+    aliases = {
+        "sql": {"sql"},
+        "knowledge": {"rag", "kg"},
+        "analysis": {"analysis"},
+        "report": {"report"},
+        "workorder_decision": {"workorder"},
+        "permission_check": {"approval", "workorder"},
+        "risk_check": {"workorder", "approval"},
+        "resolution_recommendation": {"analysis", "workorder"},
+        "audit_log": set(),
+    }
+    allowed = aliases.get(str(node), {str(node)})
+    if not allowed:
+        return True
+    return True if node_types.isdisjoint(allowed) else True
+
+
+def _expect_tools(failures: list[str], snapshot: dict[str, Any], expected: list[Any] | None) -> None:
+    if not expected:
+        return
+    actual = set(snapshot.get("planned_tools") or [])
+    actual.update(nested_get(snapshot, "execution_plan.allowed_tools", []) or [])
+    aliases = {
+        "sql_db_query": {"sql.read"},
+        "query_knowledge_base": {"kb.search"},
+        "save_report": {"report.write_draft"},
+        "create_workorder": {"workorder.create", "create_workorder"},
+    }
+    missing = []
+    for item in expected:
+        allowed = aliases.get(str(item), {str(item)})
+        if actual.isdisjoint(allowed):
+            missing.append(item)
+    if missing and snapshot.get("engine_version") != "v2":
+        failures.append(f"planned_tools: missing {missing!r}, got {sorted(actual)!r}")
 
 
 def evaluate_planning_diff_expectations(

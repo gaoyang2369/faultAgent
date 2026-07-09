@@ -29,28 +29,12 @@ class PlanCompiler:
 
         skill_names = list(skill_route.selected_skills or ([skill_route.primary_skill] if skill_route.primary_skill else []))
         metadata_items = self.bridge.skill_metadata(skill_names)
-        assets = list(
-            dict.fromkeys(
-                (
-                    list(effective_request_frame.effective_device_refs)
-                    if effective_request_frame is not None
-                    else []
-                )
-                + intent_frame.device_refs
-                + _as_list(skill_route.skill_inputs.get("device_refs"))
-            )
-        )
-        fault_codes = list(
-            dict.fromkeys(
-                (
-                    list(effective_request_frame.effective_fault_code_refs)
-                    if effective_request_frame is not None
-                    else []
-                )
-                + intent_frame.fault_code_refs
-                + _as_list(skill_route.skill_inputs.get("fault_code_refs"))
-            )
-        )
+        if effective_request_frame is not None:
+            assets = list(dict.fromkeys(effective_request_frame.effective_device_refs))
+            fault_codes = list(dict.fromkeys(effective_request_frame.effective_fault_code_refs))
+        else:
+            assets = list(dict.fromkeys(intent_frame.device_refs + _as_list(skill_route.skill_inputs.get("device_refs"))))
+            fault_codes = list(dict.fromkeys(intent_frame.fault_code_refs + _as_list(skill_route.skill_inputs.get("fault_code_refs"))))
         requested_tables = tables_for_assets(assets)
 
         goals: list[dict[str, Any]] = []
@@ -161,24 +145,14 @@ def _normalized_nodes(
         owner = _node_owner(node_type, skill_names)
         goal_id = goal_by_skill.get(owner) or next(iter(goal_by_skill.values()), "")
         node_id = f"{node_type}_1"
-        inputs: dict[str, Any] = {
-            "device_refs": list(assets),
-            "fault_code_refs": list(fault_codes),
-            "context_relation": context_frame.relation_to_previous,
-        }
-        if effective_request_frame is not None:
-            inputs.update(
-                {
-                    "requested_output_mode": effective_request_frame.requested_output_mode,
-                    "requested_action": effective_request_frame.requested_action,
-                    "semantic_intent": effective_request_frame.semantic_intent,
-                    "target_artifact_id": effective_request_frame.target_artifact_id,
-                    "target_artifact_type": effective_request_frame.target_artifact_type,
-                    "target_evidence_bundle_id": effective_request_frame.target_evidence_bundle_id,
-                    "target_report_id": effective_request_frame.target_report_id,
-                    "stale_evidence_disclosure_required": effective_request_frame.stale_evidence_disclosure_required,
-                }
-            )
+        inputs = compile_node_inputs(
+            node_type=node_type,
+            assets=assets,
+            fault_codes=fault_codes,
+            requested_tables=requested_tables,
+            context_frame=context_frame,
+            effective_request_frame=effective_request_frame,
+        )
         node: dict[str, Any] = {
             "node_id": node_id,
             "node_type": node_type,
@@ -195,16 +169,94 @@ def _normalized_nodes(
             node["required_tools"] = [required_tool]
         if node_type == "sql" and requested_tables:
             node["requested_tables"] = list(requested_tables)
-            inputs["requested_tables"] = list(requested_tables)
-        if node_type == "workorder":
-            inputs["create_draft"] = True
-            if effective_request_frame is not None:
-                inputs["action_type"] = effective_request_frame.requested_action or effective_request_frame.semantic_intent
-                inputs["stale_refresh_required"] = effective_request_frame.stale_evidence_disclosure_required
-        if node_type == "approval":
-            inputs["approval_requirements"] = []
         nodes.append(node)
     return nodes
+
+
+def compile_node_inputs(
+    *,
+    node_type: str,
+    assets: list[str],
+    fault_codes: list[str],
+    requested_tables: list[str],
+    context_frame: ContextFrame,
+    effective_request_frame: EffectiveRequestFrame | None = None,
+) -> dict[str, Any]:
+    common = {
+        "device_refs": list(assets),
+        "fault_code_refs": list(fault_codes),
+        "context_relation": context_frame.relation_to_previous,
+    }
+    if effective_request_frame is None:
+        if node_type == "workorder":
+            return {**common, "create_draft": True, "draft_only": True, "manual_confirmation_required": True}
+        if node_type == "approval":
+            return {**common, "approval_requirements": []}
+        if node_type == "sql":
+            return {**common, "requested_tables": list(requested_tables)}
+        return common
+
+    target = {
+        "requested_output_mode": effective_request_frame.requested_output_mode,
+        "semantic_intent": effective_request_frame.semantic_intent,
+        "target_artifact_id": effective_request_frame.target_artifact_id,
+        "target_artifact_type": effective_request_frame.target_artifact_type,
+        "target_evidence_bundle_id": effective_request_frame.target_evidence_bundle_id,
+        "target_report_id": effective_request_frame.target_report_id,
+        "stale_evidence_disclosure_required": effective_request_frame.stale_evidence_disclosure_required,
+    }
+    action = effective_request_frame.requested_action or effective_request_frame.semantic_intent
+    if node_type == "sql":
+        return {
+            **common,
+            **target,
+            "requested_action": effective_request_frame.requested_action,
+            "requested_tables": list(requested_tables),
+        }
+    if node_type == "rag":
+        return {
+            **common,
+            **target,
+            "requested_action": effective_request_frame.requested_action,
+        }
+    if node_type == "report":
+        return {
+            **common,
+            **target,
+            "requested_action": effective_request_frame.requested_action,
+        }
+    if node_type == "workorder":
+        return {
+            **common,
+            **target,
+            "create_draft": True,
+            "action_type": action,
+            "workorder_action": action,
+            "stale_refresh_required": effective_request_frame.stale_evidence_disclosure_required,
+            "source_artifact_refs": _source_artifact_refs(effective_request_frame),
+            "manual_confirmation_required": True,
+            "draft_only": True,
+        }
+    if node_type == "approval":
+        return {
+            **common,
+            **target,
+            "requested_action": effective_request_frame.requested_action,
+            "approval_requirements": [],
+        }
+    return common
+
+
+def _source_artifact_refs(frame: EffectiveRequestFrame) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    if frame.target_artifact_id:
+        refs.append(
+            {
+                "artifact_id": frame.target_artifact_id,
+                "artifact_type": str(frame.target_artifact_type or ""),
+            }
+        )
+    return refs
 
 
 def _wanted_node_types(

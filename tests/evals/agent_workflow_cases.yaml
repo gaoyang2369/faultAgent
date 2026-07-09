@@ -955,6 +955,21 @@ cases:
     context:
       source: conversation_state
       used_active_fault_codes: true
+    effective_request:
+      semantic_intent: expand_previous_answer
+      requested_output_mode: detailed
+      effective_fault_code_refs_contains:
+      - A07089
+      needs_clarification: false
+    route:
+      primary_skill: fault_code_explain
+      selected_skills:
+      - fault_code_explain
+    plan:
+      node_types_contains:
+      - rag
+      node_types_absent:
+      - clarification
     intent:
       alarm_codes:
       - A07089
@@ -1036,6 +1051,26 @@ cases:
     context:
       source: conversation_state
       used_active_asset: true
+    effective_request:
+      semantic_intent: create_workorder_draft
+      requested_action: create_workorder_draft
+      effective_device_refs_contains:
+      - J1
+      effective_fault_code_refs_contains:
+      - A07089
+      target_artifact_type: report_artifact
+      needs_clarification: false
+    route:
+      primary_skill: workorder_decision
+      selected_skills:
+      - workorder_decision
+    plan:
+      node_types_contains:
+      - workorder
+      - approval
+      node_types_absent:
+      - clarification
+      status_not: blocked
     intent:
       device_ids:
       - J1

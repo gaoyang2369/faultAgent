@@ -324,6 +324,50 @@ def test_v2_artifact_projection_persists_manifests_and_case_snapshot() -> None:
     assert snapshot["latest_artifact_type"] == "report_artifact"
 
 
+def test_manifest_projection_extracts_fault_code_from_analysis_and_evidence_without_structured_payload() -> None:
+    bundle = EvidenceBundle(
+        bundle_id="bundle.analysis.codes",
+        trace_id="trace.analysis.codes",
+        evidence_items=[
+            EvidenceItem(
+                evidence_id="ev_codes",
+                evidence_type="alarm_event",
+                source_type="sql",
+                source_name="real_data_01",
+                summary="样本窗口内 A07089 持续出现。",
+                metadata={"alarm_codes": ["A07089"]},
+            )
+        ],
+        claims=[],
+        final_claim_ids=[],
+    )
+    analysis = AnalysisStepArtifact(
+        success=True,
+        conclusion="G120电机1 最新记录事件码/告警码为 A07089，建议复核当前状态。",
+        basis=["事件码/告警码统计：A07089。"],
+        recommendations=["刷新当前状态。"],
+        confidence="medium",
+    )
+    report = ReportStepArtifact(success=True, report_filename="g120.html", report_url="/reports/g120.html")
+
+    envelope = project_artifact_envelope(
+        thread_id="thread.analysis.codes",
+        output_frame=build_output_frame(status="completed", artifacts={"analysis_artifact": analysis, "report_artifact": report}, evidence_bundle=bundle),
+        evidence_bundle=bundle,
+        artifacts={"analysis_artifact": analysis, "report_artifact": report},
+        node_results=[],
+        trace={"trace_id": "trace.analysis.codes"},
+        request_summary="生成G120电机1的运行报告",
+    )
+
+    manifests = envelope.payload["artifact_manifests"]
+    analysis_manifest = next(item for item in manifests if item["artifact_type"] == "analysis_artifact")
+    report_manifest = next(item for item in manifests if item["artifact_type"] == "report_artifact")
+    assert analysis_manifest["fault_code_refs"] == ["A07089"]
+    assert report_manifest["fault_code_refs"] == ["A07089"]
+    assert envelope.payload["case_state_snapshot"]["active_fault_codes"] == ["A07089"]
+
+
 def test_artifact_type_mapping_for_status_report_and_clarification() -> None:
     status = project_artifact_envelope(
         thread_id="thread.status",

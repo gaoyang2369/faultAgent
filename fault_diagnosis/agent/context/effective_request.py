@@ -49,7 +49,7 @@ class ContextSemanticResolver:
             }
         if any(word in compact for word in REPORT_WORDS):
             return {
-                "semantic_intent": "generate_report_from_previous",
+                "semantic_intent": "generate_report_from_previous" if base.target_artifact_id else "generate_report",
                 "requested_output_mode": "report",
                 "confidence": 0.72,
                 "rationale_short": "report_followup",
@@ -98,6 +98,7 @@ class ContextSemanticResolver:
                 "show_manual_fields",
                 "check_runtime_status",
                 "diagnose_from_runtime",
+                "generate_report",
                 "generate_report_from_previous",
                 "decide_workorder",
                 "create_workorder_draft",
@@ -237,6 +238,7 @@ class EffectiveRequestBuilder:
 
         _normalize_semantics(frame, compact)
         _validate_ambiguity(frame, target=target, manifests=manifests, compact=compact)
+        _finalize_contract(frame, context_frame=context_frame)
         return frame
 
 
@@ -287,14 +289,16 @@ def _validate_ambiguity(
     if frame.effective_device_refs and frame.effective_fault_code_refs:
         return
     if target is not None:
-        if _has_any(compact, WORKORDER_WORDS) and len(target.device_refs) != 1:
+        target_or_effective_devices = list(target.device_refs or frame.effective_device_refs)
+        target_or_effective_faults = list(target.fault_code_refs or frame.effective_fault_code_refs)
+        if _has_any(compact, WORKORDER_WORDS) and len(target_or_effective_devices) != 1:
             frame.needs_clarification = True
             frame.clarification_question = "请确认要为哪个设备创建或判断工单。"
-            frame.ambiguity = {"slot": "device", "candidate_count": len(target.device_refs), "priority": "target_artifact"}
-        if _has_any(compact, DETAIL_WORDS) and len(target.fault_code_refs) != 1:
+            frame.ambiguity = {"slot": "device", "candidate_count": len(target_or_effective_devices), "priority": "target_artifact"}
+        if _has_any(compact, DETAIL_WORDS) and len(target_or_effective_faults) != 1:
             frame.needs_clarification = True
             frame.clarification_question = "请确认要展开哪个故障码。"
-            frame.ambiguity = {"slot": "fault_code", "candidate_count": len(target.fault_code_refs), "priority": "target_artifact"}
+            frame.ambiguity = {"slot": "fault_code", "candidate_count": len(target_or_effective_faults), "priority": "target_artifact"}
         return
     if _has_any(compact, WORKORDER_WORDS) and len(_unique_device_refs(manifests)) > 1:
         frame.needs_clarification = True
@@ -329,6 +333,27 @@ def _normalize_semantics(frame: EffectiveRequestFrame, compact: str) -> None:
         frame.task_family = "knowledge"
     elif frame.semantic_intent in {"check_runtime_status", "diagnose_from_runtime"}:
         frame.task_family = "diagnosis"
+
+
+def _finalize_contract(frame: EffectiveRequestFrame, *, context_frame: ContextFrame) -> None:
+    resolved = bool(frame.target_artifact_id or frame.effective_device_refs or frame.effective_fault_code_refs)
+    if not frame.needs_clarification and resolved and context_frame.relation_to_previous == "ambiguous":
+        frame.resolution_trace.append(
+            {
+                "stage": "contract.normalize",
+                "event": "context_ambiguity_resolved_by_effective_request",
+                "diagnostic_missing_context": list(context_frame.missing_context),
+                "diagnostic_reuse_blockers": list(context_frame.reuse_blockers),
+            }
+        )
+    if frame.semantic_intent == "generate_report_from_previous" and not frame.target_artifact_id:
+        frame.semantic_intent = "generate_report"
+        frame.resolution_trace.append(
+            {
+                "stage": "contract.normalize",
+                "event": "explicit_report_without_target_uses_generate_report",
+            }
+        )
 
 
 def _manifest_list(package: dict[str, Any]) -> list[ArtifactManifest]:
@@ -447,6 +472,7 @@ def _validated_semantic_result(data: dict[str, Any], candidates: list[ArtifactMa
         "show_manual_fields",
         "check_runtime_status",
         "diagnose_from_runtime",
+        "generate_report",
         "generate_report_from_previous",
         "decide_workorder",
         "create_workorder_draft",

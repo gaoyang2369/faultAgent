@@ -4,7 +4,9 @@ from fault_diagnosis.agent import (
     AgentEngineV2,
     ContextFrame,
     ContextFrameAdapter,
+    EffectiveRequestFrame,
     IntentFrameBuilder,
+    prepare_v2_execution_plan,
     RewriteFrameBuilder,
     SkillLoader,
     SkillRegistry,
@@ -291,8 +293,42 @@ def test_followup_detail_inherits_latest_knowledge_artifact_fault_code() -> None
     assert snapshot.effective_request_frame.semantic_intent == "expand_previous_answer"
     assert snapshot.effective_request_frame.effective_fault_code_refs == ["A07089"]
     assert snapshot.effective_request_frame.requested_output_mode == "detailed"
+    assert snapshot.effective_request_frame.needs_clarification is False
     assert snapshot.skill_route.primary_skill == "fault_code_explain"
     assert [node.node_type for node in snapshot.execution_plan.nodes] == ["rag", "kg"]
+    assert "clarification" not in snapshot.skill_route.selected_skills
+
+
+def test_effective_request_overrides_legacy_ambiguous_context_when_target_is_unique() -> None:
+    intent = IntentFrameBuilder().build("详细点")
+    context = ContextFrame(
+        relation_to_previous="ambiguous",
+        missing_context=["请确认“刚才那个”指的是哪个故障码。"],
+        reuse_blockers=["存在多个历史候选。"],
+    )
+    rewrite = RewriteFrameBuilder().build("详细点", intent_frame=intent, context_frame=context)
+    effective = EffectiveRequestFrame(
+        raw_message="详细点",
+        normalized_message="详细点",
+        semantic_intent="expand_previous_answer",
+        task_family="knowledge",
+        requested_output_mode="detailed",
+        effective_fault_code_refs=["A07089"],
+        target_artifact_id="knowledge:trace.detail:A07089",
+        target_artifact_type="knowledge_artifact",
+        needs_clarification=False,
+    )
+
+    route = SkillRouter().route(
+        intent_frame=intent,
+        rewrite_frame=rewrite,
+        context_frame=context,
+        effective_request_frame=effective,
+    )
+
+    assert route.primary_skill == "fault_code_explain"
+    assert route.selected_skills == ["fault_code_explain"]
+    assert route.blocked_skills == {}
 
 
 def test_followup_workorder_uses_latest_report_manifest_without_ambiguity() -> None:
@@ -353,5 +389,21 @@ def test_followup_workorder_uses_latest_report_manifest_without_ambiguity() -> N
     assert snapshot.effective_request_frame.effective_fault_code_refs == ["A07089"]
     assert snapshot.effective_request_frame.target_artifact_id == "/reports/g120_motor1.html"
     assert snapshot.effective_request_frame.target_artifact_type == "report_artifact"
+    assert snapshot.effective_request_frame.needs_clarification is False
     assert snapshot.skill_route.primary_skill == "workorder_decision"
     assert [node.node_type for node in snapshot.execution_plan.nodes] == ["workorder", "approval"]
+
+    plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id=thread_id, auth_context=_engineer(asset_scope=["G120电机1"]))
+    workorder_inputs = next(node.inputs for node in plan.nodes if node.node_type == "workorder")
+    forbidden = {
+        "previous_sql_artifact",
+        "previous_knowledge_artifact",
+        "previous_analysis_artifact",
+        "previous_report_artifact",
+        "raw_output",
+        "result_preview",
+    }
+    assert not forbidden.intersection(workorder_inputs)
+    assert workorder_inputs["source_artifact_refs"][0]["artifact_id"] == "/reports/g120_motor1.html"
+    assert workorder_inputs["manual_confirmation_required"] is True
+    assert workorder_inputs["draft_only"] is True

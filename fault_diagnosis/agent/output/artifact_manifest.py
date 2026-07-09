@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from fault_diagnosis.agent.contracts import ArtifactManifest
@@ -89,7 +90,11 @@ def build_artifact_manifests(
 
     analysis = _model(artifact_map.get("analysis_artifact"), AnalysisStepArtifact)
     structured = artifact_map.get("structured_analysis_artifact")
-    structured_info = _structured_info(structured)
+    structured_info = _structured_info(
+        structured,
+        text_sources=_analysis_text_sources(analysis),
+        evidence_bundle=bundle,
+    )
     if analysis is not None:
         manifests.append(
             ArtifactManifest(
@@ -297,12 +302,35 @@ def _best_entry(artifact: KnowledgeStepArtifact) -> Any:
     return (exact or list(artifact.fault_code_entries) or [None])[0]
 
 
-def _structured_info(value: Any) -> dict[str, Any]:
+def _structured_info(
+    value: Any,
+    *,
+    text_sources: list[str] | None = None,
+    evidence_bundle: EvidenceBundle | None = None,
+) -> dict[str, Any]:
     dumped = _dump(value)
     flat = _flatten(dumped)
+    text_sources = list(text_sources or [])
+    if flat.get("diagnosis_summary"):
+        text_sources.append(str(flat.get("diagnosis_summary") or ""))
+    if flat.get("conclusion"):
+        text_sources.append(str(flat.get("conclusion") or ""))
+    evidence_codes = _codes_from_evidence(evidence_bundle)
     return {
         "device_refs": _dedupe([flat.get("asset"), flat.get("diagnosis_object"), flat.get("equipment_object")]),
-        "fault_code_refs": _dedupe([flat.get("fault_code"), flat.get("event_code"), flat.get("current_event")]),
+        "fault_code_refs": _dedupe(
+            [
+                *_as_list(flat.get("fault_code")),
+                *_as_list(flat.get("fault_codes")),
+                *_as_list(flat.get("event_code")),
+                *_as_list(flat.get("event_codes")),
+                *_as_list(flat.get("alarm_code")),
+                *_as_list(flat.get("alarm_codes")),
+                *_extract_codes(str(flat.get("current_event") or "")),
+                *_extract_codes(" ".join(text_sources)),
+                *evidence_codes,
+            ]
+        ),
         "latest_sample_time": _first([flat.get("latest_sample_time"), flat.get("last_sample_time"), flat.get("sample_time")]),
         "freshness": _freshness_from_text(_first([flat.get("freshness"), flat.get("freshness_label"), flat.get("data_freshness_label"), flat.get("currentness")])),
         "severity": _first([flat.get("severity"), flat.get("severity_label"), flat.get("asset_risk_label")]),
@@ -318,7 +346,8 @@ def _structured_info(value: Any) -> dict[str, Any]:
 def _flatten(value: Any) -> dict[str, Any]:
     result: dict[str, Any] = {}
     wanted = {
-        "asset", "diagnosis_object", "equipment_object", "fault_code", "event_code", "current_event",
+        "asset", "diagnosis_object", "equipment_object", "fault_code", "fault_codes", "event_code", "event_codes",
+        "alarm_code", "alarm_codes", "current_event",
         "latest_sample_time", "last_sample_time", "sample_time", "freshness", "freshness_label",
         "data_freshness_label", "currentness", "severity", "severity_label", "asset_risk_label",
         "risk_level", "status_level", "data_currentness_label", "diagnosis_summary",
@@ -339,6 +368,37 @@ def _flatten(value: Any) -> dict[str, Any]:
 
     visit(value)
     return result
+
+
+def _analysis_text_sources(analysis: AnalysisStepArtifact | None) -> list[str]:
+    if analysis is None:
+        return []
+    values: list[str] = [
+        analysis.conclusion,
+        *(analysis.basis or []),
+        *(analysis.probable_causes or []),
+        *(analysis.recommendations or []),
+        analysis.risk_notice or "",
+    ]
+    return [str(item) for item in values if str(item).strip()]
+
+
+def _codes_from_evidence(bundle: EvidenceBundle | None) -> list[str]:
+    if bundle is None:
+        return []
+    codes: list[str] = []
+    for item in bundle.evidence_items:
+        metadata = item.metadata if isinstance(item.metadata, dict) else {}
+        content = item.content if isinstance(item.content, dict) else {}
+        for key in ("fault_codes", "alarm_codes", "event_codes", "fault_code", "alarm_code", "event_code"):
+            codes.extend(_as_list(metadata.get(key)))
+            codes.extend(_as_list(content.get(key)))
+        codes.extend(_extract_codes(str(item.summary or "")))
+    return _dedupe(codes)
+
+
+def _extract_codes(text: str) -> list[str]:
+    return _dedupe(match.upper() for match in re.findall(r"\b[AF]\d{3,5}\b", text or "", flags=re.IGNORECASE))
 
 
 def _dump(value: Any) -> Any:

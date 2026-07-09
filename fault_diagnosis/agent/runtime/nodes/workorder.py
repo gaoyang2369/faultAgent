@@ -11,9 +11,11 @@ from fault_diagnosis.domain.diagnosis.workorder.drafts import (
     validate_pending_workorder_draft_action,
 )
 from fault_diagnosis.domain.diagnosis.workorder.suggestions import build_workorder_suggestion
+from fault_diagnosis.domain.diagnosis.workorder.suggestions import build_workorder_suggestion_from_artifact
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
-from .base import auth_context, build_request, input_value, model_to_dict
+from .base import auth_context, build_decision_stub, build_request, input_value, model_to_dict
 
 
 class WorkorderNode:
@@ -34,34 +36,30 @@ class WorkorderNode:
                 error={"code": "workorder_dispatch_forbidden", "message": output["reason"]},
             )
 
-        request = build_request(state, node, goal="工单建议")
-        sql_artifact = _model(
-            state.artifacts.get("sql_artifact") or input_value(node, "previous_sql_artifact", {}),
-            SqlStepArtifact,
-            SqlStepArtifact(success=False, summary="无 SQL 数据"),
-        )
-        knowledge_artifact = _model(
-            state.artifacts.get("knowledge_artifact") or input_value(node, "previous_knowledge_artifact", {}),
-            KnowledgeStepArtifact,
-            KnowledgeStepArtifact(success=False, query="", error="missing_knowledge_artifact"),
-        )
-        analysis_artifact = _model(
-            state.artifacts.get("analysis_artifact") or input_value(node, "previous_analysis_artifact", {}),
-            AnalysisStepArtifact,
-            AnalysisStepArtifact(success=False, conclusion="缺少分析产物", error="missing_analysis_artifact"),
-        )
-        if "sql_artifact" not in state.artifacts and sql_artifact.success:
-            state.artifacts["sql_artifact"] = sql_artifact
-        if "knowledge_artifact" not in state.artifacts and knowledge_artifact.success:
-            state.artifacts["knowledge_artifact"] = knowledge_artifact
-        if "analysis_artifact" not in state.artifacts and analysis_artifact.success:
-            state.artifacts["analysis_artifact"] = analysis_artifact
-        suggestion = build_workorder_suggestion(
-            request=request,
-            sql_artifact=sql_artifact,
-            knowledge_artifact=knowledge_artifact,
-            analysis_artifact=analysis_artifact,
-        )
+        suggestion = _suggestion_from_target_artifact(node, state)
+        if suggestion is None:
+            request = build_request(state, node, goal="工单建议")
+            sql_artifact = _model(
+                state.artifacts.get("sql_artifact"),
+                SqlStepArtifact,
+                SqlStepArtifact(success=False, summary="无 SQL 数据"),
+            )
+            knowledge_artifact = _model(
+                state.artifacts.get("knowledge_artifact"),
+                KnowledgeStepArtifact,
+                KnowledgeStepArtifact(success=False, query="", error="missing_knowledge_artifact"),
+            )
+            analysis_artifact = _model(
+                state.artifacts.get("analysis_artifact"),
+                AnalysisStepArtifact,
+                AnalysisStepArtifact(success=False, conclusion="缺少分析产物", error="missing_analysis_artifact"),
+            )
+            suggestion = build_workorder_suggestion(
+                request=request,
+                sql_artifact=sql_artifact,
+                knowledge_artifact=knowledge_artifact,
+                analysis_artifact=analysis_artifact,
+            )
         state.artifacts["workorder_suggestion"] = suggestion
         output: dict[str, Any] = {"success": True, "suggestion": model_to_dict(suggestion)}
 
@@ -131,6 +129,26 @@ def _model(value: Any, model_type: Any, default: Any) -> Any:
     if isinstance(value, dict) and value:
         return model_type.model_validate(value)
     return default
+
+
+def _suggestion_from_target_artifact(node: dict[str, Any], state: RuntimeState) -> WorkOrderSuggestion | None:
+    if any(key in state.artifacts for key in ("sql_artifact", "analysis_artifact", "structured_analysis_artifact")):
+        return None
+    target_id = str(input_value(node, "target_artifact_id", "") or "")
+    source_refs = input_value(node, "source_artifact_refs", []) or []
+    if not target_id and not source_refs:
+        return None
+    envelope = get_thread_artifact(state.thread_id or "")
+    if envelope is None:
+        return None
+    try:
+        return build_workorder_suggestion_from_artifact(
+            envelope=envelope,
+            decision=build_decision_stub(node),
+            user_identity=(auth_context(state).display_name or auth_context(state).user_id or auth_context(state).role),
+        )
+    except Exception:
+        return None
 
 
 def _report_artifact_id(state: RuntimeState) -> str | None:
