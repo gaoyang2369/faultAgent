@@ -121,6 +121,9 @@ def _snapshot_rejection_reason(envelope: DiagnosisArtifactEnvelope) -> str:
 
 def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
     payload = envelope.payload or {}
+    manifest_case = _case_from_manifest_payload(envelope, payload)
+    if manifest_case is not None:
+        return manifest_case
     request = payload.get("request") if isinstance(payload.get("request"), dict) else {}
     decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
     objects = decision.get("objects") if isinstance(decision.get("objects"), dict) else {}
@@ -262,7 +265,10 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
         active_fault_codes=active_fault_codes,
         active_time_window=active_time_window,
         latest_artifact_id=latest_artifact_id,
+        latest_artifact_type=str(payload.get("workflow_type") or envelope.workflow_type or ""),
         latest_report_id=latest_report_id,
+        latest_analysis_artifact_id=_first_non_empty([payload.get("analysis_artifact_id"), analysis_artifact.get("artifact_id"), latest_artifact_id]),
+        latest_sql_artifact_id=_first_non_empty([payload.get("sql_artifact_id"), sql_artifact.get("artifact_id"), latest_artifact_id]),
         latest_evidence_bundle_id=latest_evidence_bundle_id,
         last_report_url=latest_report_id,
         status_level=_first_non_empty([report_context.get("status_level"), report_context.get("asset_risk_label")]),
@@ -303,6 +309,7 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
         evidence_summary=evidence_summary,
         pending_actions=pending_actions,
         available_followups=_available_followups(active_asset, active_fault_codes, latest_report_id),
+        available_actions=[],
         unresolved_questions=_dedupe(
             [
                 *(_as_text_list(context_resolution.get("unresolved_questions"))),
@@ -322,6 +329,110 @@ def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
             else active_time_window
         ),
     )
+
+
+def _case_from_manifest_payload(envelope: DiagnosisArtifactEnvelope, payload: dict[str, Any]) -> CaseState | None:
+    manifests = payload.get("artifact_manifests")
+    if not isinstance(manifests, list):
+        return None
+    typed = [item for item in manifests if isinstance(item, dict) and item.get("status", "completed") == "completed"]
+    if not typed:
+        return None
+    focus = _select_focus_manifest(typed)
+    if focus is None:
+        return None
+    active_asset = _first_list_item(focus.get("device_refs"))
+    active_fault_codes = _as_text_list(focus.get("fault_code_refs"))
+    latest_evidence_bundle_id = _first_non_empty(
+        [
+            focus.get("evidence_bundle_id"),
+            focus.get("linked_evidence_bundle_id"),
+            (payload.get("evidence_bundle") or {}).get("bundle_id") if isinstance(payload.get("evidence_bundle"), dict) else None,
+        ]
+    )
+    latest_report_id = _first_non_empty([focus.get("report_url"), focus.get("report_filename"), envelope.report_filename])
+    latest_artifact_id = _first_non_empty([focus.get("artifact_id"), latest_evidence_bundle_id, envelope.created_at])
+    if not any([active_asset, active_fault_codes, latest_artifact_id, latest_report_id]):
+        return None
+    pending_actions = _pending_actions_from_payload(
+        workorder=payload.get("workorder_decision") if isinstance(payload.get("workorder_decision"), dict) else {},
+        latest_artifact_id=latest_artifact_id,
+        evidence_freshness=str(focus.get("freshness") or "unknown"),
+    )
+    available_actions = _as_text_list(focus.get("available_actions"))
+    if any(action in available_actions for action in ("decide_workorder", "create_workorder_draft")) and not pending_actions:
+        pending_actions = [
+            PendingAction(
+                action_type="workorder_draft",
+                status="pending",
+                artifact_id=latest_artifact_id,
+                reason=str(focus.get("diagnosis_summary") or ""),
+                source_diagnosis_artifact_id=latest_artifact_id,
+                source_report_artifact_id=latest_report_id,
+                required_role="engineer",
+                stale_refresh_required=str(focus.get("freshness") or "") == "stale",
+            )
+        ]
+    return CaseState(
+        case_id=str(latest_artifact_id),
+        thread_id=envelope.thread_id,
+        active_asset=active_asset,
+        active_fault_codes=active_fault_codes,
+        active_time_window=focus.get("time_window") if isinstance(focus.get("time_window"), dict) else {},
+        latest_artifact_id=latest_artifact_id,
+        latest_artifact_type=str(focus.get("artifact_type") or ""),
+        latest_report_id=latest_report_id,
+        latest_analysis_artifact_id=_latest_manifest_id(typed, {"analysis_artifact", "structured_analysis_artifact"}),
+        latest_sql_artifact_id=_latest_manifest_id(typed, {"sql_artifact"}),
+        latest_evidence_bundle_id=latest_evidence_bundle_id,
+        last_report_url=latest_report_id,
+        status_level=_first_non_empty([focus.get("status_level"), focus.get("risk_level")]),
+        severity=_first_non_empty([focus.get("severity"), focus.get("risk_level")]),
+        freshness_label=str(focus.get("freshness") or ""),
+        currentness=str(focus.get("currentness") or ""),
+        latest_sample_time=str(focus.get("latest_sample_time") or ""),
+        diagnosis_summary=str(focus.get("diagnosis_summary") or envelope.request_summary or ""),
+        initial_assessment=str(focus.get("diagnosis_summary") or envelope.request_summary or ""),
+        next_action=_first_list_item(focus.get("recommendations")),
+        evidence_summary=_as_text_list(focus.get("findings"))[:8],
+        pending_actions=pending_actions,
+        available_followups=_as_text_list(focus.get("available_followups")),
+        available_actions=available_actions,
+        evidence_freshness=str(focus.get("freshness") or "unknown"),
+        reportable=bool(focus.get("reportable")),
+        source_table=str(focus.get("source_table") or ""),
+        sql_artifact_id=_latest_manifest_id(typed, {"sql_artifact"}),
+        analysis_artifact_id=_latest_manifest_id(typed, {"analysis_artifact", "structured_analysis_artifact"}),
+        evidence_bundle_id=latest_evidence_bundle_id,
+        data_window=focus.get("data_window") if isinstance(focus.get("data_window"), dict) else {},
+        artifact_manifests=[dict(item) for item in typed],
+    )
+
+
+def _select_focus_manifest(manifests: list[dict[str, Any]]) -> dict[str, Any] | None:
+    priority = {
+        "workorder_artifact": 0,
+        "report_artifact": 1,
+        "structured_analysis_artifact": 2,
+        "analysis_artifact": 3,
+        "knowledge_artifact": 4,
+        "sql_artifact": 5,
+    }
+    usable = [
+        item
+        for item in manifests
+        if item.get("followupable") or item.get("actionable") or item.get("reportable")
+    ]
+    if not usable:
+        return manifests[0] if manifests else None
+    return sorted(usable, key=lambda item: priority.get(str(item.get("artifact_type") or ""), 99))[0]
+
+
+def _latest_manifest_id(manifests: list[dict[str, Any]], artifact_types: set[str]) -> str | None:
+    for item in reversed(manifests):
+        if str(item.get("artifact_type") or "") in artifact_types and str(item.get("artifact_id") or "").strip():
+            return str(item.get("artifact_id"))
+    return None
 
 
 def _merge_snapshot_with_fallback(snapshot: CaseState, fallback: CaseState) -> CaseState:

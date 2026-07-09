@@ -324,6 +324,27 @@ def _dump_model(value: Any) -> Any:
 
 def _produced_artifacts(artifact: Any) -> list[dict[str, Any]]:
     envelope = artifact.model_dump(mode="json", exclude_none=True) if hasattr(artifact, "model_dump") else {}
+    payload = envelope.get("payload") if isinstance(envelope.get("payload"), dict) else {}
+    manifests = payload.get("artifact_manifests") if isinstance(payload.get("artifact_manifests"), list) else []
+    if manifests:
+        return [
+            {
+                "artifact_id": str(item.get("artifact_id") or "").strip(),
+                "artifact_type": str(item.get("artifact_type") or "artifact").strip(),
+                "role": "produced",
+                "created_in_current_turn": True,
+                "display_policy": "hide_card",
+                "title": item.get("diagnosis_summary") or item.get("artifact_type") or "V2 诊断产物",
+                "url": item.get("report_url") or item.get("report_filename"),
+                "source_artifact_id": item.get("linked_analysis_artifact_id") or item.get("linked_sql_artifact_id"),
+                "followupable": bool(item.get("followupable")),
+                "actionable": bool(item.get("actionable")),
+                "reportable": bool(item.get("reportable")),
+                "manifest": item,
+            }
+            for item in manifests
+            if str(item.get("artifact_id") or "").strip()
+        ]
     return [
         {
             "artifact_id": envelope.get("created_at"),

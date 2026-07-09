@@ -13,6 +13,14 @@ PLAN_SNAPSHOT_V2_SCHEMA_VERSION = "agent_engine_plan_snapshot.v2"
 NodeStatus = Literal["pending", "running", "completed", "skipped", "blocked", "failed", "cancelled"]
 PlanSnapshotStatus = Literal["not_implemented", "planned", "validated", "blocked", "failed"]
 RiskLevel = Literal["low", "medium", "high", "critical"]
+ArtifactType = Literal[
+    "knowledge_artifact",
+    "sql_artifact",
+    "analysis_artifact",
+    "structured_analysis_artifact",
+    "report_artifact",
+    "workorder_artifact",
+]
 
 
 class AgentEngineContract(BaseModel):
@@ -68,6 +76,90 @@ class ContextFrame(AgentEngineContract):
     permission_context: dict[str, Any] = Field(default_factory=dict)
     reuse_decision: str = "collect_new"
     reuse_blockers: list[str] = Field(default_factory=list)
+
+
+class ArtifactManifest(AgentEngineContract):
+    """Stable follow-up contract for runtime artifacts.
+
+    The persisted DiagnosisArtifactEnvelope remains the compatibility container;
+    manifests are the per-artifact facts used by context resolution.
+    """
+
+    schema_version: str = "artifact_manifest.v1"
+    artifact_id: str = ""
+    artifact_type: ArtifactType
+    thread_id: str = ""
+    turn_id: str = ""
+    request_id: str = ""
+    trace_id: str = ""
+    produced_by_skill: str = ""
+    produced_by_nodes: list[str] = Field(default_factory=list)
+    status: Literal["completed", "failed", "partial"] = "completed"
+    followupable: bool = False
+    reportable: bool = False
+    actionable: bool = False
+    device_refs: list[str] = Field(default_factory=list)
+    fault_code_refs: list[str] = Field(default_factory=list)
+    time_window: dict[str, Any] = Field(default_factory=dict)
+    source_table: str = ""
+    data_window: dict[str, Any] = Field(default_factory=dict)
+    latest_sample_time: str = ""
+    freshness: str = "unknown"
+    currentness: str = ""
+    severity: str = ""
+    risk_level: str = ""
+    status_level: str = ""
+    diagnosis_summary: str = ""
+    findings: list[str] = Field(default_factory=list)
+    probable_causes: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    evidence_bundle_id: str = ""
+    report_url: str = ""
+    report_filename: str = ""
+    linked_analysis_artifact_id: str = ""
+    linked_sql_artifact_id: str = ""
+    linked_evidence_bundle_id: str = ""
+    source_file: str = ""
+    source_page: str = ""
+    parsed_manual_fields: dict[str, Any] = Field(default_factory=dict)
+    available_followups: list[str] = Field(default_factory=list)
+    available_actions: list[str] = Field(default_factory=list)
+    authorization_scope_summary: dict[str, Any] = Field(default_factory=dict)
+    draft_only: bool = False
+    manual_confirmation_required: bool = False
+    dispatch_forbidden: bool = False
+
+
+class EffectiveRequestFrame(AgentEngineContract):
+    """Context-aware request consumed by routing, planning and runtime prep."""
+
+    schema_version: str = "effective_request.v1"
+    raw_message: str = ""
+    normalized_message: str = ""
+    semantic_intent: str = ""
+    task_family: str = ""
+    requested_action: str = ""
+    requested_output_mode: str = "concise"
+    effective_device_refs: list[str] = Field(default_factory=list)
+    effective_fault_code_refs: list[str] = Field(default_factory=list)
+    effective_time_window: dict[str, Any] = Field(default_factory=dict)
+    target_artifact_id: str | None = None
+    target_artifact_type: str | None = None
+    target_evidence_bundle_id: str | None = None
+    target_report_id: str | None = None
+    selected_case_id: str | None = None
+    slot_sources: dict[str, str] = Field(default_factory=dict)
+    available_actions: list[str] = Field(default_factory=list)
+    evidence_policy: str = "collect_new"
+    freshness: str = "unknown"
+    stale_evidence_disclosure_required: bool = False
+    needs_clarification: bool = False
+    clarification_question: str = ""
+    ambiguity: dict[str, Any] = Field(default_factory=dict)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    resolution_trace: list[dict[str, Any]] = Field(default_factory=list)
+    safety_flags: list[str] = Field(default_factory=list)
 
 
 class SkillRoute(AgentEngineContract):
@@ -149,6 +241,14 @@ class SqlNodeInputs(AgentEngineContract):
     fault_code_refs: list[str] = Field(default_factory=list)
     requested_tables: list[str] = Field(default_factory=list)
     context_relation: str = ""
+    requested_output_mode: str = ""
+    requested_action: str = ""
+    semantic_intent: str = ""
+    target_artifact_id: str | None = None
+    target_artifact_type: str | None = None
+    target_evidence_bundle_id: str | None = None
+    target_report_id: str | None = None
+    stale_evidence_disclosure_required: bool = False
 
 
 class RagNodeInputs(AgentEngineContract):
@@ -156,6 +256,14 @@ class RagNodeInputs(AgentEngineContract):
     device_refs: list[str] = Field(default_factory=list)
     fault_code_refs: list[str] = Field(default_factory=list)
     context_relation: str = ""
+    requested_output_mode: str = ""
+    requested_action: str = ""
+    semantic_intent: str = ""
+    target_artifact_id: str | None = None
+    target_artifact_type: str | None = None
+    target_evidence_bundle_id: str | None = None
+    target_report_id: str | None = None
+    stale_evidence_disclosure_required: bool = False
 
 
 class ReportNodeInputs(AgentEngineContract):
@@ -167,6 +275,14 @@ class ReportNodeInputs(AgentEngineContract):
     device_refs: list[str] = Field(default_factory=list)
     fault_code_refs: list[str] = Field(default_factory=list)
     context_relation: str = ""
+    requested_output_mode: str = ""
+    requested_action: str = ""
+    semantic_intent: str = ""
+    target_artifact_id: str | None = None
+    target_artifact_type: str | None = None
+    target_evidence_bundle_id: str | None = None
+    target_report_id: str | None = None
+    stale_evidence_disclosure_required: bool = False
 
 
 class WorkorderNodeInputs(AgentEngineContract):
@@ -177,6 +293,17 @@ class WorkorderNodeInputs(AgentEngineContract):
     device_refs: list[str] = Field(default_factory=list)
     fault_code_refs: list[str] = Field(default_factory=list)
     context_relation: str = ""
+    requested_output_mode: str = ""
+    semantic_intent: str = ""
+    target_artifact_id: str | None = None
+    target_artifact_type: str | None = None
+    target_evidence_bundle_id: str | None = None
+    target_report_id: str | None = None
+    stale_evidence_disclosure_required: bool = False
+    previous_sql_artifact: dict[str, Any] = Field(default_factory=dict)
+    previous_knowledge_artifact: dict[str, Any] = Field(default_factory=dict)
+    previous_analysis_artifact: dict[str, Any] = Field(default_factory=dict)
+    previous_report_artifact: dict[str, Any] = Field(default_factory=dict)
 
 
 class ApprovalNodeInputs(AgentEngineContract):
@@ -185,6 +312,14 @@ class ApprovalNodeInputs(AgentEngineContract):
     device_refs: list[str] = Field(default_factory=list)
     fault_code_refs: list[str] = Field(default_factory=list)
     context_relation: str = ""
+    requested_output_mode: str = ""
+    requested_action: str = ""
+    semantic_intent: str = ""
+    target_artifact_id: str | None = None
+    target_artifact_type: str | None = None
+    target_evidence_bundle_id: str | None = None
+    target_report_id: str | None = None
+    stale_evidence_disclosure_required: bool = False
 
 
 class PlanNode(_DictCompatContract):
@@ -274,6 +409,7 @@ class PlanSnapshotV2(AgentEngineContract):
     intent_frame: IntentFrame = Field(default_factory=IntentFrame)
     rewrite_frame: RewriteFrame = Field(default_factory=RewriteFrame)
     context_frame: ContextFrame = Field(default_factory=ContextFrame)
+    effective_request_frame: EffectiveRequestFrame = Field(default_factory=EffectiveRequestFrame)
     skill_route: SkillRoute = Field(default_factory=SkillRoute)
     execution_plan: ExecutionPlan = Field(default_factory=ExecutionPlan)
     node_results: list[NodeResult] = Field(default_factory=list)

@@ -47,7 +47,10 @@ class CaseState(BaseModel):
     active_fault_codes: list[str] = Field(default_factory=list)
     active_time_window: dict[str, Any] = Field(default_factory=dict)
     latest_artifact_id: str | None = None
+    latest_artifact_type: str | None = None
     latest_report_id: str | None = None
+    latest_analysis_artifact_id: str | None = None
+    latest_sql_artifact_id: str | None = None
     latest_evidence_bundle_id: str | None = Field(
         default=None,
         validation_alias=AliasChoices("latest_evidence_bundle_id", "last_evidence_bundle_id"),
@@ -68,6 +71,7 @@ class CaseState(BaseModel):
     evidence_summary: list[str] = Field(default_factory=list)
     pending_actions: list[PendingAction] = Field(default_factory=list)
     available_followups: list[str] = Field(default_factory=list)
+    available_actions: list[str] = Field(default_factory=list)
     unresolved_questions: list[str] = Field(default_factory=list)
     evidence_freshness: str = "unknown"
     reportable: bool = False
@@ -79,6 +83,7 @@ class CaseState(BaseModel):
     analysis_artifact_id: str | None = None
     evidence_bundle_id: str | None = None
     data_window: dict[str, Any] = Field(default_factory=dict)
+    artifact_manifests: list[dict[str, Any]] = Field(default_factory=list)
     projection_warnings: list[str] = Field(default_factory=list)
     source: str = "artifact_projection"
 

@@ -35,17 +35,27 @@ class WorkorderNode:
             )
 
         request = build_request(state, node, goal="工单建议")
-        sql_artifact = _model(state.artifacts.get("sql_artifact"), SqlStepArtifact, SqlStepArtifact(success=False, summary="无 SQL 数据"))
+        sql_artifact = _model(
+            state.artifacts.get("sql_artifact") or input_value(node, "previous_sql_artifact", {}),
+            SqlStepArtifact,
+            SqlStepArtifact(success=False, summary="无 SQL 数据"),
+        )
         knowledge_artifact = _model(
-            state.artifacts.get("knowledge_artifact"),
+            state.artifacts.get("knowledge_artifact") or input_value(node, "previous_knowledge_artifact", {}),
             KnowledgeStepArtifact,
             KnowledgeStepArtifact(success=False, query="", error="missing_knowledge_artifact"),
         )
         analysis_artifact = _model(
-            state.artifacts.get("analysis_artifact"),
+            state.artifacts.get("analysis_artifact") or input_value(node, "previous_analysis_artifact", {}),
             AnalysisStepArtifact,
             AnalysisStepArtifact(success=False, conclusion="缺少分析产物", error="missing_analysis_artifact"),
         )
+        if "sql_artifact" not in state.artifacts and sql_artifact.success:
+            state.artifacts["sql_artifact"] = sql_artifact
+        if "knowledge_artifact" not in state.artifacts and knowledge_artifact.success:
+            state.artifacts["knowledge_artifact"] = knowledge_artifact
+        if "analysis_artifact" not in state.artifacts and analysis_artifact.success:
+            state.artifacts["analysis_artifact"] = analysis_artifact
         suggestion = build_workorder_suggestion(
             request=request,
             sql_artifact=sql_artifact,
@@ -118,7 +128,7 @@ def _is_forbidden_action(action_type: str, node: dict[str, Any]) -> bool:
 def _model(value: Any, model_type: Any, default: Any) -> Any:
     if isinstance(value, model_type):
         return value
-    if isinstance(value, dict):
+    if isinstance(value, dict) and value:
         return model_type.model_validate(value)
     return default
 

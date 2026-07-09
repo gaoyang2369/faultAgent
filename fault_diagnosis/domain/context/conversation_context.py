@@ -43,6 +43,7 @@ class ConversationContextAssembler:
         case_state = self.case_store.load(thread_id)
         active_case = case_state.active_case
         artifact_refs = _latest_artifact_refs(thread_id, artifact_getter=self.artifact_getter)
+        artifact_manifests = _latest_artifact_manifests(thread_id, artifact_getter=self.artifact_getter)
         previous_assistant_turn = self._previous_assistant_turn(recent_messages)
         package = {
             "version": "conversation_context_package.v1",
@@ -63,6 +64,8 @@ class ConversationContextAssembler:
             "rolling_summary": None,
             "latest_case_state": active_case.model_dump(exclude_none=True) if active_case else None,
             "artifact_refs": artifact_refs,
+            "artifact_manifests": artifact_manifests,
+            "latest_artifact_manifests": artifact_manifests,
             "immediately_previous_assistant_turn": previous_assistant_turn,
             "auth_scope": auth_context.audit_summary(),
             "safety": {
@@ -75,6 +78,7 @@ class ConversationContextAssembler:
             "raw_message_count": len(package["last_raw_messages"]),
             "has_case_state": active_case is not None,
             "artifact_ref_count": len(artifact_refs),
+            "artifact_manifest_count": len(artifact_manifests),
             "previous_assistant_artifact_ref_count": len(previous_assistant_turn.get("produced_artifacts") or []),
         }
         return package
@@ -147,6 +151,19 @@ def _latest_artifact_refs(thread_id: str, *, artifact_getter: ArtifactGetter) ->
             }
         )
     return refs
+
+
+def _latest_artifact_manifests(thread_id: str, *, artifact_getter: ArtifactGetter) -> list[dict[str, Any]]:
+    try:
+        envelope = artifact_getter(thread_id)
+    except Exception:
+        return []
+    if not envelope or not isinstance(envelope.payload, dict):
+        return []
+    manifests = envelope.payload.get("artifact_manifests")
+    if not isinstance(manifests, list):
+        return []
+    return [dict(item) for item in manifests if isinstance(item, dict)]
 
 
 def _nested_value(payload: dict[str, Any], *keys: str) -> Any:

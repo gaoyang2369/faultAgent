@@ -59,7 +59,7 @@ def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: s
                 inputs.setdefault("query", query)
         elif node_type == "sql":
             request = _diagnosis_request(snapshot)
-            query = build_fallback_sql_query(request, asset_filters=list(snapshot.intent_frame.device_refs))
+            query = build_fallback_sql_query(request, asset_filters=list(_effective_devices(snapshot)))
             inputs.setdefault("sql_query", query)
             inputs.setdefault("use_checker", False)
             inputs.setdefault("equipment_hint", request.equipment_hint or "")
@@ -79,6 +79,10 @@ def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: s
                 inputs.setdefault("operation_report_payload", "__runtime_artifacts__")
         if node_type == "workorder":
             inputs.setdefault("create_draft", True)
+            previous = _previous_artifact_payload(thread_id)
+            for key in ("sql_artifact", "knowledge_artifact", "analysis_artifact", "report_artifact"):
+                if isinstance(previous.get(key), dict):
+                    inputs.setdefault(f"previous_{key}", previous[key])
         if inputs:
             node["inputs"] = inputs
     return prepared
@@ -117,15 +121,16 @@ def _rag_query(snapshot: PlanSnapshotV2) -> str:
     queries = [item for item in snapshot.rewrite_frame.retrieval_queries if str(item).strip()]
     if queries:
         return str(queries[0])
-    codes = [item for item in snapshot.intent_frame.fault_code_refs if str(item).strip()]
+    codes = [item for item in _effective_fault_codes(snapshot) if str(item).strip()]
     if codes:
-        return " ".join(codes)
+        suffix = " 详细 手册字段" if snapshot.effective_request_frame.requested_output_mode == "detailed" else ""
+        return f"{' '.join(codes)}{suffix}".strip()
     return snapshot.rewrite_frame.user_rewrite or snapshot.intent_frame.normalized_message
 
 
 def _diagnosis_request(snapshot: PlanSnapshotV2) -> DiagnosisRequest:
-    devices = list(snapshot.intent_frame.device_refs)
-    codes = list(snapshot.intent_frame.fault_code_refs)
+    devices = _effective_devices(snapshot)
+    codes = _effective_fault_codes(snapshot)
     return DiagnosisRequest(
         user_message=snapshot.intent_frame.raw_message or snapshot.intent_frame.normalized_message,
         user_identity="agent_engine_v2",
@@ -137,6 +142,23 @@ def _diagnosis_request(snapshot: PlanSnapshotV2) -> DiagnosisRequest:
         report_format="html",
         analysis_goal=snapshot.rewrite_frame.user_rewrite or snapshot.intent_frame.normalized_message,
     )
+
+
+def _effective_devices(snapshot: PlanSnapshotV2) -> list[str]:
+    return list(snapshot.effective_request_frame.effective_device_refs or snapshot.intent_frame.device_refs)
+
+
+def _effective_fault_codes(snapshot: PlanSnapshotV2) -> list[str]:
+    return list(snapshot.effective_request_frame.effective_fault_code_refs or snapshot.intent_frame.fault_code_refs)
+
+
+def _previous_artifact_payload(thread_id: str) -> dict[str, Any]:
+    if not thread_id:
+        return {}
+    artifact = get_thread_artifact(thread_id)
+    if artifact is None or not isinstance(artifact.payload, dict):
+        return {}
+    return dict(artifact.payload)
 
 
 def _reportable_payload(thread_id: str) -> dict[str, Any]:

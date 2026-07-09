@@ -36,6 +36,57 @@
       "reason": "数据已滞后，建议刷新当前状态后再判断。",
       "key_evidence": ["数据已滞后"]
     },
+    "artifact_manifests": [
+      {
+        "schema_version": "artifact_manifest.v1",
+        "artifact_id": "analysis:stale_j1_a07089",
+        "artifact_type": "analysis_artifact",
+        "thread_id": "placeholder",
+        "status": "completed",
+        "followupable": true,
+        "reportable": true,
+        "actionable": true,
+        "device_refs": ["J1"],
+        "fault_code_refs": ["A07089"],
+        "freshness": "stale",
+        "severity": "medium",
+        "diagnosis_summary": "历史数据提示 A07089 风险，但不代表当前实时状态。",
+        "findings": ["历史样本 A07089", "数据已滞后"],
+        "recommendations": ["刷新当前状态后再判断"],
+        "evidence_bundle_id": "eb_stale_j1_a07089",
+        "available_actions": ["decide_workorder", "create_workorder_draft"]
+      },
+      {
+        "schema_version": "artifact_manifest.v1",
+        "artifact_id": "stale-j1-a07089-report.html",
+        "artifact_type": "report_artifact",
+        "thread_id": "placeholder",
+        "status": "completed",
+        "followupable": true,
+        "reportable": true,
+        "actionable": true,
+        "device_refs": ["J1"],
+        "fault_code_refs": ["A07089"],
+        "freshness": "stale",
+        "severity": "medium",
+        "diagnosis_summary": "历史数据提示 A07089 风险，但不代表当前实时状态。",
+        "report_filename": "stale-j1-a07089-report.html",
+        "linked_analysis_artifact_id": "analysis:stale_j1_a07089",
+        "linked_evidence_bundle_id": "eb_stale_j1_a07089",
+        "available_actions": ["decide_workorder", "create_workorder_draft"]
+      }
+    ],
+    "latest_focus": {
+      "artifact_id": "stale-j1-a07089-report.html",
+      "artifact_type": "report_artifact",
+      "device_refs": ["J1"],
+      "fault_code_refs": ["A07089"],
+      "evidence_bundle_id": "eb_stale_j1_a07089",
+      "report_id": "stale-j1-a07089-report.html",
+      "freshness": "stale",
+      "severity": "medium",
+      "available_actions": ["decide_workorder", "create_workorder_draft"]
+    },
     "evidence_bundle": {
       "bundle_id": "eb_stale_j1_a07089"
     },

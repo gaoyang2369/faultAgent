@@ -63,6 +63,7 @@ class TraceRecorder:
         intent = snapshot.intent_frame
         rewrite = snapshot.rewrite_frame
         context = snapshot.context_frame
+        effective = getattr(snapshot, "effective_request_frame", None)
         route = snapshot.skill_route
         plan = snapshot.execution_plan
         trace = snapshot.trace if isinstance(snapshot.trace, dict) else {}
@@ -98,6 +99,17 @@ class TraceRecorder:
                 "inherited_device": context.inherited_slots.get("device") or context.inherited_slots.get("asset"),
                 "inherited_fault_codes": context.inherited_slots.get("fault_codes") or [],
                 "selected_artifact_id": context.referenced_artifact_id,
+                "effective_device_refs": list(getattr(effective, "effective_device_refs", []) or []),
+                "effective_fault_code_refs": list(getattr(effective, "effective_fault_code_refs", []) or []),
+                "effective_semantic_intent": getattr(effective, "semantic_intent", ""),
+                "effective_target_artifact_id": getattr(effective, "target_artifact_id", None),
+                "effective_target_artifact_type": getattr(effective, "target_artifact_type", None),
+                "effective_slot_sources": dict(getattr(effective, "slot_sources", {}) or {}),
+                "semantic_fallback_used": any(
+                    item.get("stage") == "semantic.fallback"
+                    for item in (getattr(effective, "resolution_trace", []) or [])
+                    if isinstance(item, dict)
+                ),
                 "candidate_artifact_count": _candidate_artifact_count(context.inherited_slots),
                 "deictic_refs": context.permission_context.get("deictic_refs", []),
                 "recent_corrections": context.permission_context.get("recent_corrections", []),
@@ -114,6 +126,8 @@ class TraceRecorder:
                 "primary_goal": plan.goals[0].goal_type if plan.goals else "",
                 "fault_codes": list(intent.fault_code_refs),
                 "devices": list(intent.device_refs),
+                "effective_fault_codes": list(getattr(effective, "effective_fault_code_refs", []) or []),
+                "effective_devices": list(getattr(effective, "effective_device_refs", []) or []),
                 "confidence": intent.confidence,
                 "missing_slots": list(intent.ambiguities),
             },

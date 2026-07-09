@@ -6,7 +6,9 @@ from datetime import datetime
 from typing import Any
 
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType, EvidenceBundle
+from fault_diagnosis.domain.context.case_store import build_case_state_snapshot
 from ..contracts import NodeResult, OutputFrame
+from .artifact_manifest import build_artifact_manifests, latest_focus_from_manifests
 
 
 def project_artifact_envelope(
@@ -24,15 +26,24 @@ def project_artifact_envelope(
     artifact_map = dict(artifacts or {})
     bundle = _dump(evidence_bundle)
     report_artifact = _dump(artifact_map.get("report_artifact")) or {}
+    manifests = build_artifact_manifests(
+        thread_id=thread_id,
+        artifacts=artifact_map,
+        evidence_bundle=evidence_bundle,
+        node_results=node_results or [],
+        trace=trace,
+    )
     payload = {
         "engine": "agent_engine_v2",
         "output_frame": output_frame.model_dump(mode="json", exclude_none=True),
         "evidence_bundle": bundle,
         "node_results": [_dump(item) for item in node_results or []],
         "trace": dict(trace or {}),
+        "artifact_manifests": [item.model_dump(mode="json", exclude_none=True) for item in manifests],
+        "latest_focus": latest_focus_from_manifests(manifests),
         **{key: _dump(value) for key, value in artifact_map.items()},
     }
-    return DiagnosisArtifactEnvelope(
+    envelope = DiagnosisArtifactEnvelope(
         workflow_type=_artifact_type(output_frame.answer_variant),
         thread_id=thread_id,
         created_at=datetime.now().isoformat(),
@@ -42,6 +53,8 @@ def project_artifact_envelope(
         payload=payload,
         evidence=_evidence_items(evidence_bundle),
     )
+    envelope.payload["case_state_snapshot"] = build_case_state_snapshot(envelope)
+    return envelope
 
 
 def _artifact_type(variant: str) -> DiagnosisArtifactType:

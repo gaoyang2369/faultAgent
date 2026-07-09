@@ -26,6 +26,10 @@ _CONTEXT_WORDS = (
     "该故障",
     "该设备",
     "继续",
+    "详细",
+    "详细点",
+    "展开",
+    "手册字段",
     "那",
     "所以",
     "是不是",
@@ -223,6 +227,12 @@ class ContextResolver:
             inherited_slots["data_window"] = active_case.data_window
         if active_case.freshness_label or active_case.evidence_freshness:
             inherited_slots["freshness"] = active_case.freshness_label or active_case.evidence_freshness
+        if active_case.available_followups:
+            inherited_slots["available_followups"] = list(active_case.available_followups)
+        if getattr(active_case, "available_actions", None):
+            inherited_slots["available_actions"] = list(active_case.available_actions)
+        if getattr(active_case, "latest_artifact_type", None):
+            inherited_slots["latest_artifact_type"] = active_case.latest_artifact_type
 
         stale = active_case.evidence_freshness == "stale" or _has_stale_text(active_case)
         resolved = ResolvedContext(
@@ -355,7 +365,25 @@ def _should_reuse_fault_code(message: str) -> bool:
     text = (message or "").replace(" ", "")
     return bool(text) and _has_any(
         text,
-        ("怎么处理", "如何处理", "解决", "处置", "严重", "影响", "是什么", "含义", "原因", "故障", "工单", "派人"),
+        (
+            "怎么处理",
+            "如何处理",
+            "解决",
+            "处置",
+            "严重",
+            "影响",
+            "是什么",
+            "含义",
+            "原因",
+            "故障",
+            "工单",
+            "派人",
+            "详细",
+            "展开",
+            "手册字段",
+            "完整字段",
+            "原文",
+        ),
     )
 
 

@@ -15,6 +15,8 @@ from .contracts import (
     ReportNodeInputs,
     WorkorderNodeInputs,
     ApprovalNodeInputs,
+    ArtifactManifest,
+    EffectiveRequestFrame,
     RewriteFrame,
     ContextFrame,
     SkillRoute,
@@ -42,10 +44,12 @@ from .understanding import IntentFrameBuilder, RewriteFrameBuilder
 
 __all__ = [
     "AgentEngineV2",
+    "ArtifactManifest",
     "ContextFrame",
     "ContextFrameAdapter",
     "CancelToken",
     "EvidenceLedger",
+    "EffectiveRequestFrame",
     "EvidenceLedgerWriter",
     "ExecutionPlan",
     "AgentEngineFlags",

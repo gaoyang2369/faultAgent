@@ -79,6 +79,27 @@ def _artifact(
     )
 
 
+def _manifest_artifact(
+    *,
+    thread_id: str = "thread.v2.manifest",
+    manifests: list[dict],
+    request_summary: str = "manifest-backed artifact",
+    final_answer: str = "ok",
+) -> DiagnosisArtifactEnvelope:
+    return DiagnosisArtifactEnvelope(
+        workflow_type=DiagnosisArtifactType.FAULT_DIAGNOSIS,
+        thread_id=thread_id,
+        created_at=f"2026-06-24T10:00:0{len(manifests)}",
+        request_summary=request_summary,
+        final_answer=final_answer,
+        payload={
+            "artifact_manifests": manifests,
+            "latest_focus": manifests[0] if manifests else {},
+        },
+        evidence=[],
+    )
+
+
 def _manager_with_artifacts(*artifacts: DiagnosisArtifactEnvelope) -> ContextManager:
     configure_artifact_store_backend(MemoryArtifactStoreBackend())
     for artifact in artifacts:
@@ -232,3 +253,105 @@ def test_agent_engine_v2_build_plan_snapshot_includes_context_and_skill_route_wi
     assert "candidate_plan" in snapshot.trace
     assert "validation" in snapshot.trace
     assert snapshot.model_dump(mode="json")
+
+
+def test_followup_detail_inherits_latest_knowledge_artifact_fault_code() -> None:
+    thread_id = "thread.v2.detail.followup"
+    manager = _manager_with_artifacts(
+        _manifest_artifact(
+            thread_id=thread_id,
+            request_summary="A07089 是什么意思",
+            final_answer="A07089：单位转换后不能激活功能块。",
+            manifests=[
+                {
+                    "schema_version": "artifact_manifest.v1",
+                    "artifact_id": "knowledge:trace.detail:A07089",
+                    "artifact_type": "knowledge_artifact",
+                    "thread_id": thread_id,
+                    "status": "completed",
+                    "followupable": True,
+                    "fault_code_refs": ["A07089"],
+                    "diagnosis_summary": "A07089 单位转换后不能激活功能块",
+                    "source_file": "S120_故障手册.pdf",
+                    "source_page": "232",
+                    "available_followups": ["expand_previous_answer", "show_manual_fields"],
+                }
+            ],
+        )
+    )
+
+    snapshot = AgentEngineV2().build_plan_snapshot(
+        raw_message="详细点",
+        thread_id=thread_id,
+        request_id="request.detail.followup",
+        auth_context=_engineer(),
+        context_manager=manager,
+    )
+
+    assert snapshot.effective_request_frame.semantic_intent == "expand_previous_answer"
+    assert snapshot.effective_request_frame.effective_fault_code_refs == ["A07089"]
+    assert snapshot.effective_request_frame.requested_output_mode == "detailed"
+    assert snapshot.skill_route.primary_skill == "fault_code_explain"
+    assert [node.node_type for node in snapshot.execution_plan.nodes] == ["rag", "kg"]
+
+
+def test_followup_workorder_uses_latest_report_manifest_without_ambiguity() -> None:
+    thread_id = "thread.v2.report.workorder.followup"
+    manager = _manager_with_artifacts(
+        _manifest_artifact(
+            thread_id=thread_id,
+            request_summary="生成G120电机1的运行报告",
+            final_answer="报告已生成，G120电机1 存在 A07089 和速度偏差。",
+            manifests=[
+                {
+                    "schema_version": "artifact_manifest.v1",
+                    "artifact_id": "/reports/g120_motor1.html",
+                    "artifact_type": "report_artifact",
+                    "thread_id": thread_id,
+                    "status": "completed",
+                    "followupable": True,
+                    "reportable": True,
+                    "actionable": True,
+                    "device_refs": ["G120电机1"],
+                    "fault_code_refs": ["A07089"],
+                    "freshness": "recent",
+                    "severity": "medium",
+                    "diagnosis_summary": "G120电机1 存在 A07089、速度偏差、负载率偏高和数据滞后。",
+                    "report_url": "/reports/g120_motor1.html",
+                    "linked_analysis_artifact_id": "analysis:g120",
+                    "linked_evidence_bundle_id": "eb:g120",
+                    "available_actions": ["decide_workorder", "create_workorder_draft"],
+                },
+                {
+                    "schema_version": "artifact_manifest.v1",
+                    "artifact_id": "analysis:g120",
+                    "artifact_type": "analysis_artifact",
+                    "thread_id": thread_id,
+                    "status": "completed",
+                    "followupable": True,
+                    "reportable": True,
+                    "actionable": True,
+                    "device_refs": ["G120电机1"],
+                    "fault_code_refs": ["A07089"],
+                    "diagnosis_summary": "G120电机1 存在 A07089 和运行异常。",
+                    "available_actions": ["decide_workorder", "create_workorder_draft"],
+                },
+            ],
+        )
+    )
+
+    snapshot = AgentEngineV2().build_plan_snapshot(
+        raw_message="看起来有故障，那就创建工单",
+        thread_id=thread_id,
+        request_id="request.report.workorder.followup",
+        auth_context=_engineer(asset_scope=["G120电机1"]),
+        context_manager=manager,
+    )
+
+    assert snapshot.context_frame.relation_to_previous != "ambiguous"
+    assert snapshot.effective_request_frame.effective_device_refs == ["G120电机1"]
+    assert snapshot.effective_request_frame.effective_fault_code_refs == ["A07089"]
+    assert snapshot.effective_request_frame.target_artifact_id == "/reports/g120_motor1.html"
+    assert snapshot.effective_request_frame.target_artifact_type == "report_artifact"
+    assert snapshot.skill_route.primary_skill == "workorder_decision"
+    assert [node.node_type for node in snapshot.execution_plan.nodes] == ["workorder", "approval"]

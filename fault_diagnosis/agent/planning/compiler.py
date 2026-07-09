@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from ..contracts import ContextFrame, ExecutionPlan, IntentFrame, SkillRoute
+from ..contracts import ContextFrame, EffectiveRequestFrame, ExecutionPlan, IntentFrame, SkillRoute
 from .policy_bridge import NODE_REQUIRED_TOOL, PlanPolicyBridge, tables_for_assets
 
 
@@ -21,6 +21,7 @@ class PlanCompiler:
         skill_route: SkillRoute,
         intent_frame: IntentFrame,
         context_frame: ContextFrame,
+        effective_request_frame: EffectiveRequestFrame | None = None,
         llm_candidate_plan: ExecutionPlan | dict[str, Any] | None = None,
     ) -> ExecutionPlan:
         if llm_candidate_plan is not None:
@@ -28,7 +29,28 @@ class PlanCompiler:
 
         skill_names = list(skill_route.selected_skills or ([skill_route.primary_skill] if skill_route.primary_skill else []))
         metadata_items = self.bridge.skill_metadata(skill_names)
-        assets = list(dict.fromkeys(intent_frame.device_refs + _as_list(skill_route.skill_inputs.get("device_refs"))))
+        assets = list(
+            dict.fromkeys(
+                (
+                    list(effective_request_frame.effective_device_refs)
+                    if effective_request_frame is not None
+                    else []
+                )
+                + intent_frame.device_refs
+                + _as_list(skill_route.skill_inputs.get("device_refs"))
+            )
+        )
+        fault_codes = list(
+            dict.fromkeys(
+                (
+                    list(effective_request_frame.effective_fault_code_refs)
+                    if effective_request_frame is not None
+                    else []
+                )
+                + intent_frame.fault_code_refs
+                + _as_list(skill_route.skill_inputs.get("fault_code_refs"))
+            )
+        )
         requested_tables = tables_for_assets(assets)
 
         goals: list[dict[str, Any]] = []
@@ -50,7 +72,7 @@ class PlanCompiler:
                     "goal_type": self.bridge.goal_type_for_skill(metadata.name),
                     "description": metadata.description,
                     "device_refs": list(assets),
-                    "fault_code_refs": list(intent_frame.fault_code_refs),
+                    "fault_code_refs": list(fault_codes),
                     "expected_outputs": list(metadata.output_variants),
                     "risk_level": metadata.risk_level,
                     "source": "llm_candidate" if intent_frame.model_trace.get("llm_used") else "skill_compiler",
@@ -68,9 +90,10 @@ class PlanCompiler:
             skill_names=skill_names,
             goal_by_skill=goal_by_skill,
             assets=assets,
-            fault_codes=list(intent_frame.fault_code_refs),
+            fault_codes=list(fault_codes),
             requested_tables=requested_tables,
             context_frame=context_frame,
+            effective_request_frame=effective_request_frame,
         )
         edges = _normalized_edges(nodes)
         approval_requirements = _candidate_approvals(nodes, allowed_tools, expected_outputs)
@@ -124,8 +147,15 @@ def _normalized_nodes(
     fault_codes: list[str],
     requested_tables: list[str],
     context_frame: ContextFrame,
+    effective_request_frame: EffectiveRequestFrame | None = None,
 ) -> list[dict[str, Any]]:
-    wanted = _wanted_node_types(skill_names, assets=assets, fault_codes=fault_codes, context_frame=context_frame)
+    wanted = _wanted_node_types(
+        skill_names,
+        assets=assets,
+        fault_codes=fault_codes,
+        context_frame=context_frame,
+        effective_request_frame=effective_request_frame,
+    )
     nodes: list[dict[str, Any]] = []
     for node_type in wanted:
         owner = _node_owner(node_type, skill_names)
@@ -136,6 +166,19 @@ def _normalized_nodes(
             "fault_code_refs": list(fault_codes),
             "context_relation": context_frame.relation_to_previous,
         }
+        if effective_request_frame is not None:
+            inputs.update(
+                {
+                    "requested_output_mode": effective_request_frame.requested_output_mode,
+                    "requested_action": effective_request_frame.requested_action,
+                    "semantic_intent": effective_request_frame.semantic_intent,
+                    "target_artifact_id": effective_request_frame.target_artifact_id,
+                    "target_artifact_type": effective_request_frame.target_artifact_type,
+                    "target_evidence_bundle_id": effective_request_frame.target_evidence_bundle_id,
+                    "target_report_id": effective_request_frame.target_report_id,
+                    "stale_evidence_disclosure_required": effective_request_frame.stale_evidence_disclosure_required,
+                }
+            )
         node: dict[str, Any] = {
             "node_id": node_id,
             "node_type": node_type,
@@ -155,6 +198,9 @@ def _normalized_nodes(
             inputs["requested_tables"] = list(requested_tables)
         if node_type == "workorder":
             inputs["create_draft"] = True
+            if effective_request_frame is not None:
+                inputs["action_type"] = effective_request_frame.requested_action or effective_request_frame.semantic_intent
+                inputs["stale_refresh_required"] = effective_request_frame.stale_evidence_disclosure_required
         if node_type == "approval":
             inputs["approval_requirements"] = []
         nodes.append(node)
@@ -167,11 +213,25 @@ def _wanted_node_types(
     assets: list[str],
     fault_codes: list[str],
     context_frame: ContextFrame,
+    effective_request_frame: EffectiveRequestFrame | None = None,
 ) -> list[str]:
     selected = set(skill_names)
     wanted: list[str] = []
     if "clarification" in selected:
         return ["clarification"]
+    if (
+        "workorder_decision" in selected
+        and effective_request_frame is not None
+        and effective_request_frame.target_artifact_id
+        and effective_request_frame.target_artifact_type in {"report_artifact", "analysis_artifact", "structured_analysis_artifact"}
+    ):
+        return ["workorder", "approval"]
+    if "report_generation" in selected and (
+        context_frame.relation_to_previous == "report_handoff"
+        or (effective_request_frame is not None and (effective_request_frame.target_artifact_id or effective_request_frame.target_evidence_bundle_id))
+    ):
+        if "workorder_decision" not in selected:
+            return ["report"]
     if selected.intersection({"runtime_status", "alarm_triage", "root_cause"}):
         wanted.append("sql")
     if selected.intersection({"fault_code_explain", "alarm_triage", "root_cause"}):

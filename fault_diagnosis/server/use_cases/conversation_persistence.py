@@ -242,6 +242,7 @@ def _artifact_refs_from_complete(event: dict[str, Any]) -> list[dict[str, Any]]:
                 "created_in_current_turn": bool(item.get("created_in_current_turn")),
                 "display_policy": item.get("display_policy"),
                 "source_artifact_id": item.get("source_artifact_id"),
+                "manifest": item.get("manifest") if isinstance(item.get("manifest"), dict) else None,
             }
             for item in structured_refs
             if str(item.get("artifact_id") or "").strip()

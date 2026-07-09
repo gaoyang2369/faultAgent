@@ -10,6 +10,7 @@ from .contracts import (
     PlanSnapshotV2,
 )
 from .context import ContextFrameAdapter
+from .context.effective_request import EffectiveRequestBuilder
 from .planning import PlanCompiler, PlanValidator
 from .skills import SkillRouter
 from .understanding import IntentFrameBuilder, RewriteFrameBuilder
@@ -49,6 +50,13 @@ class AgentEngineV2:
             conversation_context=conversation_context,
             recent_context_signals=recent_context_signals,
         )
+        effective_request_frame = EffectiveRequestBuilder().build(
+            raw_message=raw_message,
+            intent_frame=intent_frame,
+            context_frame=context_frame,
+            conversation_context=conversation_context,
+            recent_context_signals=recent_context_signals,
+        )
         rewrite_frame = RewriteFrameBuilder().build(
             raw_message,
             intent_frame=intent_frame,
@@ -58,11 +66,13 @@ class AgentEngineV2:
             intent_frame=intent_frame,
             rewrite_frame=rewrite_frame,
             context_frame=context_frame,
+            effective_request_frame=effective_request_frame,
         )
         candidate_plan = PlanCompiler().compile(
             skill_route=skill_route,
             intent_frame=intent_frame,
             context_frame=context_frame,
+            effective_request_frame=effective_request_frame,
             llm_candidate_plan=llm_candidate_plan,
         )
         validation = PlanValidator().validate(
@@ -78,6 +88,7 @@ class AgentEngineV2:
             intent_frame=intent_frame,
             rewrite_frame=rewrite_frame,
             context_frame=context_frame,
+            effective_request_frame=effective_request_frame,
             skill_route=skill_route,
             execution_plan=validation.validated_plan,
             evidence_ledger=EvidenceLedger(),
@@ -104,6 +115,7 @@ class AgentEngineV2:
                     "reuse_decision": context_frame.reuse_decision,
                     "missing_context": list(context_frame.missing_context),
                     "reuse_blockers": list(context_frame.reuse_blockers),
+                    "effective_request": effective_request_frame.model_dump(mode="json", exclude_none=True),
                 },
                 "skill_route": {
                     "primary_skill": skill_route.primary_skill,

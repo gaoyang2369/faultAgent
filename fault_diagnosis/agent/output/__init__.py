@@ -2,6 +2,7 @@
 
 from .answer import build_output_frame
 from .artifact_projection import project_artifact_envelope
+from .artifact_manifest import build_artifact_manifests, latest_focus_from_manifests
 from .report import build_reportable_payload
 from .sse_projection import (
     project_complete,
@@ -14,7 +15,9 @@ from .sse_projection import (
 
 __all__ = [
     "build_output_frame",
+    "build_artifact_manifests",
     "build_reportable_payload",
+    "latest_focus_from_manifests",
     "project_artifact_envelope",
     "project_complete",
     "project_start",

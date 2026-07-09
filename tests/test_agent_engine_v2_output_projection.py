@@ -287,6 +287,43 @@ def test_v2_artifact_projection_saves_existing_envelope_contract() -> None:
     assert "findings" in contract
 
 
+def test_v2_artifact_projection_persists_manifests_and_case_snapshot() -> None:
+    frame = build_output_frame(
+        status="completed",
+        artifacts={"analysis_artifact": _analysis(), "report_artifact": ReportStepArtifact(success=True, report_filename="demo.html", report_url="/reports/demo.html")},
+        evidence_bundle=_bundle(),
+    )
+
+    envelope = project_artifact_envelope(
+        thread_id="thread.manifest.output",
+        output_frame=frame,
+        evidence_bundle=_bundle(),
+        artifacts={
+            "analysis_artifact": _analysis(),
+            "report_artifact": ReportStepArtifact(success=True, report_filename="demo.html", report_url="/reports/demo.html"),
+            "structured_analysis_artifact": {
+                "asset": "J1号机",
+                "fault_code": "A07089",
+                "diagnosis_summary": "J1号机存在 A07089 相关异常。",
+                "severity": "medium",
+            },
+        },
+        node_results=[],
+        trace={"trace_id": "trace.manifest.output"},
+        request_summary="诊断 J1 A07089",
+    )
+
+    manifests = envelope.payload["artifact_manifests"]
+    assert any(item["artifact_type"] == "analysis_artifact" for item in manifests)
+    assert any(item["artifact_type"] == "report_artifact" and item["report_url"] == "/reports/demo.html" for item in manifests)
+    assert envelope.payload["latest_focus"]["artifact_type"] == "report_artifact"
+    snapshot = envelope.payload["case_state_snapshot"]
+    assert snapshot["schema_version"] == "case_state_snapshot.v1"
+    assert snapshot["active_asset"] == "J1号机"
+    assert snapshot["active_fault_codes"] == ["A07089"]
+    assert snapshot["latest_artifact_type"] == "report_artifact"
+
+
 def test_artifact_type_mapping_for_status_report_and_clarification() -> None:
     status = project_artifact_envelope(
         thread_id="thread.status",

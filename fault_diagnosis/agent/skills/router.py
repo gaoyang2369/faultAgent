@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..contracts import ContextFrame, IntentFrame, RewriteFrame, SkillRoute
+from ..contracts import ContextFrame, EffectiveRequestFrame, IntentFrame, RewriteFrame, SkillRoute
 from .loader import SkillLoader
 from .registry import SkillRegistry
 
@@ -37,14 +37,15 @@ class SkillRouter:
         intent_frame: IntentFrame,
         rewrite_frame: RewriteFrame,
         context_frame: ContextFrame,
+        effective_request_frame: EffectiveRequestFrame | None = None,
     ) -> SkillRoute:
-        selected = _select_skills(intent_frame, rewrite_frame)
+        selected = _select_skills(intent_frame, rewrite_frame, effective_request_frame)
         blocked_skills: dict[str, str] = {}
         routing_reason = "规则路由选择命中的 V2 skill。"
 
-        if _needs_clarification(context_frame, intent_frame):
+        if _needs_clarification(context_frame, intent_frame, effective_request_frame):
             blocked_skills = {
-                skill: _clarification_reason(context_frame, intent_frame)
+                skill: _clarification_reason(context_frame, intent_frame, effective_request_frame)
                 for skill in _DIAGNOSIS_SKILLS
                 if skill in selected or skill in ("runtime_status", "alarm_triage", "root_cause", "report_generation", "workorder_decision")
             }
@@ -61,7 +62,7 @@ class SkillRouter:
         return SkillRoute(
             selected_skills=selected,
             primary_skill=selected[0] if selected else "",
-            skill_inputs=_skill_inputs(intent_frame, rewrite_frame, context_frame, loaded_skills),
+            skill_inputs=_skill_inputs(intent_frame, rewrite_frame, context_frame, loaded_skills, effective_request_frame),
             load_set=load_set,
             skill_confidence=_confidence(intent_frame, selected, context_frame),
             routing_reason=routing_reason,
@@ -69,7 +70,39 @@ class SkillRouter:
         )
 
 
-def _select_skills(intent_frame: IntentFrame, rewrite_frame: RewriteFrame) -> list[str]:
+def _select_skills(
+    intent_frame: IntentFrame,
+    rewrite_frame: RewriteFrame,
+    effective_request_frame: EffectiveRequestFrame | None = None,
+) -> list[str]:
+    if effective_request_frame is not None:
+        semantic = effective_request_frame.semantic_intent
+        text = f"{intent_frame.normalized_message} {rewrite_frame.user_rewrite}"
+        selected: list[str] = []
+        if any(word in text for word in ("根因", "原因分析", "为什么", "排查")):
+            selected.append("root_cause")
+        if semantic in {"explain_fault_code", "expand_previous_answer", "show_manual_fields"}:
+            selected.append("fault_code_explain")
+        if semantic in {"check_runtime_status", "refresh_then_decide_workorder"}:
+            selected.append("runtime_status")
+        if (
+            effective_request_frame.effective_device_refs
+            and effective_request_frame.effective_fault_code_refs
+            and semantic in {"check_runtime_status", "explain_fault_code", "diagnose_from_runtime"}
+        ):
+            selected.append("alarm_triage")
+        if semantic in {"diagnose_from_runtime", "refresh_then_decide_workorder"}:
+            selected.extend(["alarm_triage", "root_cause"])
+        if semantic in {"generate_report", "generate_report_from_previous"}:
+            selected.append("report_generation")
+        if "generate_report" in set(intent_frame.sub_intents) or "report" in intent_frame.requested_outputs:
+            selected.append("report_generation")
+        if semantic in {"decide_workorder", "create_workorder_draft", "refresh_then_decide_workorder"}:
+            selected.append("workorder_decision")
+        if set(intent_frame.sub_intents).intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"}):
+            selected.append("workorder_decision")
+        if selected:
+            return _prioritize_skills(selected)
     sub_intents = set(intent_frame.sub_intents)
     text = f"{intent_frame.normalized_message} {rewrite_frame.user_rewrite}"
     selected: list[str] = []
@@ -103,7 +136,13 @@ def _prioritize_skills(selected: list[str]) -> list[str]:
     return sorted(selected, key=lambda skill: priority.get(skill, 100))
 
 
-def _needs_clarification(context_frame: ContextFrame, intent_frame: IntentFrame) -> bool:
+def _needs_clarification(
+    context_frame: ContextFrame,
+    intent_frame: IntentFrame,
+    effective_request_frame: EffectiveRequestFrame | None = None,
+) -> bool:
+    if effective_request_frame is not None and effective_request_frame.needs_clarification:
+        return True
     if context_frame.relation_to_previous == "ambiguous":
         return True
     if context_frame.missing_context and any(item in intent_frame.ambiguities for item in ("missing_device", "deictic_reference_without_context")):
@@ -111,7 +150,13 @@ def _needs_clarification(context_frame: ContextFrame, intent_frame: IntentFrame)
     return False
 
 
-def _clarification_reason(context_frame: ContextFrame, intent_frame: IntentFrame) -> str:
+def _clarification_reason(
+    context_frame: ContextFrame,
+    intent_frame: IntentFrame,
+    effective_request_frame: EffectiveRequestFrame | None = None,
+) -> str:
+    if effective_request_frame is not None and effective_request_frame.clarification_question:
+        return effective_request_frame.clarification_question
     if context_frame.missing_context:
         return "；".join(context_frame.missing_context)
     if intent_frame.ambiguities:
@@ -124,15 +169,33 @@ def _skill_inputs(
     rewrite_frame: RewriteFrame,
     context_frame: ContextFrame,
     loaded_skills: dict[str, Any],
+    effective_request_frame: EffectiveRequestFrame | None = None,
 ) -> dict[str, Any]:
+    device_refs = (
+        list(effective_request_frame.effective_device_refs)
+        if effective_request_frame is not None
+        else list(intent_frame.device_refs)
+    )
+    fault_code_refs = (
+        list(effective_request_frame.effective_fault_code_refs)
+        if effective_request_frame is not None
+        else list(intent_frame.fault_code_refs)
+    )
+    requested_outputs = list(intent_frame.requested_outputs)
+    if effective_request_frame is not None:
+        if effective_request_frame.requested_output_mode == "report" and "report" not in requested_outputs:
+            requested_outputs.append("report")
+        if effective_request_frame.requested_action in {"decide_workorder", "create_workorder_draft"}:
+            requested_outputs.append("workorder_draft")
     return {
-        "device_refs": list(intent_frame.device_refs),
-        "fault_code_refs": list(intent_frame.fault_code_refs),
-        "requested_outputs": list(intent_frame.requested_outputs),
+        "device_refs": device_refs,
+        "fault_code_refs": fault_code_refs,
+        "requested_outputs": list(dict.fromkeys(requested_outputs)),
         "user_rewrite": rewrite_frame.user_rewrite,
         "retrieval_queries": list(rewrite_frame.retrieval_queries),
         "context_relation": context_frame.relation_to_previous,
         "inherited_slots": dict(context_frame.inherited_slots),
+        "effective_request": effective_request_frame.model_dump(mode="json", exclude_none=True) if effective_request_frame is not None else {},
         "loaded_skill_names": list(loaded_skills),
     }
 

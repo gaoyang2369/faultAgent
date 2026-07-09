@@ -937,6 +937,44 @@ cases:
     metrics: {}
   asset_scope:
   - J1
+- id: followup_fault_code_expand_from_knowledge_artifact
+  name: 续问详细展开上一轮故障码
+  tier: core
+  eval_modes:
+  - plan
+  - trace_mock
+  role: engineer
+  identity_fixture: engineer_j1.json
+  artifact_fixture: previous_j1_a07089.json
+  sql_fixture: null
+  kb_fixture: a07089_hit.json
+  precondition: 上一轮 artifact 含 A07089 knowledge manifest
+  turns:
+  - 详细点
+  expected:
+    context:
+      source: conversation_state
+      used_active_fault_codes: true
+    intent:
+      alarm_codes:
+      - A07089
+      intent_stack_contains:
+      - explain_alarm_code
+    workflow:
+      policy_id: knowledge_qa_v1
+      enabled_nodes:
+      - knowledge
+      skipped_nodes:
+      - sql
+    tools:
+      planned:
+      - query_knowledge_base
+      forbidden:
+      - device_control.write
+    answer: {}
+    metrics: {}
+  asset_scope:
+  - J1
 - id: followup_workorder_from_artifact
   name: 续问是否需要工单
   tier: core
@@ -977,6 +1015,53 @@ cases:
       forbidden:
       - device_control.write
     answer: {}
+    metrics: {}
+  asset_scope:
+  - J1
+- id: followup_workorder_from_latest_report_artifact_no_ambiguity
+  name: 续问从最新报告创建工单不误判歧义
+  tier: core
+  eval_modes:
+  - plan
+  - trace_mock
+  role: engineer
+  identity_fixture: engineer_j1.json
+  artifact_fixture: previous_j1_a07089.json
+  sql_fixture: null
+  kb_fixture: null
+  precondition: 上一轮唯一最新 report manifest 可承接工单
+  turns:
+  - 看起来有故障，那就创建工单
+  expected:
+    context:
+      source: conversation_state
+      used_active_asset: true
+    intent:
+      device_ids:
+      - J1
+      alarm_codes:
+      - A07089
+      intent_stack_contains:
+      - workorder_decision
+      goal_types_contains:
+      - decide_workorder
+    workflow:
+      plan_mode: workorder_decision_from_artifact
+      enabled_nodes:
+      - workorder_decision
+      skipped_nodes:
+      - sql
+      - knowledge
+      - analysis
+    tools:
+      planned: []
+      forbidden:
+      - device_control.write
+      - workorder.dispatch
+    answer:
+      must_not_contain:
+      - 已派发工单
+      - 已下发工单
     metrics: {}
   asset_scope:
   - J1

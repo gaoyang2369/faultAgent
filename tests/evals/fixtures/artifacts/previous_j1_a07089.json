@@ -65,6 +65,83 @@
       "report_url": "/reports/j1-a07089-report.html",
       "save_result": "报告已保存至：/reports/j1-a07089-report.html"
     },
+    "artifact_manifests": [
+      {
+        "schema_version": "artifact_manifest.v1",
+        "artifact_id": "sql:previous_j1_a07089",
+        "artifact_type": "sql_artifact",
+        "thread_id": "placeholder",
+        "status": "completed",
+        "followupable": true,
+        "reportable": true,
+        "device_refs": ["J1"],
+        "fault_code_refs": ["A07089"],
+        "source_table": "real_data_01",
+        "freshness": "current",
+        "diagnosis_summary": "SQL 返回 3 条 real_data_01 运行记录",
+        "evidence_bundle_id": "eb_j1_a07089"
+      },
+      {
+        "schema_version": "artifact_manifest.v1",
+        "artifact_id": "knowledge:previous_j1_a07089",
+        "artifact_type": "knowledge_artifact",
+        "thread_id": "placeholder",
+        "status": "completed",
+        "followupable": true,
+        "fault_code_refs": ["A07089"],
+        "diagnosis_summary": "A07089 表示速度偏差或负载异常相关告警。",
+        "available_followups": ["expand_previous_answer", "show_manual_fields"]
+      },
+      {
+        "schema_version": "artifact_manifest.v1",
+        "artifact_id": "analysis:previous_j1_a07089",
+        "artifact_type": "analysis_artifact",
+        "thread_id": "placeholder",
+        "status": "completed",
+        "followupable": true,
+        "reportable": true,
+        "actionable": true,
+        "device_refs": ["J1"],
+        "fault_code_refs": ["A07089"],
+        "freshness": "current",
+        "severity": "medium",
+        "diagnosis_summary": "J1 A07089 持续出现，需现场复核负载与速度闭环。",
+        "findings": ["A07089 持续出现", "负载率偏高"],
+        "recommendations": ["生成待确认工单草稿"],
+        "evidence_bundle_id": "eb_j1_a07089",
+        "available_actions": ["decide_workorder", "create_workorder_draft"]
+      },
+      {
+        "schema_version": "artifact_manifest.v1",
+        "artifact_id": "/reports/j1-a07089-report.html",
+        "artifact_type": "report_artifact",
+        "thread_id": "placeholder",
+        "status": "completed",
+        "followupable": true,
+        "reportable": true,
+        "actionable": true,
+        "device_refs": ["J1"],
+        "fault_code_refs": ["A07089"],
+        "freshness": "current",
+        "severity": "medium",
+        "diagnosis_summary": "J1 A07089 持续出现，需现场复核负载与速度闭环。",
+        "report_url": "/reports/j1-a07089-report.html",
+        "linked_analysis_artifact_id": "analysis:previous_j1_a07089",
+        "linked_evidence_bundle_id": "eb_j1_a07089",
+        "available_actions": ["decide_workorder", "create_workorder_draft"]
+      }
+    ],
+    "latest_focus": {
+      "artifact_id": "/reports/j1-a07089-report.html",
+      "artifact_type": "report_artifact",
+      "device_refs": ["J1"],
+      "fault_code_refs": ["A07089"],
+      "evidence_bundle_id": "eb_j1_a07089",
+      "report_id": "/reports/j1-a07089-report.html",
+      "freshness": "current",
+      "severity": "medium",
+      "available_actions": ["decide_workorder", "create_workorder_draft"]
+    },
     "evidence_bundle": {
       "bundle_id": "eb_j1_a07089"
     },
