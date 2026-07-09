@@ -7,6 +7,7 @@ from fault_diagnosis.domain.security.permissions import build_auth_context
 from fault_diagnosis.domain.security.rag_acl import filter_kb_documents
 from fault_diagnosis.domain.security.runtime_context import get_current_auth_context
 from fault_diagnosis.platform.tools import report_tools
+from fault_diagnosis.agent.runtime.tool_runtime import ToolRuntime
 
 
 def _plan(nodes: list[dict[str, Any]], *, edges: list[dict[str, Any]] | None = None, approvals: list[dict[str, Any]] | None = None) -> ExecutionPlan:
@@ -171,6 +172,27 @@ def test_real_rag_node_uses_existing_visibility_filtering() -> None:
     assert "内部手册" in engineer.node_results[0].output["artifact"]["raw_output"]
     assert "受限手册" not in engineer.node_results[0].output["artifact"]["raw_output"]
     assert "受限手册" in admin.node_results[0].output["artifact"]["raw_output"]
+
+
+def test_tool_runtime_invokes_structured_kb_tool(monkeypatch) -> None:
+    class StructuredKbTool:
+        def __init__(self) -> None:
+            self.payload = None
+
+        def invoke(self, payload):  # noqa: ANN001
+            self.payload = payload
+            return f"hit:{payload['query']}"
+
+    tool = StructuredKbTool()
+
+    import fault_diagnosis.platform.tools.kb_tools as kb_tools
+
+    monkeypatch.setattr(kb_tools, "query_knowledge_base", tool)
+
+    result = ToolRuntime().query_knowledge_base("A07089")
+
+    assert result == "hit:A07089"
+    assert tool.payload == {"query": "A07089"}
 
 
 def test_kg_node_is_skipped_and_does_not_add_evidence() -> None:

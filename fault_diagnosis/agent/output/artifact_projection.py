@@ -51,6 +51,8 @@ def _artifact_type(variant: str) -> DiagnosisArtifactType:
         return DiagnosisArtifactType.STATUS_QUERY
     if variant == "report_ready":
         return DiagnosisArtifactType.REPORT_GENERATION
+    if variant == "knowledge_answer":
+        return DiagnosisArtifactType.KNOWLEDGE_QA
     return DiagnosisArtifactType.FAULT_DIAGNOSIS
 
 

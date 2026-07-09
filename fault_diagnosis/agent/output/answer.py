@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fault_diagnosis.domain.diagnosis.contracts import AnalysisStepArtifact, EvidenceBundle, ReportStepArtifact, SqlStepArtifact
+from fault_diagnosis.domain.diagnosis.contracts import (
+    AnalysisStepArtifact,
+    EvidenceBundle,
+    KnowledgeStepArtifact,
+    ReportStepArtifact,
+    SqlStepArtifact,
+)
 from ..contracts import NodeResult, OutputFrame
 
 
@@ -24,11 +30,13 @@ def build_output_frame(
     artifact_map = dict(artifacts or {})
     bundle = _model(evidence_bundle, EvidenceBundle)
     sql_artifact = _model(artifact_map.get("sql_artifact"), SqlStepArtifact)
+    knowledge_artifact = _model(artifact_map.get("knowledge_artifact"), KnowledgeStepArtifact)
     analysis_artifact = _model(artifact_map.get("analysis_artifact"), AnalysisStepArtifact)
     report_artifact = _model(artifact_map.get("report_artifact"), ReportStepArtifact)
     variant = requested_variant or _infer_variant(
         status=status,
         sql_artifact=sql_artifact,
+        knowledge_artifact=knowledge_artifact,
         analysis_artifact=analysis_artifact,
         report_artifact=report_artifact,
         cancelled=cancelled,
@@ -37,6 +45,7 @@ def build_output_frame(
         variant=variant,
         status=status,
         sql_artifact=sql_artifact,
+        knowledge_artifact=knowledge_artifact,
         analysis_artifact=analysis_artifact,
         report_artifact=report_artifact,
         evidence_bundle=bundle,
@@ -46,6 +55,7 @@ def build_output_frame(
     status_brief = _status_brief(sql_artifact=sql_artifact, evidence_bundle=bundle, status=status)
     diagnosis_payload = {
         "sql_artifact": _dump(sql_artifact),
+        "knowledge_artifact": _dump(knowledge_artifact),
         "analysis_artifact": _dump(analysis_artifact),
         "report_artifact": _dump(report_artifact),
         "evidence_bundle": _dump(bundle),
@@ -77,6 +87,7 @@ def _infer_variant(
     *,
     status: str,
     sql_artifact: SqlStepArtifact | None,
+    knowledge_artifact: KnowledgeStepArtifact | None,
     analysis_artifact: AnalysisStepArtifact | None,
     report_artifact: ReportStepArtifact | None,
     cancelled: bool,
@@ -89,6 +100,8 @@ def _infer_variant(
         return "report_ready"
     if analysis_artifact and analysis_artifact.success:
         return "diagnosis_answer"
+    if knowledge_artifact and knowledge_artifact.success:
+        return "knowledge_answer"
     if sql_artifact and sql_artifact.success:
         return "status_brief"
     return "clarification"
@@ -99,6 +112,7 @@ def _render_answer(
     variant: str,
     status: str,
     sql_artifact: SqlStepArtifact | None,
+    knowledge_artifact: KnowledgeStepArtifact | None,
     analysis_artifact: AnalysisStepArtifact | None,
     report_artifact: ReportStepArtifact | None,
     evidence_bundle: EvidenceBundle | None,
@@ -138,6 +152,8 @@ def _render_answer(
             parts.append(_line("风险提示", analysis_artifact.risk_notice))
         stale_lines = _stale_disclosure_lines(evidence_bundle)
         return "\n".join([*(item for item in parts if item), *stale_lines]).strip()
+    if variant == "knowledge_answer":
+        return _render_knowledge_answer(knowledge_artifact, evidence_bundle)
     if variant == "status_brief":
         return _status_brief(sql_artifact=sql_artifact, evidence_bundle=evidence_bundle, status=status)
     if cancel_reason:
@@ -162,6 +178,43 @@ def _status_brief(
     if summaries:
         return "；".join(summaries)
     return f"V2 runtime {status}."
+
+
+def _render_knowledge_answer(
+    knowledge_artifact: KnowledgeStepArtifact | None,
+    evidence_bundle: EvidenceBundle | None,
+) -> str:
+    snippets = _dedupe(list(knowledge_artifact.snippets if knowledge_artifact else []))
+    if not snippets and evidence_bundle:
+        snippets = _dedupe(
+            [
+                item.summary
+                for item in evidence_bundle.evidence_items
+                if item.evidence_type in {"fault_code_reference", "manual_reference"} and item.summary
+            ]
+        )
+    codes = _dedupe(list(knowledge_artifact.fault_codes if knowledge_artifact else []))
+    parts: list[str] = []
+    if codes:
+        parts.append(_line("故障码", "、".join(codes)))
+    parts.extend(_numbered("知识库结果", [_clean_knowledge_snippet(item) for item in snippets[:3]]))
+    stale_lines = _stale_disclosure_lines(evidence_bundle)
+    if parts:
+        return "\n".join([*parts, *stale_lines]).strip()
+    return "未检索到当前权限范围内可用的故障码说明。"
+
+
+def _clean_knowledge_snippet(value: str) -> str:
+    lines = []
+    for raw_line in str(value or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith(("来源：", "来源文件：", "file_id：", "source_type：", "extract_backend：", "来源页码：", "检索方式：")):
+            continue
+        lines.append(line.removeprefix("文档片段：").strip())
+    text = "；".join(lines).strip()
+    return text[:600] if text else str(value or "").strip()[:600]
 
 
 def _missing_evidence(

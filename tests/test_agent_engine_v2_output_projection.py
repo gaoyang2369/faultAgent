@@ -74,9 +74,21 @@ def _plan(nodes: list[dict] | None = None) -> ExecutionPlan:
 
 def test_build_output_frame_variants_are_stable() -> None:
     sql = SqlStepArtifact(success=True, summary="SQL 查询完成，解析出 1 条运行记录。", data_state="ok")
+    knowledge = KnowledgeStepArtifact(
+        success=True,
+        query="A07089",
+        snippets=["故障码：A07089\n来源：基础PDF知识库\n文档片段：A07089 表示速度偏差或负载异常。"],
+        raw_output="故障码：A07089\n文档片段：A07089 表示速度偏差或负载异常。",
+        fault_codes=["A07089"],
+    )
     report = ReportStepArtifact(success=True, report_filename="demo.html", report_url="/reports/demo.html")
 
     status_frame = build_output_frame(status="completed", artifacts={"sql_artifact": sql}, evidence_bundle=_bundle())
+    knowledge_frame = build_output_frame(
+        status="completed",
+        artifacts={"knowledge_artifact": knowledge},
+        evidence_bundle=_bundle(),
+    )
     diagnosis_frame = build_output_frame(
         status="completed",
         artifacts={"analysis_artifact": _analysis()},
@@ -89,6 +101,9 @@ def test_build_output_frame_variants_are_stable() -> None:
 
     assert status_frame.answer_variant == "status_brief"
     assert "SQL 查询完成" in status_frame.final_answer
+    assert knowledge_frame.answer_variant == "knowledge_answer"
+    assert "A07089" in knowledge_frame.final_answer
+    assert "速度偏差" in knowledge_frame.final_answer
     assert diagnosis_frame.answer_variant == "diagnosis_answer"
     assert "诊断结论" in diagnosis_frame.final_answer
     assert report_frame.answer_variant == "report_ready"
@@ -205,6 +220,14 @@ def test_artifact_type_mapping_for_status_report_and_clarification() -> None:
     assert status.workflow_type == DiagnosisArtifactType.STATUS_QUERY
     assert report.workflow_type == DiagnosisArtifactType.REPORT_GENERATION
     assert clarification.workflow_type == DiagnosisArtifactType.CLARIFICATION
+    knowledge = project_artifact_envelope(
+        thread_id="thread.knowledge",
+        output_frame=build_output_frame(
+            status="completed",
+            artifacts={"knowledge_artifact": KnowledgeStepArtifact(success=True, query="A07089", snippets=["A07089 说明"])},
+        ),
+    )
+    assert knowledge.workflow_type == DiagnosisArtifactType.KNOWLEDGE_QA
 
 
 def test_reportable_payload_uses_structured_inputs_only() -> None:

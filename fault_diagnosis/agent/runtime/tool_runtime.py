@@ -32,6 +32,8 @@ class ToolRuntime:
     def query_knowledge_base(self, query: str) -> str:
         from fault_diagnosis.platform.tools.kb_tools import query_knowledge_base
 
+        if hasattr(query_knowledge_base, "invoke"):
+            return query_knowledge_base.invoke({"query": query})
         return query_knowledge_base(query)
 
     def save_report(

@@ -418,7 +418,7 @@ class WorkflowRuntimeExecutor:
     def _finish_failed(self, state: RuntimeState, *, error: dict[str, Any]) -> RuntimeResult:
         state.status = "failed"
         state.add_trace("runtime_status", status="failed", error=error)
-        return _runtime_result(state, status="failed", final_content="V2 fake runtime failed.")
+        return _runtime_result(state, status="failed", final_content="")
 
     def _finish_cancelled(self, state: RuntimeState) -> RuntimeResult:
         state.status = "cancelled"
