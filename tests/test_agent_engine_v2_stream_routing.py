@@ -59,6 +59,42 @@ async def _assert_default_stream_uses_v2_without_legacy_or_compare(monkeypatch) 
     assert any(event["type"] == "tool_start" for event in events)
 
 
+def test_default_stream_exports_v2_trace(monkeypatch) -> None:
+    asyncio.run(_assert_default_stream_exports_v2_trace(monkeypatch))
+
+
+async def _assert_default_stream_exports_v2_trace(monkeypatch) -> None:
+    captured = {}
+
+    def fake_export_trace_snapshot(trace_payload, **kwargs):  # noqa: ANN001
+        captured["trace_payload"] = trace_payload
+        captured["kwargs"] = kwargs
+        return None
+
+    monkeypatch.setattr(streaming, "export_trace_snapshot", fake_export_trace_snapshot)
+    app = FastAPI()
+    app.state.dev_mode = False
+    app.state.agent_engine_v2_tool_runtime = _FakeToolRuntime()
+
+    chunks = [
+        chunk
+        async for chunk in streaming.token_stream_events(
+            app,
+            "A07089 是什么意思",
+            "thread.v2.trace",
+            request_id="request.v2.trace",
+            stream_id="stream.v2.trace",
+            auth_context=build_auth_context(role="guest"),
+        )
+    ]
+
+    complete = next(event for event in _events(chunks) if event["type"] == "chat_complete")
+    assert captured["trace_payload"]["trace_id"] == complete["trace_id"]
+    assert captured["kwargs"]["metadata"]["thread_id"] == "thread.v2.trace"
+    assert captured["kwargs"]["metadata"]["stream_id"] == "stream.v2.trace"
+    assert captured["kwargs"]["trace_context"].user_message == "A07089 是什么意思"
+
+
 def test_v2_failure_returns_server_error_without_legacy_fallback(monkeypatch) -> None:
     asyncio.run(_assert_v2_failure_returns_server_error_without_legacy_fallback(monkeypatch))
 

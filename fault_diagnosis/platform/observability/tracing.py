@@ -15,6 +15,9 @@ from fault_diagnosis.platform.logging import get_logger
 from fault_diagnosis.platform.settings import (
     AGENT_TRACE_BACKEND,
     AGENT_TRACE_CAPTURE_CONTENT,
+    AGENT_TRACE_CONSOLE,
+    AGENT_TRACE_CONSOLE_PREVIEW_CHARS,
+    AGENT_TRACE_CONSOLE_VERBOSE,
     AGENT_TRACE_FLUSH_ON_RUN,
     AGENT_TRACE_FLUSH_TIMEOUT_SECONDS,
     AGENT_TRACE_LOCAL_LOG,
@@ -729,3 +732,138 @@ def write_local_trace(trace_payload: dict[str, Any], *, metadata: dict[str, Any]
     except Exception as exc:  # pragma: no cover - local diagnostics are best effort
         _log.warning("本地 trace 写入失败", path=AGENT_TRACE_LOCAL_LOG_PATH, error=str(exc))
         return None
+
+
+def export_trace_snapshot(
+    trace_payload: dict[str, Any],
+    *,
+    metadata: dict[str, Any] | None = None,
+    trace_context: TraceRunContext | None = None,
+    output: Any | None = None,
+    error: str | None = None,
+) -> str | None:
+    """Export one completed runtime trace to configured local, console, and backend sinks."""
+
+    if not isinstance(trace_payload, dict):
+        trace_payload = {}
+    local_path = write_local_trace(trace_payload, metadata=metadata)
+    write_console_trace(trace_payload, metadata=metadata)
+    if trace_context is not None:
+        _export_backend_trace(trace_payload, trace_context=trace_context, output=output, error=error)
+    return local_path
+
+
+def write_console_trace(trace_payload: dict[str, Any], *, metadata: dict[str, Any] | None = None) -> None:
+    """Print a compact step-by-step runtime trace to the backend console when enabled."""
+
+    if not AGENT_TRACE_CONSOLE:
+        return
+    if not isinstance(trace_payload, dict):
+        trace_payload = {}
+    metadata = metadata or {}
+    events = trace_payload.get("events")
+    if not isinstance(events, list):
+        events = []
+    trace_id = str(trace_payload.get("trace_id") or metadata.get("trace_id") or "")
+    thread_id = str(trace_payload.get("thread_id") or metadata.get("thread_id") or "")
+    stream_id = str(metadata.get("stream_id") or "")
+    status = str(trace_payload.get("status") or metadata.get("status") or "")
+    node_order = trace_payload.get("node_order") if isinstance(trace_payload.get("node_order"), list) else []
+
+    _log.info(
+        "Agent trace completed",
+        trace_id=trace_id,
+        thread_id=thread_id,
+        stream_id=stream_id,
+        status=status,
+        event_count=len(events),
+        summary=_preview(f"node_order={node_order}", AGENT_TRACE_CONSOLE_PREVIEW_CHARS),
+    )
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        _write_console_trace_event(event, trace_id=trace_id, thread_id=thread_id, stream_id=stream_id)
+
+
+def _write_console_trace_event(event: dict[str, Any], *, trace_id: str, thread_id: str, stream_id: str) -> None:
+    event_type = str(event.get("event_type") or "trace_event")
+    status = str(event.get("status") or "")
+    node_id = str(event.get("node_id") or "")
+    node_type = str(event.get("node_type") or "")
+    if not AGENT_TRACE_CONSOLE_VERBOSE and event_type == "node_status" and status == "pending":
+        return
+
+    input_summary = str(event.get("input_summary") or "")
+    output_summary = str(event.get("output_summary") or "")
+    error = event.get("error")
+    log_method = _log.warning if status in {"failed", "blocked", "cancelled"} or error else _log.info
+    log_method(
+        "Agent trace event",
+        trace_id=trace_id,
+        thread_id=thread_id,
+        stream_id=stream_id,
+        stage=node_type or event_type,
+        node_id=node_id,
+        node_type=node_type,
+        status=status,
+        duration_ms=event.get("duration_ms"),
+        input_preview=_preview(input_summary, AGENT_TRACE_CONSOLE_PREVIEW_CHARS)
+        if AGENT_TRACE_CONSOLE_VERBOSE or status in {"running", "failed", "blocked"}
+        else "",
+        result_preview=_preview(output_summary, AGENT_TRACE_CONSOLE_PREVIEW_CHARS),
+        error=_preview(error, AGENT_TRACE_CONSOLE_PREVIEW_CHARS) if error else "",
+    )
+
+
+def _export_backend_trace(
+    trace_payload: dict[str, Any],
+    *,
+    trace_context: TraceRunContext,
+    output: Any | None = None,
+    error: str | None = None,
+) -> None:
+    try:
+        trace_run = get_trace_exporter().start_run(trace_context)
+        for event in trace_payload.get("events", []):
+            if not isinstance(event, dict):
+                continue
+            observation = trace_run.start_observation(
+                name=_observation_name(event),
+                as_type="span",
+                input={"summary": event.get("input_summary")} if event.get("input_summary") else None,
+                output={"summary": event.get("output_summary")} if event.get("output_summary") else None,
+                metadata={key: value for key, value in event.items() if key not in {"input_summary", "output_summary"}},
+                level="ERROR" if event.get("error") else None,
+                status_message=_normalize_status_message(event.get("status") or event.get("event_type") or ""),
+            )
+            observation.finish(
+                status=str(event.get("status") or "completed"),
+                error=str(event.get("error")) if event.get("error") else None,
+            )
+        trace_run.finish(
+            status=str(trace_payload.get("status") or ("failed" if error else "completed")),
+            output=output,
+            error=error,
+            metadata={
+                "event_count": len(trace_payload.get("events", [])),
+                "node_order": trace_payload.get("node_order", []),
+            },
+        )
+    except Exception as exc:  # pragma: no cover - observability must not break chat.
+        _log.warning("Trace export failed", trace_id=trace_context.trace_id, error=str(exc))
+
+
+def _observation_name(event: dict[str, Any]) -> str:
+    node_type = str(event.get("node_type") or "").strip()
+    node_id = str(event.get("node_id") or "").strip()
+    event_type = str(event.get("event_type") or "trace_event").strip()
+    if node_type and node_id:
+        return f"{event_type}:{node_type}:{node_id}"
+    if node_type:
+        return f"{event_type}:{node_type}"
+    return event_type or "trace_event"
+
+
+def _preview(value: Any, limit: int) -> str:
+    text = str(value or "")
+    return text if len(text) <= limit else f"{text[:limit]}..."

@@ -23,6 +23,7 @@ from fault_diagnosis.agent.output import project_start, project_task_update, pro
 from fault_diagnosis.agent.runtime import CancelToken
 from fault_diagnosis.domain.security.contracts import AuthContext
 from fault_diagnosis.domain.security.permissions import build_auth_context
+from fault_diagnosis.platform.observability import TraceRunContext, export_trace_snapshot
 
 _log = get_logger("streaming")
 
@@ -124,6 +125,7 @@ async def token_stream_events(
         async for chunk in _stream_v2_runtime(
             app=app,
             plan=v2_plan,
+            user_message=message,
             thread_id=thread_id,
             request_id=request_id,
             stream_id=stream_id,
@@ -178,6 +180,7 @@ async def _stream_v2_runtime(
     *,
     app: FastAPI,
     plan,
+    user_message: str,
     thread_id: str,
     request_id: str,
     stream_id: str,
@@ -220,6 +223,15 @@ async def _stream_v2_runtime(
         cancel_token=token,
         auth_context=auth_context,
     )
+    _export_v2_runtime_trace(
+        result,
+        trace_id=trace_id,
+        thread_id=thread_id,
+        request_id=request_id,
+        stream_id=stream_id,
+        user_identity=auth_context.display_name or auth_context.user_id,
+        user_message=user_message,
+    )
     state_for_progress = _state_from_result(
         plan=plan,
         result=result,
@@ -245,6 +257,51 @@ async def _stream_v2_runtime(
             _log.warning("V2 complete payload enrichment failed", thread_id=thread_id, error=str(exc))
     _save_v2_complete_artifact(complete, thread_id=thread_id)
     yield encode_sse_event("complete", complete, trace_id=trace_id)
+
+
+def _export_v2_runtime_trace(
+    result,
+    *,
+    trace_id: str,
+    thread_id: str,
+    request_id: str,
+    stream_id: str,
+    user_identity: str,
+    user_message: str,
+) -> None:
+    try:
+        export_trace_snapshot(
+            result.trace,
+            metadata={
+                "request_id": request_id,
+                "thread_id": thread_id,
+                "trace_id": trace_id,
+                "stream_id": stream_id,
+                "status": result.status,
+                "event_count": len(result.trace.get("events", [])) if isinstance(result.trace, dict) else 0,
+            },
+            trace_context=TraceRunContext(
+                trace_id=trace_id,
+                request_id=request_id,
+                thread_id=thread_id,
+                user_identity=user_identity,
+                user_message=user_message,
+                stream_id=stream_id,
+            ),
+            output={"status": result.status, "final_answer": result.output_frame.final_answer},
+            error=_trace_error(result.trace),
+        )
+    except Exception as exc:  # noqa: BLE001 - trace export must not break streaming.
+        _log.warning("V2 runtime trace export failed", trace_id=trace_id, thread_id=thread_id, error=str(exc))
+
+
+def _trace_error(trace_payload: dict[str, Any]) -> str | None:
+    if not isinstance(trace_payload, dict):
+        return None
+    errors = trace_payload.get("errors")
+    if isinstance(errors, list) and errors:
+        return str(errors[-1])
+    return None
 
 
 def _state_from_plan(*, plan, trace_id: str, thread_id: str, request_id: str, auth_context: AuthContext):
