@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from .contracts import (
+    ContextFrame,
     EvidenceLedger,
+    EffectiveRequestFrame,
     OutputFrame,
     PlanSnapshotV2,
 )
@@ -57,6 +59,7 @@ class AgentEngineV2:
             conversation_context=conversation_context,
             recent_context_signals=recent_context_signals,
         )
+        context_frame = _normalize_context_with_effective_request(context_frame, effective_request_frame)
         rewrite_frame = RewriteFrameBuilder().build(
             raw_message,
             intent_frame=intent_frame,
@@ -81,7 +84,13 @@ class AgentEngineV2:
             intent_frame=intent_frame,
             auth_context=auth_context,
         )
-        snapshot_status = "blocked" if validation.status == "blocked" else "validated"
+        snapshot_status = (
+            "blocked"
+            if validation.status == "blocked"
+            else "validated_degraded"
+            if validation.status == "degraded"
+            else "validated"
+        )
 
         return PlanSnapshotV2(
             status=snapshot_status,
@@ -140,3 +149,31 @@ class AgentEngineV2:
         """Deprecated compatibility wrapper; use build_plan_snapshot()."""
 
         return self.build_plan_snapshot(**kwargs)
+
+
+def _normalize_context_with_effective_request(
+    context_frame: ContextFrame,
+    effective_request_frame: EffectiveRequestFrame,
+) -> ContextFrame:
+    """Let the finalized effective request settle legacy ambiguous follow-ups."""
+
+    if context_frame.relation_to_previous != "ambiguous":
+        return context_frame
+    if effective_request_frame.needs_clarification:
+        return context_frame
+    fault_codes = [code for code in effective_request_frame.effective_fault_code_refs if str(code).strip()]
+    if (
+        len(fault_codes) == 1
+        and effective_request_frame.target_artifact_id
+        and effective_request_frame.semantic_intent
+        in {"expand_previous_answer", "show_manual_fields", "explain_fault_code"}
+    ):
+        return context_frame.model_copy(
+            update={
+                "relation_to_previous": "knowledge_followup",
+                "reuse_decision": "reuse_artifact",
+                "missing_context": [],
+                "reuse_blockers": [],
+            }
+        )
+    return context_frame

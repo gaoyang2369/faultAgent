@@ -45,6 +45,10 @@ class EvidenceLedgerWriter:
             item = _normalize_evidence(raw, node=node, index=index, tool_call_refs=tool_call_refs, auth_context=self.auth_context)
             evidence_id = str(item.get("evidence_id") or f"ev_{len(self.ledger.evidence_items) + index}")
             item["evidence_id"] = evidence_id
+            if _is_failed_tool_evidence(item):
+                current = list(self.ledger.quality_checks.get("filtered_failed_tool_evidence_ids", []) or [])
+                self.ledger.quality_checks["filtered_failed_tool_evidence_ids"] = _dedupe([*current, evidence_id])
+                continue
             if not _is_authorized(item):
                 filtered.append(evidence_id)
                 continue
@@ -239,6 +243,14 @@ def _normalize_claim(raw: Any, *, index: int) -> dict[str, Any]:
 def _is_authorized(item: dict[str, Any]) -> bool:
     explicit = _explicit_authorized(item)
     return explicit is True
+
+
+def _is_failed_tool_evidence(item: dict[str, Any]) -> bool:
+    evidence_type = str(item.get("evidence_type") or "")
+    content = item.get("content") if isinstance(item.get("content"), dict) else {}
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    error_code = str(content.get("error_code") or metadata.get("error_code") or "")
+    return evidence_type in {"tool_error", "empty_result"} or error_code in {"kb_timeout", "tool_error", "empty_result"}
 
 
 def _explicit_authorized(item: dict[str, Any]) -> bool | None:

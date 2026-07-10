@@ -101,7 +101,7 @@ class RuntimeState(BaseModel):
 
     def finalize_ledger(self) -> None:
         artifact_refs = [
-            {"artifact_type": key, "available": True}
+            {"artifact_type": key, "available": bool(getattr(value, "available", getattr(value, "success", True)))}
             for key, value in self.artifacts.items()
             if value is not None
         ]

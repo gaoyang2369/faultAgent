@@ -10,6 +10,7 @@ from fault_diagnosis.domain.diagnosis.contracts import KnowledgeStepArtifact
 from fault_diagnosis.domain.diagnosis.steps.knowledge_lookup import extract_fault_code_entries, extract_fault_codes_from_text
 from fault_diagnosis.domain.security.runtime_context import reset_current_auth_context, set_current_auth_context
 from fault_diagnosis.domain.diagnosis.evidence.knowledge import build_knowledge_evidence_items
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact
 from fault_diagnosis.agent.evidence.claims import build_v2_claim
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
@@ -31,6 +32,31 @@ class RagNode:
                 output={"success": False, "error": "missing_query"},
                 error={"code": "missing_query", "message": "RAG node requires inputs.query."},
             )
+        reused_artifact = _previous_knowledge_artifact(node=node, state=state)
+        if reused_artifact is not None:
+            artifact = reused_artifact.model_copy(
+                update={
+                    "query": query,
+                    "available": True,
+                    "evidence_usable": True,
+                }
+            )
+            evidence = models_to_dicts(build_knowledge_evidence_items(artifact, request=build_request(state, node, goal="知识库检索")))
+            claims = _fault_code_explanation_claims(node=node, artifact=artifact, evidence=evidence)
+            state.artifacts["knowledge_artifact"] = artifact
+            return NodeExecutionOutput(
+                output={
+                    "success": True,
+                    "artifact": model_to_dict(artifact),
+                    "snippets": list(artifact.snippets),
+                    "reused_artifact": True,
+                    "source_artifact_refs": input_value(node, "source_artifact_refs", []) or [],
+                },
+                tool_call_refs=[],
+                proposed_evidence=evidence,
+                proposed_claims=claims,
+                artifacts={"knowledge_artifact": artifact},
+            )
         auth = auth_context(state)
         token = set_current_auth_context(auth)
         started_at = _utc_now_iso()
@@ -42,9 +68,13 @@ class RagNode:
             ended_at = _utc_now_iso()
             reset_current_auth_context(token)
 
-        text = str(raw_output or "").strip()
-        success = bool(text) and "未检索到" not in text and "知识库不可用" not in text
-        snippets = [block.strip() for block in text.split("\n\n") if block.strip()][:3]
+        classified = _classify_kb_output(raw_output)
+        text = classified["text"]
+        success = bool(classified["success"])
+        error_code = str(classified.get("error_code") or "")
+        error_message = str(classified.get("error") or "")
+        top_k = max(1, min(int(input_value(node, "top_k", 3) or 3), 10))
+        snippets = [block.strip() for block in text.split("\n\n") if block.strip()][:top_k] if success else []
         requested_codes = extract_fault_codes_from_text(query)
         entries = extract_fault_code_entries(text, requested_codes=requested_codes)
         fault_codes = [entry.code for entry in entries] or extract_fault_codes_from_text(text)
@@ -53,8 +83,11 @@ class RagNode:
             query=query,
             snippets=snippets,
             raw_output=text,
-            error=None if success else text or "知识库未返回内容",
-            hit_count=len(snippets),
+            error=None if success else error_message or "知识库未返回内容",
+            error_code=error_code,
+            evidence_usable=success,
+            available=success,
+            hit_count=len(snippets) if success else 0,
             fault_codes=fault_codes,
             fault_code_entries=entries,
         )
@@ -69,10 +102,18 @@ class RagNode:
                 "duration_ms": duration_ms,
                 "latency_ms": duration_ms,
                 "phase_latencies_ms": {"total": duration_ms},
+                "retrieval_strategy": str(input_value(node, "retrieval_strategy", "") or "semantic_search"),
+                "top_k": top_k,
             }
         }
         return NodeExecutionOutput(
-            output={"success": success, "artifact": model_to_dict(artifact), "snippets": snippets, "tool_metrics": tool_metrics},
+            output={
+                "success": success,
+                "artifact": model_to_dict(artifact),
+                "snippets": snippets,
+                "error": {"code": error_code, "message": error_message} if error_code else None,
+                "tool_metrics": tool_metrics,
+            },
             tool_call_refs=["query_knowledge_base"],
             proposed_evidence=evidence,
             proposed_claims=claims,
@@ -112,6 +153,88 @@ def _fault_code_explanation_claims(
             confidence="high",
         )
     ]
+
+
+def _classify_kb_output(raw_output: Any) -> dict[str, Any]:
+    text = str(raw_output or "").strip()
+    if not text:
+        return {
+            "success": False,
+            "text": "",
+            "error_code": "empty_result",
+            "error": "知识库未返回内容。",
+        }
+    if "超时" in text and ("知识库" in text or "检索" in text):
+        return {
+            "success": False,
+            "text": "",
+            "error_code": "kb_timeout",
+            "error": "知识库检索超时，未获得可靠证据，请稍后重试或缩小查询范围。",
+        }
+    if any(marker in text for marker in ("知识库不可用", "检索失败", "工具执行失败")):
+        return {
+            "success": False,
+            "text": "",
+            "error_code": "tool_error",
+            "error": text,
+        }
+    if "未检索到" in text:
+        return {
+            "success": False,
+            "text": "",
+            "error_code": "empty_result",
+            "error": text,
+        }
+    return {"success": True, "text": text, "error_code": "", "error": ""}
+
+
+def _previous_knowledge_artifact(*, node: dict[str, Any], state: RuntimeState) -> KnowledgeStepArtifact | None:
+    semantic_intent = str(input_value(node, "semantic_intent", "") or "")
+    if semantic_intent != "expand_previous_answer":
+        return None
+    source_refs = input_value(node, "source_artifact_refs", []) or []
+    if not source_refs or not state.thread_id:
+        return None
+    try:
+        envelope = get_thread_artifact(state.thread_id)
+    except Exception:
+        return None
+    payload = getattr(envelope, "payload", None)
+    if not isinstance(payload, dict):
+        return None
+    artifact = _find_knowledge_artifact(payload)
+    if artifact is None or not artifact.success:
+        return None
+    requested_codes = {str(code).upper() for code in input_value(node, "fault_code_refs", []) or []}
+    artifact_codes = {str(code).upper() for code in artifact.fault_codes}
+    if requested_codes and artifact_codes and not requested_codes.intersection(artifact_codes):
+        return None
+    return artifact
+
+
+def _find_knowledge_artifact(value: Any) -> KnowledgeStepArtifact | None:
+    if isinstance(value, KnowledgeStepArtifact):
+        return value
+    if isinstance(value, dict):
+        if "knowledge_artifact" in value:
+            found = _find_knowledge_artifact(value.get("knowledge_artifact"))
+            if found is not None:
+                return found
+        if {"success", "query"}.issubset(value.keys()) and ("raw_output" in value or "snippets" in value):
+            try:
+                return KnowledgeStepArtifact.model_validate(value)
+            except Exception:
+                pass
+        for item in value.values():
+            found = _find_knowledge_artifact(item)
+            if found is not None:
+                return found
+    if isinstance(value, list):
+        for item in value:
+            found = _find_knowledge_artifact(item)
+            if found is not None:
+                return found
+    return None
 
 
 def _utc_now_iso() -> str:

@@ -11,7 +11,7 @@ ENGINE_VERSION = "v2"
 PLAN_SNAPSHOT_V2_SCHEMA_VERSION = "agent_engine_plan_snapshot.v2"
 
 NodeStatus = Literal["pending", "running", "completed", "skipped", "blocked", "failed", "cancelled"]
-PlanSnapshotStatus = Literal["not_implemented", "planned", "validated", "blocked", "failed"]
+PlanSnapshotStatus = Literal["not_implemented", "planned", "validated", "validated_degraded", "blocked", "failed"]
 RiskLevel = Literal["low", "medium", "high", "critical"]
 ArtifactType = Literal[
     "knowledge_artifact",
@@ -237,6 +237,7 @@ class SqlNodeInputs(AgentEngineContract):
     use_checker: bool = False
     equipment_hint: str = ""
     fault_code_hint: str = ""
+    degraded_notice: str = ""
     device_refs: list[str] = Field(default_factory=list)
     fault_code_refs: list[str] = Field(default_factory=list)
     requested_tables: list[str] = Field(default_factory=list)
@@ -253,6 +254,9 @@ class SqlNodeInputs(AgentEngineContract):
 
 class RagNodeInputs(AgentEngineContract):
     query: str = ""
+    retrieval_strategy: str = ""
+    top_k: int = Field(default=1, ge=1, le=10)
+    source_artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     device_refs: list[str] = Field(default_factory=list)
     fault_code_refs: list[str] = Field(default_factory=list)
     context_relation: str = ""

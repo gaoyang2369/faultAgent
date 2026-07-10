@@ -174,6 +174,44 @@ def test_real_rag_node_uses_existing_visibility_filtering() -> None:
     assert "受限手册" in admin.node_results[0].output["artifact"]["raw_output"]
 
 
+def test_real_rag_node_timeout_is_not_usable_evidence() -> None:
+    class TimeoutToolRuntime(FakeToolRuntime):
+        def query_knowledge_base(self, query: str) -> str:
+            return "超时：知识库检索超过 15s 未返回，请稍后重试或缩小查询范围。"
+
+    result = _runtime(TimeoutToolRuntime()).execute(
+        _plan(
+            [
+                {
+                    "node_id": "rag_1",
+                    "node_type": "rag",
+                    "inputs": {
+                        "query": "F01002 故障原因 触发条件 处理措施 检查步骤 复位方法 详细说明",
+                        "fault_code_refs": ["F01002"],
+                        "semantic_intent": "expand_previous_answer",
+                        "requested_output_mode": "detailed",
+                        "top_k": 5,
+                    },
+                }
+            ]
+        ),
+        auth_context=build_auth_context(role="guest"),
+    )
+
+    node = result.node_results[0]
+    artifact = node.output["artifact"]
+    assert node.status == "completed"
+    assert node.evidence_refs == []
+    assert artifact["success"] is False
+    assert artifact["hit_count"] == 0
+    assert artifact["snippets"] == []
+    assert artifact["error_code"] == "kb_timeout"
+    assert result.evidence_ledger.evidence_items == []
+    assert result.evidence_ledger.final_claim_ids == []
+    assert "ev_kb_001" not in result.evidence_ledger.quality_checks.get("evidence_ids", [])
+    assert result.output_frame.final_answer == "知识库检索超时，未获得可靠证据，请稍后重试或缩小查询范围。"
+
+
 def test_tool_runtime_invokes_structured_kb_tool(monkeypatch) -> None:
     class StructuredKbTool:
         def __init__(self) -> None:

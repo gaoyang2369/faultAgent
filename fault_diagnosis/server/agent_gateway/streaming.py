@@ -18,8 +18,16 @@ from fault_diagnosis.shared.utils import summarize_identifier_for_log
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import save_thread_artifact
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
 from fault_diagnosis.agent import AgentEngineV2, WorkflowRuntimeExecutor
-from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_plan
-from fault_diagnosis.agent.output import project_start, project_task_update, project_token, project_tool_end, project_tool_start
+from fault_diagnosis.agent.contracts import OutputFrame
+from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_validation
+from fault_diagnosis.agent.output import (
+    project_complete,
+    project_start,
+    project_task_update,
+    project_token,
+    project_tool_end,
+    project_tool_start,
+)
 from fault_diagnosis.agent.runtime import CancelToken
 from fault_diagnosis.domain.security.contracts import AuthContext
 from fault_diagnosis.domain.security.permissions import build_auth_context
@@ -131,7 +139,40 @@ async def token_stream_events(
             metadata={"stream_id": stream_id, "source": "chat_stream"},
         )
         recorder.add_plan_snapshot(v2_snapshot)
-        v2_plan = prepare_v2_execution_plan(snapshot=v2_snapshot, thread_id=thread_id, auth_context=effective_auth)
+        if v2_snapshot.status == "blocked":
+            async for chunk in _stream_v2_validation_blocked(
+                snapshot=v2_snapshot,
+                recorder=recorder,
+                user_message=message,
+                thread_id=thread_id,
+                request_id=request_id,
+                stream_id=stream_id,
+                trace_id=trace_id,
+                auth_context=effective_auth,
+                complete_payload_enricher=complete_payload_enricher,
+            ):
+                yield chunk
+            return
+        v2_validation = prepare_v2_execution_validation(
+            snapshot=v2_snapshot,
+            thread_id=thread_id,
+            auth_context=effective_auth,
+        )
+        if v2_validation.status == "blocked":
+            async for chunk in _stream_v2_validation_blocked(
+                snapshot=v2_snapshot.model_copy(update={"execution_plan": v2_validation.validated_plan}),
+                recorder=recorder,
+                user_message=message,
+                thread_id=thread_id,
+                request_id=request_id,
+                stream_id=stream_id,
+                trace_id=trace_id,
+                auth_context=effective_auth,
+                complete_payload_enricher=complete_payload_enricher,
+            ):
+                yield chunk
+            return
+        v2_plan = v2_validation.validated_plan
         async for chunk in _stream_v2_runtime(
             app=app,
             plan=v2_plan,
@@ -209,6 +250,92 @@ async def token_stream_events(
         if stream_id:
             await clear_stream_handle(app, stream_id)
         clear_namespace()
+
+
+async def _stream_v2_validation_blocked(
+    *,
+    snapshot,
+    recorder: TraceRecorder,
+    user_message: str,
+    thread_id: str,
+    request_id: str,
+    stream_id: str,
+    trace_id: str,
+    auth_context: AuthContext,
+    complete_payload_enricher,
+) -> AsyncGenerator[str, None]:
+    message = _validation_blocked_message(snapshot)
+    plan = snapshot.execution_plan
+    output_frame = OutputFrame(
+        answer_variant="blocked",
+        final_answer=message,
+        guardrail_result=dict(snapshot.output_frame.guardrail_result or {}),
+    )
+    state = _state_from_plan(
+        plan=plan,
+        trace_id=trace_id,
+        thread_id=thread_id,
+        request_id=request_id,
+        auth_context=auth_context,
+    )
+    state.status = "blocked"
+    canonical_trace = recorder.finish(status="blocked")
+    _export_canonical_trace(
+        canonical_trace,
+        trace_id=trace_id,
+        thread_id=thread_id,
+        request_id=request_id,
+        stream_id=stream_id,
+        user_identity=auth_context.display_name or auth_context.user_id,
+        user_message=user_message,
+        legacy_runtime_events=[],
+        error=None,
+    )
+    yield encode_sse_event(
+        "start",
+        project_start(thread_id=thread_id, stream_id=stream_id, trace_id=trace_id),
+        trace_id=trace_id,
+    )
+    yield encode_sse_event("task_update", project_task_update(state=state), trace_id=trace_id)
+    yield encode_sse_event("token", project_token(output_frame), trace_id=trace_id)
+    complete = project_complete(
+        state=state,
+        status="blocked",
+        output_frame=output_frame,
+        final_content=message,
+    )
+    _attach_canonical_trace(complete, canonical_trace.model_dump(mode="json"))
+    if complete_payload_enricher is not None:
+        try:
+            complete = complete_payload_enricher(complete)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("V2 blocked complete payload enrichment failed", thread_id=thread_id, error=str(exc))
+    _save_v2_complete_artifact(complete, thread_id=thread_id)
+    yield encode_sse_event("complete", complete, trace_id=trace_id)
+
+
+def _validation_blocked_message(snapshot) -> str:
+    guardrail = snapshot.output_frame.guardrail_result or {}
+    authorization = guardrail.get("authorization") if isinstance(guardrail, dict) else {}
+    if isinstance(authorization, dict):
+        code = str(authorization.get("denied_reason_code") or "")
+        user_message = str(authorization.get("user_message") or "").strip()
+        if code in {"permission_denied", "report_permission_denied", "missing_workflow_permission", "asset_out_of_scope"}:
+            return user_message or "当前身份无权执行该任务，请登录具备相应权限的账号。"
+    issues = guardrail.get("issues") if isinstance(guardrail, dict) else []
+    if isinstance(issues, list):
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            code = str(issue.get("code") or "")
+            message = str(issue.get("message") or "").strip()
+            if code in {"report_permission_denied", "permission_denied", "missing_workflow_permission"}:
+                return "当前身份无法生成正式报告。请使用具备报告生成权限的工程师或管理员账号。"
+            if code == "asset_out_of_scope":
+                return "请求中的设备不在当前账号负责范围内。"
+            if message:
+                return message
+    return "当前请求未通过权限或安全校验，已终止执行。"
 
 
 async def _stream_v2_runtime(

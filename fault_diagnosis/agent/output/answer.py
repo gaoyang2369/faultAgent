@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from fault_diagnosis.domain.diagnosis.contracts import (
@@ -142,6 +141,8 @@ def _infer_variant(
         return "diagnosis_answer"
     if knowledge_artifact and knowledge_artifact.success:
         return "knowledge_answer"
+    if knowledge_artifact and not knowledge_artifact.success:
+        return "tool_error"
     if sql_artifact and sql_artifact.success:
         return "status_brief"
     return "clarification"
@@ -168,6 +169,12 @@ def _render_answer(
     if variant == "error":
         message = str((error or {}).get("message") or "").strip()
         return message or "V2 执行失败，未生成可靠诊断结果。"
+    if variant == "tool_error":
+        code = str(getattr(knowledge_artifact, "error_code", "") or "")
+        message = str(getattr(knowledge_artifact, "error", "") or "").strip()
+        if code == "kb_timeout":
+            return "知识库检索超时，未获得可靠证据，请稍后重试或缩小查询范围。"
+        return message or "知识库检索未获得可靠证据，请稍后重试或缩小查询范围。"
     if variant == "report_ready" and report_artifact:
         link = report_artifact.report_url or report_artifact.report_filename or ""
         suffix = f" 报告地址：{link}" if link else ""
@@ -217,9 +224,10 @@ def _workorder_draft_payload(
 
     suggestion_data = _as_dict(suggestion)
     draft_data = _as_dict(draft)
-    source_artifact_refs = _source_artifact_refs(suggestion_data, pending_action, draft_data)
+    node_output = _workorder_node_output(node_results)
+    source_artifact_refs = _source_artifact_refs(suggestion_data, pending_action, draft_data, node_output)
     target_evidence_bundle_id = _first_text(
-        _node_input_scalar(node_results, "target_evidence_bundle_id"),
+        node_output.get("target_evidence_bundle_id"),
         pending_action.get("source_diagnosis_artifact_id"),
         draft_data.get("source_diagnosis_artifact_id"),
         suggestion_data.get("source_diagnosis_artifact_id"),
@@ -228,23 +236,31 @@ def _workorder_draft_payload(
     stale_required = any(
         [
             _truthy(pending_action.get("stale_refresh_required")),
-            _truthy(_node_input_scalar(node_results, "stale_evidence_disclosure_required")),
+            _truthy(node_output.get("stale_evidence_disclosure_required")),
+            _truthy(node_output.get("stale_refresh_required")),
             bool(draft_data.get("stale_warning")),
             bool(_stale_evidence(evidence_bundle)),
         ]
     )
     evidence_freshness = _first_text(
-        _node_input_scalar(node_results, "evidence_freshness"),
+        node_output.get("evidence_freshness"),
         "stale" if stale_required else "",
         "unknown",
     )
     supporting_evidence_refs = _dedupe(
         [
+            *_as_text_list(node_output.get("supporting_evidence_refs")),
             *_as_text_list(pending_action.get("required_evidence")),
             *[item.evidence_id for item in (evidence_bundle.evidence_items if evidence_bundle else [])],
         ]
     )
     approval_requirements = _approval_requirements_from_node_results(node_results)
+    manual_confirmation_required = bool(
+        draft_data
+        or pending_action
+        or suggestion_data.get("lifecycle_status") == "recommended_draft"
+        or suggestion_data.get("need_workorder") is True
+    )
 
     return {
         "workorder_suggestion": suggestion_data,
@@ -257,8 +273,8 @@ def _workorder_draft_payload(
         "evidence_freshness": evidence_freshness,
         "stale_evidence_disclosure_required": stale_required,
         "generated_from_previous_artifact": bool(source_artifact_refs or target_evidence_bundle_id),
-        "manual_confirmation_required": True,
-        "draft_only": True,
+        "manual_confirmation_required": manual_confirmation_required,
+        "draft_only": manual_confirmation_required,
         "dispatch_forbidden": True,
     }
 
@@ -618,10 +634,31 @@ def _approval_requirements_from_node_results(node_results: list[NodeResult] | li
     return []
 
 
+def _workorder_node_output(node_results: list[NodeResult] | list[dict[str, Any]]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for item in node_results:
+        result = _as_dict(item)
+        output = result.get("output") if isinstance(result.get("output"), dict) else {}
+        if result.get("node_type") == "workorder" or any(
+            key in output
+            for key in (
+                "workorder_suggestion",
+                "suggestion",
+                "pending_action",
+                "draft",
+                "target_evidence_bundle_id",
+                "source_artifact_refs",
+            )
+        ):
+            merged.update(output)
+    return merged
+
+
 def _source_artifact_refs(
     suggestion: dict[str, Any],
     pending_action: dict[str, Any],
     draft: dict[str, Any],
+    node_output: dict[str, Any],
 ) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -636,6 +673,9 @@ def _source_artifact_refs(
         seen.add(key)
         refs.append({"artifact_id": text, "artifact_type": artifact_type})
 
+    for item in node_output.get("source_artifact_refs") or []:
+        if isinstance(item, dict):
+            add_ref(item.get("artifact_id"), str(item.get("artifact_type") or "artifact"))
     add_ref(draft.get("source_report_artifact_id"), "report_artifact")
     add_ref(suggestion.get("source_report_artifact_id"), "report_artifact")
     add_ref(pending_action.get("source_report_artifact_id"), "report_artifact")
@@ -645,23 +685,6 @@ def _source_artifact_refs(
     add_ref(pending_action.get("recommendation_artifact_id"), "workorder_suggestion")
     add_ref(draft.get("created_from_recommendation_artifact_id"), "workorder_suggestion")
     return refs
-
-
-def _node_input_scalar(node_results: list[NodeResult] | list[dict[str, Any]], key: str) -> str:
-    key_pattern = re.escape(key)
-    patterns = [
-        re.compile(rf"['\"]{key_pattern}['\"]\s*:\s*'([^']*)'"),
-        re.compile(rf"['\"]{key_pattern}['\"]\s*:\s*\"([^\"]*)\""),
-        re.compile(rf"['\"]{key_pattern}['\"]\s*:\s*(True|False|None|[A-Za-z0-9_./:-]+)"),
-    ]
-    for item in node_results:
-        result = _as_dict(item)
-        summary = str(result.get("input_summary") or "")
-        for pattern in patterns:
-            match = pattern.search(summary)
-            if match:
-                return _first_text(match.group(1))
-    return ""
 
 
 def _model(value: Any, model_type: Any) -> Any:

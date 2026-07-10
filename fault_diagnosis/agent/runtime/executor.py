@@ -481,7 +481,8 @@ def _runtime_output_frame(state: RuntimeState, *, status: str, cancelled: bool =
 
 
 def _is_executable_validated_plan(plan: ExecutionPlan) -> bool:
-    return bool(plan.plan_id and str(plan.plan_version or "").endswith(".validated"))
+    plan_version = str(plan.plan_version or "")
+    return bool(plan.plan_id and ".validated" in plan_version and ".blocked" not in plan_version)
 
 
 def _retry_limit(node: dict[str, Any]) -> int:

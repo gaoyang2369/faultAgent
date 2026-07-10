@@ -11,7 +11,7 @@ from fault_diagnosis.domain.security.sql_safety import build_fallback_sql_query
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact
 
 from ..contracts import ExecutionPlan, PlanSnapshotV2
-from ..planning import PlanValidator
+from ..planning import PlanValidationResult, PlanValidator
 
 
 @dataclass(frozen=True)
@@ -24,15 +24,27 @@ class V2ExecutionDecision:
 
 
 def prepare_v2_execution_plan(*, snapshot: PlanSnapshotV2, thread_id: str, auth_context: Any | None = None) -> ExecutionPlan:
+    return prepare_v2_execution_validation(
+        snapshot=snapshot,
+        thread_id=thread_id,
+        auth_context=auth_context,
+    ).validated_plan
+
+
+def prepare_v2_execution_validation(
+    *,
+    snapshot: PlanSnapshotV2,
+    thread_id: str,
+    auth_context: Any | None = None,
+) -> PlanValidationResult:
     prepared = _prepare_plan(snapshot.execution_plan, snapshot=snapshot, thread_id=thread_id)
-    validation = PlanValidator().validate(
+    return PlanValidator().validate(
         candidate_plan=prepared,
         skill_route=snapshot.skill_route,
         intent_frame=snapshot.intent_frame,
         auth_context=auth_context,
         require_runtime_inputs=True,
     )
-    return validation.validated_plan
 
 
 def decide_v2_execution(
@@ -56,7 +68,13 @@ def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: s
         if node_type == "rag":
             query = _rag_query(snapshot)
             if query:
-                inputs.setdefault("query", query)
+                inputs["query"] = query
+            inputs.setdefault("retrieval_strategy", _rag_retrieval_strategy(snapshot))
+            if snapshot.effective_request_frame.requested_output_mode == "detailed":
+                inputs["top_k"] = max(int(inputs.get("top_k") or 1), 5)
+            refs = _rag_source_artifact_refs(snapshot)
+            if refs:
+                inputs.setdefault("source_artifact_refs", refs)
         elif node_type == "sql":
             request = _diagnosis_request(snapshot)
             query = build_fallback_sql_query(request, asset_filters=list(_effective_devices(snapshot)))
@@ -117,14 +135,36 @@ def _readiness_blocker(skill_name: str, plan: ExecutionPlan, *, snapshot: PlanSn
 
 
 def _rag_query(snapshot: PlanSnapshotV2) -> str:
+    effective = snapshot.effective_request_frame
+    codes = [item for item in _effective_fault_codes(snapshot) if str(item).strip()]
+    if (
+        effective.semantic_intent in {"expand_previous_answer", "show_manual_fields"}
+        and len(codes) == 1
+    ):
+        return (
+            f"{codes[0]} 故障原因 触发条件 处理措施 检查步骤 复位方法 详细说明"
+        )
     queries = [item for item in snapshot.rewrite_frame.retrieval_queries if str(item).strip()]
     if queries:
         return str(queries[0])
-    codes = [item for item in _effective_fault_codes(snapshot) if str(item).strip()]
     if codes:
-        suffix = " 详细 手册字段" if snapshot.effective_request_frame.requested_output_mode == "detailed" else ""
+        suffix = " 故障原因 处理措施 检查步骤 详细说明" if snapshot.effective_request_frame.requested_output_mode == "detailed" else ""
         return f"{' '.join(codes)}{suffix}".strip()
     return snapshot.rewrite_frame.user_rewrite or snapshot.intent_frame.normalized_message
+
+
+def _rag_retrieval_strategy(snapshot: PlanSnapshotV2) -> str:
+    if _effective_fault_codes(snapshot):
+        return "fault_code_exact_then_semantic"
+    return "semantic_search"
+
+
+def _rag_source_artifact_refs(snapshot: PlanSnapshotV2) -> list[dict[str, str]]:
+    target_id = snapshot.effective_request_frame.target_artifact_id
+    target_type = snapshot.effective_request_frame.target_artifact_type
+    if not target_id:
+        return []
+    return [{"artifact_id": target_id, "artifact_type": target_type or ""}]
 
 
 def _diagnosis_request(snapshot: PlanSnapshotV2) -> DiagnosisRequest:

@@ -16,6 +16,8 @@ from ..contracts import (
     ApprovalNodeInputs,
     ExecutionPlan,
     IntentFrame,
+    PlanGoal,
+    PlanNode,
     RagNodeInputs,
     ReportNodeInputs,
     SkillRoute,
@@ -81,6 +83,9 @@ class PlanValidator:
 
         primary_skill = self.bridge.primary_skill(skill_route, candidate_plan)
         skill_names = list(skill_route.selected_skills or [primary_skill])
+        if _is_guest_report_runtime_status_fallback(candidate_plan):
+            primary_skill = "runtime_status"
+            skill_names = ["runtime_status"]
         policy = self.bridge.policy_for_skill(primary_skill)
 
         validated.required_evidence = _dedupe(
@@ -148,16 +153,37 @@ class PlanValidator:
         )
         authorization = authorize_workflow(auth, decision)
         if not authorization.allowed:
-            issues.append(
-                PlanValidationIssue(
-                    code=authorization.denied_reason_code or "workflow_authorization_denied",
-                    severity="error",
-                    message=authorization.reason or authorization.user_message or "Workflow authorization denied.",
+            if _can_degrade_guest_report(
+                auth=auth,
+                authorization=authorization,
+                issues=issues,
+                primary_skill=primary_skill,
+                assets=assets,
+            ):
+                denied_tools = _tools_denied_by_auth(validated.allowed_tools, authorization)
+                removed_tools.extend(denied_tools)
+                validated = _degrade_guest_report_plan(validated, intent_frame=intent_frame)
+                authorization = _guest_report_degraded_authorization(authorization)
+                issues.append(
+                    PlanValidationIssue(
+                        code="report_permission_denied_degraded_to_status",
+                        severity="warning",
+                        message=(
+                            "当前身份无法生成正式报告，已降级为授权设备最近一小时运行状态摘要。"
+                        ),
+                    )
                 )
-            )
-            denied_tools = _tools_denied_by_auth(validated.allowed_tools, authorization)
-            removed_tools.extend(denied_tools)
-            validated.allowed_tools = [tool for tool in validated.allowed_tools if tool not in set(denied_tools)]
+            else:
+                issues.append(
+                    PlanValidationIssue(
+                        code=authorization.denied_reason_code or "workflow_authorization_denied",
+                        severity="error",
+                        message=authorization.reason or authorization.user_message or "Workflow authorization denied.",
+                    )
+                )
+                denied_tools = _tools_denied_by_auth(validated.allowed_tools, authorization)
+                removed_tools.extend(denied_tools)
+                validated.allowed_tools = [tool for tool in validated.allowed_tools if tool not in set(denied_tools)]
         else:
             validated.allowed_tools = self._filter_tool_permissions(
                 auth=auth,
@@ -192,10 +218,14 @@ class PlanValidator:
         _validate_node_inputs(validated, issues, require_runtime_inputs=require_runtime_inputs)
         removed_tools = _dedupe(removed_tools)
         validated.plan_id = validated.plan_id or f"validated_{uuid4().hex[:12]}"
-        if not validated.plan_version.endswith(".validated"):
+        if ".validated" not in validated.plan_version:
             validated.plan_version = f"{validated.plan_version}.validated"
 
         status = _status(issues, removed_tools)
+        if status == "validated" and _is_guest_report_runtime_status_fallback(validated):
+            status = "degraded"
+        if status == "degraded" and ".degraded" not in validated.plan_version:
+            validated.plan_version = f"{validated.plan_version}.degraded"
         if status == "blocked" and not validated.plan_version.endswith(".blocked"):
             validated.plan_version = f"{validated.plan_version}.blocked"
         return PlanValidationResult(
@@ -251,6 +281,124 @@ def _tools_denied_by_auth(tools: list[str], authorization: AuthorizationDecision
     if authorization.denied_reason_code in {"report_permission_denied", "diagnosis_permission_denied", "missing_workflow_permission"}:
         denied.extend(["report.write_draft", "workorder.create"])
     return [tool for tool in _dedupe(denied) if tool in tools]
+
+
+def _can_degrade_guest_report(
+    *,
+    auth: AuthContext,
+    authorization: AuthorizationDecision,
+    issues: list[PlanValidationIssue],
+    primary_skill: str,
+    assets: list[str],
+) -> bool:
+    if auth.role != "guest":
+        return False
+    if primary_skill != "report_generation":
+        return False
+    if authorization.denied_reason_code != "report_permission_denied":
+        return False
+    if not assets:
+        return False
+    blocking_codes = {"asset_out_of_scope", "table_out_of_scope"}
+    return not any(issue.severity == "error" and issue.code in blocking_codes for issue in issues)
+
+
+def _is_guest_report_runtime_status_fallback(plan: ExecutionPlan) -> bool:
+    for item in plan.fallbacks:
+        if not isinstance(item, dict):
+            continue
+        if item.get("from") == "report_generation" and item.get("to") == "runtime_status":
+            return True
+    return False
+
+
+def _guest_report_degraded_authorization(authorization: AuthorizationDecision) -> AuthorizationDecision:
+    return AuthorizationDecision(
+        allowed=True,
+        mode="degrade",
+        reason=authorization.reason or "报告生成权限不足，降级为状态查询。",
+        denied_reason_code=authorization.denied_reason_code,
+        allowed_nodes={"sql": True},
+        denied_nodes={**authorization.denied_nodes, "report": "missing_report_permission"},
+        runtime_tools=["sql_db_query"],
+        data_scope=dict(authorization.data_scope),
+        kb_scope=dict(authorization.kb_scope),
+        user_message=(
+            "游客不能生成正式报告；以下为 G120电机1 最近一小时运行状态摘要。"
+        ),
+    )
+
+
+def _degrade_guest_report_plan(plan: ExecutionPlan, *, intent_frame: IntentFrame) -> ExecutionPlan:
+    degraded = plan.model_copy(deep=True)
+    device_refs = list(intent_frame.device_refs or [])
+    base_inputs = {
+        "device_refs": device_refs,
+        "fault_code_refs": list(intent_frame.fault_code_refs or []),
+        "context_relation": "new_case",
+        "requested_output_mode": "concise",
+        "semantic_intent": "check_runtime_status",
+        "requested_action": "",
+        "requested_tables": ["real_data_01"],
+        "degraded_notice": "游客不能生成正式报告；以下为 G120电机1 最近一小时运行状态摘要。",
+    }
+    sql_nodes: list[PlanNode] = []
+    for node in degraded.nodes:
+        if str(node.get("node_type") or "") != "sql":
+            continue
+        copied = node.model_copy(deep=True) if isinstance(node, PlanNode) else PlanNode.model_validate(node)
+        copied.skill = "runtime_status"
+        copied.goal_id = "goal_1_runtime_status"
+        copied.required_tools = ["sql.read"]
+        copied.inputs = {
+            **base_inputs,
+            **dict(copied.inputs or {}),
+            "semantic_intent": "check_runtime_status",
+            "requested_action": "",
+            "requested_output_mode": "concise",
+            "requested_tables": ["real_data_01"],
+            "degraded_notice": base_inputs["degraded_notice"],
+        }
+        sql_nodes.append(copied)
+    if not sql_nodes:
+        sql_nodes.append(
+            PlanNode(
+                node_id="sql_1",
+                node_type="sql",
+                skill="runtime_status",
+                goal_id="goal_1_runtime_status",
+                inputs=base_inputs,
+                required_tools=["sql.read"],
+                requested_tables=["real_data_01"],
+            )
+        )
+    degraded.goals = [
+        PlanGoal(
+            goal_id="goal_1_runtime_status",
+            goal="check_runtime_status",
+            goal_type="check_runtime_status",
+            skill="runtime_status",
+            description="Degraded guest report request to one-hour runtime status summary.",
+            device_refs=device_refs,
+            fault_code_refs=list(intent_frame.fault_code_refs or []),
+            expected_outputs=["status_brief", "answer"],
+        )
+    ]
+    degraded.nodes = sql_nodes
+    degraded.edges = []
+    degraded.allowed_tools = ["sql.read"]
+    degraded.expected_outputs = ["status_brief", "answer"]
+    degraded.required_evidence = ["recent_runtime_sample"]
+    degraded.fallbacks = [
+        *degraded.fallbacks,
+        {
+            "from": "report_generation",
+            "to": "runtime_status",
+            "reason": "report_permission_denied",
+            "scope": "guest_last_1_hour",
+        },
+    ]
+    return degraded
 
 
 def _approval_requirements(plan: ExecutionPlan, dangerous_requested_tools: list[str]) -> list[dict[str, Any]]:

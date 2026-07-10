@@ -11,6 +11,7 @@ from .assets import (
     assets_have_data_source_for_table,
     assets_include_table_scoped_source,
     data_source_terms_for_table,
+    resolve_asset,
 )
 from .sql_safety import (
     ALLOWED_SQL_TABLES,
@@ -147,6 +148,36 @@ def _asset_predicate(table_name: str, assets: list[str]) -> str:
     return ""
 
 
+def _guest_explicit_asset_predicate(table_name: str, assets: list[str]) -> str:
+    if not table_name.startswith("real_data_"):
+        return _asset_predicate(table_name, assets)
+    names: list[str] = []
+    for asset in assets:
+        record = resolve_asset(asset)
+        if record is None:
+            names.append(str(asset or "").strip())
+            continue
+        if record.display_name:
+            names.append(record.display_name)
+        for source in record.data_sources:
+            if source.table != table_name:
+                continue
+            if source.device_name:
+                names.append(source.device_name)
+            if source.inverter_name:
+                names.append(source.inverter_name)
+    names = list(dict.fromkeys(item for item in names if item))
+    predicates = [
+        predicate
+        for predicate in (
+            _in_predicate("device_name", names),
+            _in_predicate("inverter_name", names),
+        )
+        if predicate
+    ]
+    return "(" + " OR ".join(predicates) + ")" if predicates else ""
+
+
 def _time_column(table_name: str) -> str:
     if table_name.startswith("real_data_"):
         return "create_time"
@@ -203,7 +234,11 @@ def apply_sql_acl(
                 f"请求设备不在当前账号范围：{', '.join(denied_assets)}",
                 "asset_out_of_scope",
             )
-        predicate = _asset_predicate(table_name, scoped_assets)
+        predicate = (
+            _guest_explicit_asset_predicate(table_name, scoped_assets)
+            if auth.role == "guest"
+            else _asset_predicate(table_name, scoped_assets)
+        )
         if predicate:
             asset_filter_predicate = predicate
             query = _insert_predicate(query, predicate)

@@ -9,8 +9,9 @@ from fault_diagnosis.agent import (
     PlanValidator,
     RewriteFrameBuilder,
     SkillRouter,
+    WorkflowRuntimeExecutor,
 )
-from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_plan
+from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_plan, prepare_v2_execution_validation
 from fault_diagnosis.agent.planning.plan_diff import diff_plans
 from fault_diagnosis.domain.security.permissions import build_auth_context
 
@@ -58,6 +59,73 @@ def test_guest_blocks_report_root_cause_and_workorder_plans() -> None:
         assert snapshot.output_frame.guardrail_result["authorization"]["mode"] == "deny"
         assert "report.write_draft" not in snapshot.execution_plan.allowed_tools
         assert "workorder.create" not in snapshot.execution_plan.allowed_tools
+
+
+def test_guest_report_for_scoped_device_degrades_to_one_hour_status_query() -> None:
+    auth = build_auth_context(role="guest")
+    snapshot = AgentEngineV2().build_plan_snapshot(
+        raw_message="生成G120电机1的运行报告",
+        auth_context=auth,
+    )
+    validation = prepare_v2_execution_validation(snapshot=snapshot, thread_id="thread.guest.report", auth_context=auth)
+
+    assert snapshot.status == "validated_degraded"
+    assert validation.status == "degraded"
+    assert ".validated" in validation.validated_plan.plan_version
+    assert ".degraded" in validation.validated_plan.plan_version
+    assert [node.node_type for node in validation.validated_plan.nodes] == ["sql"]
+    assert validation.validated_plan.allowed_tools == ["sql.read"]
+    assert "report.write_draft" not in validation.validated_plan.allowed_tools
+
+    fake = _CapturingSqlRuntime()
+    result = WorkflowRuntimeExecutor(real_tools=True, tool_runtime=fake).execute(
+        validation.validated_plan,
+        auth_context=auth,
+    )
+
+    assert result.status == "completed"
+    assert "V2 runtime only executes validated plans" not in result.output_frame.final_answer
+    assert "游客不能生成正式报告" in result.output_frame.final_answer
+    executed_sql = fake.sql_calls[-1]
+    assert "real_data_01" in executed_sql
+    assert "G120电机1" in executed_sql
+    assert "create_time >= NOW() - INTERVAL 1 HOUR" in executed_sql
+    assert "LIMIT 50" in executed_sql
+
+
+def test_report_authorization_matrix_for_guest_engineer_and_admin() -> None:
+    guest_other = AgentEngineV2().build_plan_snapshot(
+        raw_message="生成G120电机2的运行报告",
+        auth_context=build_auth_context(role="guest"),
+    )
+    engineer_other = AgentEngineV2().build_plan_snapshot(
+        raw_message="生成G120电机2的运行报告",
+        auth_context=_engineer(assets=["G120电机1"], tables=["real_data_01", "real_data_02"]),
+    )
+    admin_any = AgentEngineV2().build_plan_snapshot(
+        raw_message="生成G120电机2的运行报告",
+        auth_context=build_auth_context(role="admin"),
+    )
+
+    assert guest_other.status == "blocked"
+    assert guest_other.output_frame.guardrail_result["authorization"]["denied_reason_code"] == "asset_out_of_scope"
+    assert engineer_other.status == "blocked"
+    assert engineer_other.output_frame.guardrail_result["authorization"]["denied_reason_code"] == "asset_out_of_scope"
+    assert admin_any.status == "validated"
+
+
+class _CapturingSqlRuntime:
+    def __init__(self) -> None:
+        self.sql_calls: list[str] = []
+
+    def invoke_sql_tool(self, tool_name: str, payload):  # noqa: ANN001
+        if tool_name == "sql_db_query_checker":
+            return payload
+        self.sql_calls.append(str(payload))
+        return []
+
+    def query_knowledge_base(self, query: str) -> str:
+        return f"故障码：{query}"
 
 
 def test_engineer_scope_checks_assets_and_tables() -> None:

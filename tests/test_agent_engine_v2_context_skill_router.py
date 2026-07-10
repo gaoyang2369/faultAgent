@@ -294,9 +294,21 @@ def test_followup_detail_inherits_latest_knowledge_artifact_fault_code() -> None
     assert snapshot.effective_request_frame.effective_fault_code_refs == ["A07089"]
     assert snapshot.effective_request_frame.requested_output_mode == "detailed"
     assert snapshot.effective_request_frame.needs_clarification is False
+    assert snapshot.context_frame.relation_to_previous != "ambiguous"
+    assert snapshot.context_frame.missing_context == []
+    assert snapshot.context_frame.reuse_blockers == []
     assert snapshot.skill_route.primary_skill == "fault_code_explain"
     assert [node.node_type for node in snapshot.execution_plan.nodes] == ["rag", "kg"]
     assert "clarification" not in snapshot.skill_route.selected_skills
+
+    plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id=thread_id, auth_context=_engineer())
+    rag_inputs = next(node.inputs for node in plan.nodes if node.node_type == "rag")
+    assert "A07089" in rag_inputs["query"]
+    assert "详细说明" in rag_inputs["query"]
+    assert rag_inputs["query"] != "详细点"
+    assert rag_inputs["retrieval_strategy"] == "fault_code_exact_then_semantic"
+    assert rag_inputs["top_k"] >= 3
+    assert rag_inputs["source_artifact_refs"][0]["artifact_id"] == "knowledge:trace.detail:A07089"
 
 
 def test_effective_request_overrides_legacy_ambiguous_context_when_target_is_unique() -> None:
@@ -329,6 +341,41 @@ def test_effective_request_overrides_legacy_ambiguous_context_when_target_is_uni
     assert route.primary_skill == "fault_code_explain"
     assert route.selected_skills == ["fault_code_explain"]
     assert route.blocked_skills == {}
+
+
+def test_followup_detail_with_multiple_fault_codes_requires_clarification() -> None:
+    thread_id = "thread.v2.detail.multiple"
+    manager = _manager_with_artifacts(
+        _manifest_artifact(
+            thread_id=thread_id,
+            request_summary="A07089 和 F01002 是什么意思",
+            final_answer="A07089 与 F01002 均有说明。",
+            manifests=[
+                {
+                    "schema_version": "artifact_manifest.v1",
+                    "artifact_id": "knowledge:trace.multiple",
+                    "artifact_type": "knowledge_artifact",
+                    "thread_id": thread_id,
+                    "status": "completed",
+                    "followupable": True,
+                    "fault_code_refs": ["A07089", "F01002"],
+                    "available_followups": ["expand_previous_answer"],
+                }
+            ],
+        )
+    )
+
+    snapshot = AgentEngineV2().build_plan_snapshot(
+        raw_message="详细点",
+        thread_id=thread_id,
+        auth_context=_engineer(),
+        context_manager=manager,
+    )
+
+    assert snapshot.context_frame.relation_to_previous == "ambiguous"
+    assert snapshot.context_frame.missing_context
+    assert snapshot.effective_request_frame.effective_fault_code_refs == []
+    assert snapshot.skill_route.primary_skill == "clarification"
 
 
 def test_followup_workorder_uses_latest_report_manifest_without_ambiguity() -> None:

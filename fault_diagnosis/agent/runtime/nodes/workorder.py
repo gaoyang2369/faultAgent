@@ -61,7 +61,11 @@ class WorkorderNode:
                 analysis_artifact=analysis_artifact,
             )
         state.artifacts["workorder_suggestion"] = suggestion
-        output: dict[str, Any] = {"success": True, "suggestion": model_to_dict(suggestion)}
+        output: dict[str, Any] = {
+            "success": True,
+            "suggestion": model_to_dict(suggestion),
+            **_source_projection(node=node, state=state, suggestion=suggestion),
+        }
 
         if suggestion.lifecycle_status == "recommended_draft" and bool(input_value(node, "create_draft", True)):
             pending = build_pending_workorder_draft_action(
@@ -158,3 +162,38 @@ def _report_artifact_id(state: RuntimeState) -> str | None:
     if isinstance(report, dict):
         return report.get("report_url") or report.get("report_filename")
     return None
+
+
+def _source_projection(*, node: dict[str, Any], state: RuntimeState, suggestion: WorkOrderSuggestion) -> dict[str, Any]:
+    target_evidence_bundle_id = str(input_value(node, "target_evidence_bundle_id", "") or "").strip()
+    source_refs = input_value(node, "source_artifact_refs", []) or []
+    if not isinstance(source_refs, list):
+        source_refs = []
+    supporting_refs = input_value(node, "supporting_evidence_refs", []) or []
+    if not isinstance(supporting_refs, list):
+        supporting_refs = []
+    stale_required = bool(
+        input_value(node, "stale_evidence_disclosure_required", False)
+        or input_value(node, "stale_refresh_required", False)
+    )
+    evidence_freshness = str(input_value(node, "evidence_freshness", "") or ("stale" if stale_required else "unknown"))
+    manual_confirmation_required = bool(
+        suggestion.lifecycle_status == "recommended_draft" or suggestion.need_workorder is True
+    )
+    return {
+        "source_artifact_refs": list(source_refs),
+        "target_evidence_bundle_id": target_evidence_bundle_id,
+        "supporting_evidence_refs": list(supporting_refs),
+        "stale_evidence_disclosure_required": stale_required,
+        "stale_refresh_required": bool(input_value(node, "stale_refresh_required", False)),
+        "evidence_freshness": evidence_freshness,
+        "generated_from_previous_artifact": bool(target_evidence_bundle_id or source_refs),
+        "manual_confirmation_required": manual_confirmation_required,
+        "draft_only": manual_confirmation_required,
+        "dispatch_forbidden": True,
+        "approval_requirements": list(state.plan.approval_requirements),
+        "selected_findings_summary": input_value(node, "selected_findings_summary", ""),
+        "risk_level": input_value(node, "risk_level", "") or suggestion.risk_level,
+        "diagnosis_summary": input_value(node, "diagnosis_summary", "") or suggestion.diagnosis_conclusion,
+        "report_url": input_value(node, "report_url", "") or _report_artifact_id(state),
+    }

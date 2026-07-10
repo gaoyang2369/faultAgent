@@ -146,9 +146,11 @@ def test_guest_sql_acl_forces_table_time_and_limit() -> None:
 
     assert result.allowed is True
     assert "FROM real_data_01" in result.sql_query
+    assert "G120电机1" in result.sql_query
+    assert "device_name IN ('G120电机1')" in result.sql_query
     assert "create_time >= NOW() - INTERVAL 1 HOUR" in result.sql_query
     assert "SELECT MAX(create_time) FROM real_data_01" in result.sql_query
-    assert "guest_asset_table_scope" in result.filters_applied
+    assert "guest_asset_scope" in result.filters_applied
     assert result.sql_query.endswith("LIMIT 50")
     assert apply_sql_acl(
         "SELECT * FROM device_alarm LIMIT 10",

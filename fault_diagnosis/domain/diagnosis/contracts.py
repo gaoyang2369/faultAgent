@@ -190,6 +190,9 @@ class KnowledgeStepArtifact(BaseModel):
     snippets: list[str] = Field(default_factory=list)
     raw_output: str = ""
     error: str | None = None
+    error_code: str = ""
+    evidence_usable: bool = True
+    available: bool = True
     hit_count: int | None = None
     fault_codes: list[str] = Field(default_factory=list)
     fault_code_entries: list[FaultCodeEntry] = Field(default_factory=list)

@@ -213,8 +213,12 @@ def test_workorder_output_frame_variant() -> None:
             {
                 "node_id": "workorder_1",
                 "node_type": "workorder",
-                "input_summary": "{'inputs': {'target_evidence_bundle_id': 'ledger_trace_report', 'stale_evidence_disclosure_required': True}}",
-                "output": {"success": True},
+                "output": {
+                    "success": True,
+                    "target_evidence_bundle_id": "ledger_trace_report",
+                    "stale_evidence_disclosure_required": True,
+                    "source_artifact_refs": [{"artifact_id": "/reports/g120.html", "artifact_type": "report_artifact"}],
+                },
             }
         ],
     )
@@ -247,6 +251,9 @@ def test_report_to_workorder_final_answer() -> None:
                     "suggestion": suggestion.model_dump(mode="json"),
                     "pending_action": pending,
                     "draft": draft.model_dump(mode="json"),
+                    "target_evidence_bundle_id": "ledger_trace_report",
+                    "stale_evidence_disclosure_required": True,
+                    "source_artifact_refs": [{"artifact_id": "/reports/g120.html", "artifact_type": "report_artifact"}],
                 },
                 artifacts={
                     "workorder_suggestion": suggestion,

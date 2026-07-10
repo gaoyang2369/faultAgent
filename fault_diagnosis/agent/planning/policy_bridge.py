@@ -233,7 +233,7 @@ class PlanPolicyBridge:
         skill_route: SkillRoute,
         intent_frame: IntentFrame,
     ) -> Any:
-        primary_skill = self.primary_skill(skill_route, plan)
+        primary_skill = "runtime_status" if _is_runtime_status_fallback(plan) else self.primary_skill(skill_route, plan)
         policy = self.policy_for_skill(primary_skill)
         goal_type = self.goal_type_for_skill(primary_skill)
         device_ids = requested_assets(plan=plan, intent_frame=intent_frame, skill_route=skill_route)
@@ -292,6 +292,13 @@ def requested_assets(
         if isinstance(inputs, dict):
             assets.extend(_as_list(inputs.get("device_refs")))
     return list(dict.fromkeys(str(value).strip() for value in assets if str(value).strip()))
+
+
+def _is_runtime_status_fallback(plan: ExecutionPlan) -> bool:
+    for item in plan.fallbacks:
+        if isinstance(item, dict) and item.get("to") == "runtime_status":
+            return True
+    return False
 
 
 def requested_tables(plan: ExecutionPlan) -> list[str]:

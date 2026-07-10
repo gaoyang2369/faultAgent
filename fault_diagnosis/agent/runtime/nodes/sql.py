@@ -66,9 +66,13 @@ class SqlNode:
         tool_call_refs.append("sql_db_query")
         rows = parse_sql_rows(raw_output)
         tables = sorted(extract_sql_table_names(checked_sql))
+        degraded_notice = str(input_value(node, "degraded_notice", "") or "").strip()
+        summary = f"SQL 查询完成，解析出 {len(rows)} 条运行记录。"
+        if degraded_notice:
+            summary = f"{degraded_notice} {summary}"
         artifact = SqlStepArtifact(
             success=True,
-            summary=f"SQL 查询完成，解析出 {len(rows)} 条运行记录。",
+            summary=summary,
             sql_used=[checked_sql],
             result_preview=str(raw_output)[:1200],
             raw_output=str(raw_output),

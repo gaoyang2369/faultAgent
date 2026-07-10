@@ -20,22 +20,7 @@ def build_knowledge_evidence_items(
 
     raw_output = (knowledge_artifact.raw_output or "").strip()
     if not knowledge_artifact.success or not raw_output:
-        summary = knowledge_artifact.error or "本次请求未获得可用知识库证据。"
-        return [
-            EvidenceItem(
-                evidence_id="ev_kb_result_missing",
-                evidence_type="tool_error",
-                source_type="knowledge_base",
-                source_name="knowledge_base",
-                asset_id=request.equipment_hint if request else None,
-                content={"query": knowledge_artifact.query, "error": knowledge_artifact.error, "raw_output": raw_output},
-                summary=summary,
-                quality=EvidenceQuality(reliability="medium", freshness="unknown", relevance="medium", completeness="missing"),
-                metadata={"query": knowledge_artifact.query},
-                title="知识库检索结果",
-                importance="low",
-            )
-        ]
+        return []
 
     items: list[EvidenceItem] = []
     if knowledge_artifact.fault_code_entries:

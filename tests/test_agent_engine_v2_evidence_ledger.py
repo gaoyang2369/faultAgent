@@ -34,6 +34,29 @@ def test_ledger_commits_authorized_evidence_dedupes_and_generates_refs() -> None
     assert ledger.evidence_items[0]["node_id"] == "manual_1"
 
 
+def test_ledger_filters_failed_tool_results_before_claim_evidence() -> None:
+    ledger = create_ledger(trace_id="trace.failed.tool")
+    writer = EvidenceLedgerWriter(ledger)
+
+    result = writer.commit_evidence(
+        [
+            {
+                "evidence_id": "ev_kb_timeout",
+                "evidence_type": "tool_error",
+                "source_type": "knowledge_base",
+                "summary": "超时：知识库检索超过 15s 未返回。",
+                "content": {"error_code": "kb_timeout"},
+                "authorized": True,
+            }
+        ],
+        node={"node_id": "rag_1", "node_type": "rag"},
+    )
+
+    assert result.refs == []
+    assert ledger.evidence_items == []
+    assert ledger.quality_checks["filtered_failed_tool_evidence_ids"] == ["ev_kb_timeout"]
+
+
 def test_final_claim_without_evidence_is_not_promoted_to_final_claim_ids() -> None:
     ledger = create_ledger(trace_id="trace.claim")
     writer = EvidenceLedgerWriter(ledger)
