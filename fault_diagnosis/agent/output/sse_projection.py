@@ -113,6 +113,7 @@ def project_complete(
         trace=state.trace_payload(),
         request_summary=_request_summary(state.plan),
     )
+    workorder_payload = _workorder_payload(frame, state.plan)
     final_text = "" if cancelled else (final_content or frame.final_answer)
     todos = [] if cancelled else _todos_from_plan_and_results(state.plan, state.node_results)
     complete: dict[str, Any] = {
@@ -133,13 +134,16 @@ def project_complete(
         "readiness": {"diagnosis": {}, "workorder_action": {}},
         "diagnosis_readiness": {},
         "workorder_action_readiness": {},
-        "manual_confirmation": {},
+        "manual_confirmation": _manual_confirmation_payload(workorder_payload),
+        "approval_requirements": workorder_payload.get("approval_requirements", list(state.plan.approval_requirements)),
         "authorization": state.auth_context.audit_summary() if state.auth_context else {},
         "sql_artifact": _artifact_dict(state.artifacts, "sql_artifact"),
         "knowledge_artifact": _artifact_dict(state.artifacts, "knowledge_artifact"),
         "analysis_artifact": _artifact_dict(state.artifacts, "analysis_artifact"),
         "workorder_decision": _artifact_dict(state.artifacts, "workorder_suggestion"),
+        "workorder_pending_action": _artifact_dict(state.artifacts, "workorder_pending_action"),
         "workorder_draft": _artifact_dict(state.artifacts, "workorder_draft"),
+        "workorder_draft_payload": workorder_payload,
         "report_artifact": _artifact_dict(state.artifacts, "report_artifact"),
         "evidence_bundle": bundle.model_dump(mode="json", exclude_none=True),
         "output_guardrail": frame.guardrail_result,
@@ -260,6 +264,8 @@ def _todo_summary(todos: list[dict[str, Any]]) -> dict[str, int]:
 def _primary_task_type(plan: ExecutionPlan) -> str:
     requested = _requested_output(plan)
     node_types = {str(node.get("node_type") or node.get("type") or "") for node in plan.nodes}
+    if "workorder" in node_types:
+        return "workorder_decision"
     if requested == "report" or "report" in node_types:
         return "report_generation"
     if "clarification" in node_types:
@@ -277,6 +283,8 @@ def _task_family(plan: ExecutionPlan) -> str:
     primary = _primary_task_type(plan)
     if primary in {"report_generation"}:
         return "report"
+    if primary in {"workorder_decision"}:
+        return "action"
     if primary in {"clarification", "knowledge_qa"}:
         return "knowledge"
     return "diagnosis"
@@ -361,6 +369,8 @@ def _produced_artifacts(artifact: Any) -> list[dict[str, Any]]:
 def _ui_payload(frame: OutputFrame) -> dict[str, Any]:
     if frame.answer_variant == "report_ready":
         ui_type = "report_status"
+    elif frame.answer_variant in {"workorder_draft_ready", "workorder_suggestion"}:
+        ui_type = "workorder_draft_status"
     elif frame.answer_variant == "diagnosis_answer":
         ui_type = "diagnosis_card"
     elif frame.answer_variant == "status_brief":
@@ -369,7 +379,38 @@ def _ui_payload(frame: OutputFrame) -> dict[str, Any]:
         ui_type = "access_denied"
     else:
         ui_type = "text_only"
-    return {"type": ui_type, "task_type": frame.answer_variant, "report_generated": frame.answer_variant == "report_ready"}
+    return {
+        "type": ui_type,
+        "task_type": frame.answer_variant,
+        "report_generated": frame.answer_variant == "report_ready",
+        "workorder_draft_ready": frame.answer_variant == "workorder_draft_ready",
+        "workorder_suggestion": frame.answer_variant == "workorder_suggestion",
+    }
+
+
+def _workorder_payload(frame: OutputFrame, plan: ExecutionPlan) -> dict[str, Any]:
+    payload = dict(frame.workorder_draft_payload or {})
+    if not payload and frame.answer_variant not in {"workorder_draft_ready", "workorder_suggestion"}:
+        return {}
+    requirements = payload.get("approval_requirements")
+    if not requirements and plan.approval_requirements:
+        payload["approval_requirements"] = list(plan.approval_requirements)
+    payload.setdefault("manual_confirmation_required", True)
+    payload.setdefault("draft_only", True)
+    payload.setdefault("dispatch_forbidden", True)
+    return payload
+
+
+def _manual_confirmation_payload(workorder_payload: dict[str, Any]) -> dict[str, Any]:
+    if not workorder_payload:
+        return {}
+    return {
+        "required": bool(workorder_payload.get("manual_confirmation_required", True)),
+        "manual_confirmation_required": bool(workorder_payload.get("manual_confirmation_required", True)),
+        "draft_only": bool(workorder_payload.get("draft_only", True)),
+        "dispatch_forbidden": bool(workorder_payload.get("dispatch_forbidden", True)),
+        "approval_requirements": list(workorder_payload.get("approval_requirements") or []),
+    }
 
 
 def _merge_missing_contract_fields(payload: dict[str, Any], contract_payload: dict[str, Any]) -> None:

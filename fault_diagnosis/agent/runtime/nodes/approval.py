@@ -37,7 +37,7 @@ class ApprovalNode:
 
 def _requirements(node: dict[str, Any], state: RuntimeState) -> list[dict[str, Any]]:
     raw = input_value(node, "approval_requirements", None)
-    if raw is None:
+    if raw is None or (raw == [] and state.plan.approval_requirements):
         raw = state.plan.approval_requirements
     if isinstance(raw, dict):
         return [raw]

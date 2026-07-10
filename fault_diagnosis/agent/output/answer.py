@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from fault_diagnosis.domain.diagnosis.contracts import (
@@ -11,6 +12,8 @@ from fault_diagnosis.domain.diagnosis.contracts import (
     KnowledgeStepArtifact,
     ReportStepArtifact,
     SqlStepArtifact,
+    WorkOrderDraftArtifact,
+    WorkOrderSuggestion,
 )
 from fault_diagnosis.domain.diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from ..contracts import NodeResult, OutputFrame
@@ -35,12 +38,25 @@ def build_output_frame(
     knowledge_artifact = _model(artifact_map.get("knowledge_artifact"), KnowledgeStepArtifact)
     analysis_artifact = _model(artifact_map.get("analysis_artifact"), AnalysisStepArtifact)
     report_artifact = _model(artifact_map.get("report_artifact"), ReportStepArtifact)
+    workorder_suggestion = _model(artifact_map.get("workorder_suggestion"), WorkOrderSuggestion)
+    workorder_pending_action = _as_dict(artifact_map.get("workorder_pending_action"))
+    workorder_draft = _model(artifact_map.get("workorder_draft"), WorkOrderDraftArtifact)
+    node_result_items = list(node_results or [])
+    workorder_payload = _workorder_draft_payload(
+        suggestion=workorder_suggestion,
+        pending_action=workorder_pending_action,
+        draft=workorder_draft,
+        evidence_bundle=bundle,
+        node_results=node_result_items,
+    )
     variant = requested_variant or _infer_variant(
         status=status,
         sql_artifact=sql_artifact,
         knowledge_artifact=knowledge_artifact,
         analysis_artifact=analysis_artifact,
         report_artifact=report_artifact,
+        workorder_suggestion=workorder_suggestion,
+        workorder_draft=workorder_draft,
         cancelled=cancelled,
     )
     final_answer = _render_answer(
@@ -50,6 +66,7 @@ def build_output_frame(
         knowledge_artifact=knowledge_artifact,
         analysis_artifact=analysis_artifact,
         report_artifact=report_artifact,
+        workorder_payload=workorder_payload,
         evidence_bundle=bundle,
         error=error,
         cancel_reason=cancel_reason,
@@ -60,8 +77,11 @@ def build_output_frame(
         "knowledge_artifact": _dump(knowledge_artifact),
         "analysis_artifact": _dump(analysis_artifact),
         "report_artifact": _dump(report_artifact),
+        "workorder_suggestion": _dump(workorder_suggestion),
+        "workorder_pending_action": workorder_pending_action,
+        "workorder_draft": _dump(workorder_draft),
         "evidence_bundle": _dump(bundle),
-        "node_results": [_dump(item) for item in node_results or []],
+        "node_results": [_dump(item) for item in node_result_items],
     }
     guardrail = {
         "status": status,
@@ -71,6 +91,17 @@ def build_output_frame(
         "final_claims_without_evidence": _final_claims_without_evidence(bundle),
         "stale_evidence": _stale_evidence(bundle),
     }
+    if workorder_payload:
+        guardrail.update(
+            {
+                "target_evidence_bundle_id": workorder_payload.get("target_evidence_bundle_id"),
+                "source_artifact_refs": workorder_payload.get("source_artifact_refs", []),
+                "supporting_evidence_refs": workorder_payload.get("supporting_evidence_refs", []),
+                "stale_evidence_disclosure_required": workorder_payload.get("stale_evidence_disclosure_required", False),
+                "evidence_freshness": workorder_payload.get("evidence_freshness", "unknown"),
+                "generated_from_previous_artifact": workorder_payload.get("generated_from_previous_artifact", False),
+            }
+        )
     if error:
         guardrail["error"] = dict(error)
     if cancel_reason:
@@ -80,6 +111,7 @@ def build_output_frame(
         final_answer=final_answer,
         status_brief=status_brief,
         diagnosis_report_payload=diagnosis_payload,
+        workorder_draft_payload=workorder_payload,
         artifact_payload={key: _dump(value) for key, value in artifact_map.items()},
         guardrail_result=guardrail,
     )
@@ -92,12 +124,18 @@ def _infer_variant(
     knowledge_artifact: KnowledgeStepArtifact | None,
     analysis_artifact: AnalysisStepArtifact | None,
     report_artifact: ReportStepArtifact | None,
+    workorder_suggestion: WorkOrderSuggestion | None,
+    workorder_draft: WorkOrderDraftArtifact | None,
     cancelled: bool,
 ) -> str:
-    if cancelled or status == "blocked":
+    if cancelled or status in {"blocked", "cancelled"}:
         return "blocked"
     if status == "failed":
         return "error"
+    if workorder_draft:
+        return "workorder_draft_ready"
+    if workorder_suggestion:
+        return "workorder_suggestion"
     if report_artifact and report_artifact.success:
         return "report_ready"
     if analysis_artifact and analysis_artifact.success:
@@ -117,6 +155,7 @@ def _render_answer(
     knowledge_artifact: KnowledgeStepArtifact | None,
     analysis_artifact: AnalysisStepArtifact | None,
     report_artifact: ReportStepArtifact | None,
+    workorder_payload: dict[str, Any],
     evidence_bundle: EvidenceBundle | None,
     error: dict[str, Any] | None,
     cancel_reason: str | None,
@@ -133,6 +172,8 @@ def _render_answer(
         link = report_artifact.report_url or report_artifact.report_filename or ""
         suffix = f" 报告地址：{link}" if link else ""
         return f"报告已生成。{suffix}".strip()
+    if variant in {"workorder_draft_ready", "workorder_suggestion"}:
+        return _render_workorder_answer(workorder_payload)
     if variant == "diagnosis_answer":
         claim_answer = _render_claim_answer(evidence_bundle)
         if claim_answer:
@@ -161,6 +202,124 @@ def _render_answer(
     if cancel_reason:
         return f"需要补充信息后才能继续处理。当前停止原因：{cancel_reason}"
     return "需要补充设备、故障码或时间窗口等关键信息后才能继续处理。"
+
+
+def _workorder_draft_payload(
+    *,
+    suggestion: WorkOrderSuggestion | None,
+    pending_action: dict[str, Any],
+    draft: WorkOrderDraftArtifact | None,
+    evidence_bundle: EvidenceBundle | None,
+    node_results: list[NodeResult] | list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not suggestion and not pending_action and not draft:
+        return {}
+
+    suggestion_data = _as_dict(suggestion)
+    draft_data = _as_dict(draft)
+    source_artifact_refs = _source_artifact_refs(suggestion_data, pending_action, draft_data)
+    target_evidence_bundle_id = _first_text(
+        _node_input_scalar(node_results, "target_evidence_bundle_id"),
+        pending_action.get("source_diagnosis_artifact_id"),
+        draft_data.get("source_diagnosis_artifact_id"),
+        suggestion_data.get("source_diagnosis_artifact_id"),
+        evidence_bundle.bundle_id if evidence_bundle else None,
+    )
+    stale_required = any(
+        [
+            _truthy(pending_action.get("stale_refresh_required")),
+            _truthy(_node_input_scalar(node_results, "stale_evidence_disclosure_required")),
+            bool(draft_data.get("stale_warning")),
+            bool(_stale_evidence(evidence_bundle)),
+        ]
+    )
+    evidence_freshness = _first_text(
+        _node_input_scalar(node_results, "evidence_freshness"),
+        "stale" if stale_required else "",
+        "unknown",
+    )
+    supporting_evidence_refs = _dedupe(
+        [
+            *_as_text_list(pending_action.get("required_evidence")),
+            *[item.evidence_id for item in (evidence_bundle.evidence_items if evidence_bundle else [])],
+        ]
+    )
+    approval_requirements = _approval_requirements_from_node_results(node_results)
+
+    return {
+        "workorder_suggestion": suggestion_data,
+        "workorder_pending_action": pending_action,
+        "workorder_draft": draft_data,
+        "approval_requirements": approval_requirements,
+        "source_artifact_refs": source_artifact_refs,
+        "target_evidence_bundle_id": target_evidence_bundle_id,
+        "supporting_evidence_refs": supporting_evidence_refs,
+        "evidence_freshness": evidence_freshness,
+        "stale_evidence_disclosure_required": stale_required,
+        "generated_from_previous_artifact": bool(source_artifact_refs or target_evidence_bundle_id),
+        "manual_confirmation_required": True,
+        "draft_only": True,
+        "dispatch_forbidden": True,
+    }
+
+
+def _render_workorder_answer(payload: dict[str, Any]) -> str:
+    suggestion = _as_dict(payload.get("workorder_suggestion"))
+    pending_action = _as_dict(payload.get("workorder_pending_action"))
+    draft = _as_dict(payload.get("workorder_draft"))
+
+    has_draft = bool(draft)
+    recommended = suggestion.get("lifecycle_status") == "recommended_draft" or bool(suggestion.get("need_workorder"))
+    if has_draft:
+        headline = "已基于上一轮报告生成工单草稿建议（未派发）。"
+    elif recommended:
+        headline = "已生成工单建议，当前处于待人工确认状态（未派发）。"
+    else:
+        headline = "已完成工单建议评估（未派发），当前不建议直接生成工单草稿。"
+
+    device = _first_text(draft.get("device"), suggestion.get("equipment_object"))
+    fault_code = _first_text(draft.get("fault_code"), suggestion.get("fault_code"))
+    lifecycle = _first_text(draft.get("status"), suggestion.get("lifecycle_status"), pending_action.get("status"))
+    workorder_type = _first_text(draft.get("workorder_type"), suggestion.get("workorder_type"))
+    priority = _first_text(draft.get("priority"), suggestion.get("priority"))
+    priority_label = _first_text(suggestion.get("priority_label"))
+    risk_level = _first_text(suggestion.get("risk_level"))
+    assignee = _first_text(draft.get("recommended_assignee_role"), suggestion.get("assignee_role"), pending_action.get("required_role"))
+    completion_window = _first_text(suggestion.get("suggested_completion_window"))
+    diagnosis_summary = _first_text(suggestion.get("diagnosis_conclusion"), suggestion.get("reason"))
+    evidence = _dedupe(
+        [
+            *_as_text_list(suggestion.get("key_evidence")),
+            *_as_text_list(pending_action.get("required_evidence")),
+        ]
+    )
+
+    lines = [headline]
+    summary_items = [
+        ("设备", device),
+        ("故障码/事件码", fault_code),
+        ("生命周期状态", lifecycle),
+        ("工单类型", workorder_type),
+        ("优先级", " / ".join(item for item in [priority, priority_label] if item)),
+        ("风险等级", risk_level),
+        ("处理角色", assignee),
+        ("建议完成窗口", completion_window),
+        ("诊断依据摘要", diagnosis_summary),
+    ]
+    lines.extend(_line(label, value) for label, value in summary_items if value)
+    lines.extend(_numbered("关键证据", evidence[:5]))
+
+    stale_hint = _first_text(
+        draft.get("stale_warning"),
+        "上一轮证据存在时效性风险，派发前应刷新当前状态。" if payload.get("stale_evidence_disclosure_required") else "",
+    )
+    if stale_hint:
+        lines.append(_line("数据时效性提示", stale_hint))
+    if payload.get("target_evidence_bundle_id"):
+        lines.append(_line("证据来源", f"继承上一轮证据包 {payload.get('target_evidence_bundle_id')}"))
+    lines.append("人工确认：工单草稿需要工程师确认后才能继续。")
+    lines.append("安全边界：当前仅生成草稿/建议，未自动派发，也不会执行设备控制、告警关闭或配置写入。")
+    return "\n".join(item for item in lines if item).strip()
 
 
 def _status_brief(
@@ -417,6 +576,92 @@ def _dedupe(values: list[Any]) -> list[str]:
             seen.add(text)
             result.append(text)
     return result
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    dumped = _dump(value)
+    return dict(dumped) if isinstance(dumped, dict) else {}
+
+
+def _as_text_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, tuple):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    return [text] if text else []
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text and text.lower() != "none":
+            return text
+    return ""
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"true", "1", "yes", "y", "stale"}
+
+
+def _approval_requirements_from_node_results(node_results: list[NodeResult] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for item in node_results:
+        result = _as_dict(item)
+        output = result.get("output") if isinstance(result.get("output"), dict) else {}
+        raw = output.get("approval_requirements")
+        if isinstance(raw, dict):
+            return [dict(raw)]
+        if isinstance(raw, list) and raw:
+            return [dict(req) for req in raw if isinstance(req, dict)]
+    return []
+
+
+def _source_artifact_refs(
+    suggestion: dict[str, Any],
+    pending_action: dict[str, Any],
+    draft: dict[str, Any],
+) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_ref(artifact_id: Any, artifact_type: str) -> None:
+        text = str(artifact_id or "").strip()
+        if not text:
+            return
+        key = (text, artifact_type)
+        if key in seen:
+            return
+        seen.add(key)
+        refs.append({"artifact_id": text, "artifact_type": artifact_type})
+
+    add_ref(draft.get("source_report_artifact_id"), "report_artifact")
+    add_ref(suggestion.get("source_report_artifact_id"), "report_artifact")
+    add_ref(pending_action.get("source_report_artifact_id"), "report_artifact")
+    add_ref(draft.get("source_diagnosis_artifact_id"), "analysis_artifact")
+    add_ref(suggestion.get("source_diagnosis_artifact_id"), "analysis_artifact")
+    add_ref(pending_action.get("source_diagnosis_artifact_id"), "analysis_artifact")
+    add_ref(pending_action.get("recommendation_artifact_id"), "workorder_suggestion")
+    add_ref(draft.get("created_from_recommendation_artifact_id"), "workorder_suggestion")
+    return refs
+
+
+def _node_input_scalar(node_results: list[NodeResult] | list[dict[str, Any]], key: str) -> str:
+    key_pattern = re.escape(key)
+    patterns = [
+        re.compile(rf"['\"]{key_pattern}['\"]\s*:\s*'([^']*)'"),
+        re.compile(rf"['\"]{key_pattern}['\"]\s*:\s*\"([^\"]*)\""),
+        re.compile(rf"['\"]{key_pattern}['\"]\s*:\s*(True|False|None|[A-Za-z0-9_./:-]+)"),
+    ]
+    for item in node_results:
+        result = _as_dict(item)
+        summary = str(result.get("input_summary") or "")
+        for pattern in patterns:
+            match = pattern.search(summary)
+            if match:
+                return _first_text(match.group(1))
+    return ""
 
 
 def _model(value: Any, model_type: Any) -> Any:

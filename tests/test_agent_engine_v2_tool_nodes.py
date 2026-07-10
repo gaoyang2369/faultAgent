@@ -304,6 +304,29 @@ def test_approval_node_blocks_with_draft_only_or_deny_interrupt() -> None:
     assert device_result.node_results[0].output["interrupts"][0]["allowed_next_step"] == "deny"
 
 
+def test_approval_requirement_not_lost_when_node_input_is_empty_list() -> None:
+    result = _runtime().execute(
+        _plan(
+            [{"node_id": "approval_1", "node_type": "approval", "inputs": {"approval_requirements": []}}],
+            approvals=[
+                {
+                    "requirement_id": "approval_workorder_draft",
+                    "type": "workorder_draft",
+                    "required": True,
+                    "allowed_next_step": "draft_only",
+                }
+            ],
+        )
+    )
+
+    assert result.status == "blocked"
+    output = result.node_results[0].output
+    assert output["required"] is True
+    assert output["approval_requirements"][0]["requirement_id"] == "approval_workorder_draft"
+    assert output["approval_requirements"][0]["required"] is True
+    assert output["interrupts"][0]["allowed_next_step"] == "draft_only"
+
+
 def test_failed_blocked_and_skipped_tool_nodes_do_not_pollute_evidence_ledger() -> None:
     missing_sql = _runtime().execute(_plan([{"node_id": "sql_1", "node_type": "sql"}]))
     blocked_workorder = _runtime().execute(_plan([{"node_id": "workorder_1", "node_type": "workorder", "inputs": {"action_type": "dispatch_workorder"}}]))

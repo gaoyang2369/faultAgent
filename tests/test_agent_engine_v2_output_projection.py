@@ -5,11 +5,13 @@ import json
 import pytest
 
 from fault_diagnosis.agent import ExecutionPlan, WorkflowRuntimeExecutor
+from fault_diagnosis.agent.runtime import NodeExecutionOutput
 from fault_diagnosis.agent.output import (
     build_output_frame,
     build_reportable_payload,
     project_artifact_envelope,
 )
+from fault_diagnosis.domain.security.permissions import build_auth_context
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.backends.memory import MemoryArtifactStoreBackend
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import configure_artifact_store_backend, save_thread_artifact
 from fault_diagnosis.domain.diagnosis.contracts import (
@@ -22,6 +24,8 @@ from fault_diagnosis.domain.diagnosis.contracts import (
     KnowledgeStepArtifact,
     ReportStepArtifact,
     SqlStepArtifact,
+    WorkOrderDraftArtifact,
+    WorkOrderSuggestion,
 )
 from fault_diagnosis.agent.output.diagnosis_payload import build_diagnosis_contract_payload
 
@@ -68,6 +72,7 @@ def _plan(nodes: list[dict] | None = None) -> ExecutionPlan:
             {"node_id": "analysis_1", "node_type": "analysis"},
         ],
         allowed_tools=["sql.read", "rag.search"],
+        forbidden_tools=["workorder.dispatch", "device_control.write", "alarm.close"],
         required_evidence=["latest_runtime_status"],
         expected_outputs=["diagnosis"],
     )
@@ -90,6 +95,63 @@ def _fault_code_entry(*, match_type: str = "exact_match", cause: str = "尝试�
         source_file="S120_故障手册.pdf",
         page="232",
         match_type=match_type,
+    )
+
+
+def _workorder_suggestion() -> WorkOrderSuggestion:
+    return WorkOrderSuggestion(
+        lifecycle_status="recommended_draft",
+        need_workorder=True,
+        reason="A07089 持续出现；速度偏差 46.3% 超过关注阈值；负载率 78.47% 进入关注区间",
+        workorder_type="参数复核 / 运行异常排查",
+        priority="P2",
+        priority_label="中优先级",
+        risk_level="中",
+        assignee_role="电气维护人员",
+        suggested_completion_window="24 小时内完成复核",
+        diagnosis_conclusion="A07089 事件持续出现，伴随速度偏差 46.3% 和负载率最高 78.47%。",
+        key_evidence=["A07089 持续出现", "速度偏差 46.3%", "负载率最高 78.47%"],
+        processing_steps=["刷新当前状态", "核对速度反馈链路"],
+        acceptance_criteria=["当前状态已刷新", "工程师已确认派发条件"],
+        equipment_object="G120电机1",
+        fault_code="A07089",
+        title="G120电机1 A07089 运行异常排查",
+        source_diagnosis_artifact_id="ledger_trace_report",
+        source_report_artifact_id="/reports/g120.html",
+    )
+
+
+def _pending_action() -> dict:
+    return {
+        "action_type": "workorder_draft",
+        "status": "pending",
+        "artifact_id": "workorder_recommendation:trace_report",
+        "reason": "A07089 持续出现，建议生成草稿后由工程师确认。",
+        "required_evidence": ["diagnosis_summary", "severity_or_status_level", "recommended_action_policy"],
+        "source_diagnosis_artifact_id": "ledger_trace_report",
+        "source_report_artifact_id": "/reports/g120.html",
+        "recommendation_artifact_id": "workorder_recommendation:trace_report",
+        "required_role": "engineer",
+        "stale_refresh_required": True,
+    }
+
+
+def _workorder_draft() -> WorkOrderDraftArtifact:
+    return WorkOrderDraftArtifact(
+        draft_id="WOD-TRACEG120",
+        source_diagnosis_artifact_id="ledger_trace_report",
+        source_report_artifact_id="/reports/g120.html",
+        device="G120电机1",
+        fault_code="A07089",
+        priority="P2",
+        workorder_type="参数复核 / 运行异常排查",
+        recommended_assignee_role="电气维护人员",
+        acceptance_criteria=["当前状态已刷新", "工程师已确认派发条件"],
+        stale_warning="上一轮数据已滞后约 29.5 天，正式提交或派发前必须刷新当前状态并经人工审批。",
+        status="pending_verification",
+        source_hash="trace-g120-a07089",
+        title="G120电机1 A07089 运行异常排查",
+        created_from_recommendation_artifact_id="workorder_recommendation:trace_report",
     )
 
 
@@ -135,6 +197,120 @@ def test_build_output_frame_variants_are_stable() -> None:
     assert "fake failure" in error_frame.final_answer
     assert clarification_frame.answer_variant == "clarification"
     assert "补充" in clarification_frame.final_answer
+
+
+def test_workorder_output_frame_variant() -> None:
+    artifacts = {
+        "workorder_suggestion": _workorder_suggestion(),
+        "workorder_pending_action": _pending_action(),
+        "workorder_draft": _workorder_draft(),
+    }
+    frame = build_output_frame(
+        status="completed",
+        artifacts=artifacts,
+        evidence_bundle=_bundle(),
+        node_results=[
+            {
+                "node_id": "workorder_1",
+                "node_type": "workorder",
+                "input_summary": "{'inputs': {'target_evidence_bundle_id': 'ledger_trace_report', 'stale_evidence_disclosure_required': True}}",
+                "output": {"success": True},
+            }
+        ],
+    )
+
+    assert frame.answer_variant == "workorder_draft_ready"
+    assert frame.answer_variant != "clarification"
+    assert "工单草稿" in frame.final_answer
+    assert "未派发" in frame.final_answer
+    assert "人工确认" in frame.final_answer
+    assert "G120电机1" in frame.final_answer
+    assert "A07089" in frame.final_answer
+    assert frame.workorder_draft_payload["draft_only"] is True
+    assert frame.workorder_draft_payload["manual_confirmation_required"] is True
+    assert frame.workorder_draft_payload["dispatch_forbidden"] is True
+    assert frame.workorder_draft_payload["target_evidence_bundle_id"] == "ledger_trace_report"
+    assert frame.guardrail_result["generated_from_previous_artifact"] is True
+
+
+def test_report_to_workorder_final_answer() -> None:
+    class ReadyWorkorderNode:
+        node_type = "workorder"
+
+        def run(self, *, node, state):  # noqa: ANN001
+            suggestion = _workorder_suggestion()
+            pending = _pending_action()
+            draft = _workorder_draft()
+            return NodeExecutionOutput(
+                output={
+                    "success": True,
+                    "suggestion": suggestion.model_dump(mode="json"),
+                    "pending_action": pending,
+                    "draft": draft.model_dump(mode="json"),
+                },
+                artifacts={
+                    "workorder_suggestion": suggestion,
+                    "workorder_pending_action": pending,
+                    "workorder_draft": draft,
+                },
+            )
+
+    plan = ExecutionPlan(
+        plan_id="plan.report.to.workorder",
+        plan_version="v2.phase8.validated",
+        goals=[{"goal": "基于上一轮报告生成工单草稿"}],
+        nodes=[
+            {
+                "node_id": "workorder_1",
+                "node_type": "workorder",
+                "inputs": {
+                    "device_refs": ["G120电机1"],
+                    "fault_code_refs": ["A07089"],
+                    "target_artifact_id": "/reports/g120.html",
+                    "target_artifact_type": "report_artifact",
+                    "target_evidence_bundle_id": "ledger_trace_report",
+                    "stale_evidence_disclosure_required": True,
+                    "source_artifact_refs": [{"artifact_id": "/reports/g120.html", "artifact_type": "report_artifact"}],
+                },
+            }
+        ],
+        allowed_tools=["workorder.create"],
+        forbidden_tools=["workorder.dispatch", "device_control.write", "alarm.close"],
+        approval_requirements=[
+            {
+                "requirement_id": "approval_workorder_draft",
+                "type": "workorder_draft",
+                "required": True,
+                "allowed_next_step": "draft_only",
+            }
+        ],
+        expected_outputs=["workorder_draft"],
+    )
+
+    result = WorkflowRuntimeExecutor(node_registry={"workorder": ReadyWorkorderNode()}, real_tools=True).execute(
+        plan,
+        trace_id="trace.report.to.workorder",
+        thread_id="thread.report.to.workorder",
+        auth_context=build_auth_context(role="engineer", asset_scope=["G120电机1"], table_scope=["real_data_01"]),
+    )
+
+    assert result.status == "completed"
+    assert result.node_results[0].node_id == "workorder_1"
+    assert result.node_results[0].status == "completed"
+    artifact_types = {item["artifact_type"] for item in result.evidence_ledger.artifact_refs}
+    assert {"workorder_suggestion", "workorder_pending_action", "workorder_draft"} <= artifact_types
+    assert result.output_frame.answer_variant == "workorder_draft_ready"
+    assert "需要补充设备、故障码或时间窗口" not in result.output_frame.final_answer
+    for text in ["G120电机1", "A07089", "草稿", "人工确认", "未派发"]:
+        assert text in result.output_frame.final_answer
+    complete = result.complete_payload
+    assert complete["rendered_answer"]["answer_variant"] == "workorder_draft_ready"
+    assert complete["final_content"] == result.output_frame.final_answer
+    assert complete["manual_confirmation"]["manual_confirmation_required"] is True
+    assert complete["workorder_draft_payload"]["draft_only"] is True
+    assert complete["workorder_draft_payload"]["dispatch_forbidden"] is True
+    assert complete["workorder_draft_payload"]["approval_requirements"][0]["required"] is True
+    assert "workorder.dispatch" in complete["workflow_policy"]["forbidden_tools"]
 
 
 def test_fault_code_answer_uses_concise_structured_template_by_default() -> None:
