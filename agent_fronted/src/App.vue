@@ -126,6 +126,7 @@ const switchDevIdentity = async () => {
     await adminAuthAPI.devLogin(devIdentityRole.value)
     const identity = await adminAuthAPI.getIdentity()
     applyBackendIdentity(identity)
+    window.dispatchEvent(new CustomEvent('dcma:identity-session-changed'))
     const option = devIdentityOptions.find(item => item.value === devIdentityRole.value)
     ElMessage.success(`已切换为${option?.label || '开发'}身份`)
   } catch (error) {
@@ -986,4 +987,3 @@ body {
   }
 }
 </style>
-

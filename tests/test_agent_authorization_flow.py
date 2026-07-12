@@ -13,7 +13,7 @@ from fault_diagnosis.server.http.routers import admin_knowledge_files as admin_k
 from fault_diagnosis.server.http.routers.admin_knowledge_files import router as admin_knowledge_files_router
 from fault_diagnosis.server.http.routers.auth import router as auth_router
 from fault_diagnosis.server.auth.admin_auth import DEV_AUTH_COOKIE_NAME
-from fault_diagnosis.server.auth.session_scope import SessionScopeManager
+from fault_diagnosis.server.auth.session_scope import SESSION_COOKIE_NAME, SessionScopeManager
 from fault_diagnosis.server.devtools.dev_mode import build_dev_authorization, stream_dev_chat_events
 from fault_diagnosis.domain.security.permissions import build_auth_context, build_dev_auth_context
 from fault_diagnosis.domain.security.policy_engine import authorize_workflow
@@ -155,6 +155,24 @@ def test_dev_login_signs_requested_development_identity_scope(auth_client: TestC
     assert identity["user_id"] == "engineer_01"
     assert identity["asset_scope"] == ["J1号机"]
     assert identity["allowed_tables"] == ["real_data_01", "device_alarm", "fault_records"]
+
+
+def test_dev_identity_switch_rotates_session_and_invalidates_old_threads(auth_client: TestClient) -> None:
+    manager = auth_client.app.state.session_scope_manager
+
+    _dev_login(auth_client, "guest")
+    guest_session_token = auth_client.cookies.get(SESSION_COOKIE_NAME)
+    guest_session_id = manager.verify_session_token(guest_session_token)
+    assert guest_session_id
+    guest_thread_id = manager.issue_thread_id(guest_session_id)
+
+    _dev_login(auth_client, "engineer")
+    engineer_session_token = auth_client.cookies.get(SESSION_COOKIE_NAME)
+    engineer_session_id = manager.verify_session_token(engineer_session_token)
+
+    assert engineer_session_id
+    assert engineer_session_id != guest_session_id
+    assert manager.is_thread_owned_by_session(guest_thread_id, engineer_session_id) is False
 
 
 def test_dev_login_is_unavailable_when_development_auth_is_disabled(monkeypatch) -> None:

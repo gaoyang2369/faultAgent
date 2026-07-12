@@ -84,7 +84,12 @@ def json_response_with_scope_and_dev(
     allowed_tables: list[str] | None = None,
     status_code: int = 200,
 ) -> JSONResponse:
-    manager, session_id, _, legacy_bindings = resolve_request_scope(request)
+    manager, _, _, _ = resolve_request_scope(request)
+    # A development-role switch must not inherit the previous role's thread
+    # ownership.  The browser keeps only the newly issued cookie, so every
+    # switch starts an independent server-side conversation scope.
+    session_id = manager.issue_session_id()
+    legacy_bindings: dict[str, str] = {}
     response = JSONResponse(status_code=status_code, content=content)
     manager.attach_scope_cookies(response, session_id, legacy_bindings)
     clear_user_auth_cookie(response)

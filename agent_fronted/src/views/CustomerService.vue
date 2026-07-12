@@ -634,6 +634,7 @@ const {
   renameChatHistoryItem,
   deleteChatHistoryItem,
   startNewChat,
+  resetForIdentitySession,
   disposeStream,
   reviveStreamLifecycle,
   appendVoiceUserMessage,
@@ -1253,6 +1254,10 @@ const handleDesktopPetMessageEvent = (event: Event) => {
   void submitDesktopPetMessage(payload)
 }
 
+const handleIdentitySessionChanged = () => {
+  void resetForIdentitySession()
+}
+
 // 开始新对话
 onMounted(() => {
   disposeVoiceGatewayEvent = onVoiceEvent(event => {
@@ -1262,6 +1267,7 @@ onMounted(() => {
   adjustTextareaHeight()
   window.addEventListener(DESKTOP_PET_MESSAGE_EVENT, handleDesktopPetMessageEvent)
   window.addEventListener(DESKTOP_PET_VOICE_AUTOSTART_EVENT, handleDesktopPetVoiceAutoStart)
+  window.addEventListener('dcma:identity-session-changed', handleIdentitySessionChanged)
   void submitDesktopPetMessage(consumePendingDesktopPetMessage())
   handleDesktopPetVoiceAutoStart()
   refreshExpandedTemplateCardHeight()
@@ -1289,6 +1295,7 @@ onBeforeUnmount(() => {
   stopStreamingTts()
   window.removeEventListener(DESKTOP_PET_MESSAGE_EVENT, handleDesktopPetMessageEvent)
   window.removeEventListener(DESKTOP_PET_VOICE_AUTOSTART_EVENT, handleDesktopPetVoiceAutoStart)
+  window.removeEventListener('dcma:identity-session-changed', handleIdentitySessionChanged)
   disposeStream()
   window.removeEventListener('dcma:pdf-question-draft', applyPdfQuestionDraft)
   userIdentityStore.setStatus('disconnected')

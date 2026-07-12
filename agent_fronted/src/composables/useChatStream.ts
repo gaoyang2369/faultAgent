@@ -15,6 +15,7 @@ import {
 } from '@/utils/chatMessageModel.js'
 import {
   buildCachedHistoryTitle,
+  clearServiceConversationCache,
   getCachedServiceConversation,
   isSignedThreadId,
   listCachedServiceHistory,
@@ -378,6 +379,20 @@ export const useChatStream = ({
     isStopping.value = false
     userIdentityStore.setStatus?.('idle')
     await scrollToBottom({ force: true, markNewContent: false })
+  }
+
+  const resetForIdentitySession = async () => {
+    // The backend rotates the signed session when the development identity
+    // changes.  Cached messages belong to the old scope and must never be
+    // offered as a fallback for the newly selected identity.
+    clearServiceConversationCache()
+    deletedChatIds.clear()
+    chatHistory.value = []
+    historyError.value = ''
+    historyHasMore.value = false
+    historyNextCursor.value = null
+    await startNewChat()
+    await loadChatHistory()
   }
 
   const applyLocalCacheConversation = async (chatId: string, fallbackReason = '') => {
@@ -1529,6 +1544,7 @@ export const useChatStream = ({
     renameChatHistoryItem,
     deleteChatHistoryItem,
     startNewChat,
+    resetForIdentitySession,
     disposeStream,
     reviveStreamLifecycle,
     appendVoiceUserMessage,

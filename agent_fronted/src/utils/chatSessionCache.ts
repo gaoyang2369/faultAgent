@@ -135,6 +135,15 @@ export const removeServiceConversationCache = (chatId?: string | null) => {
   writeCache(cache)
 }
 
+export const clearServiceConversationCache = () => {
+  if (!isBrowser()) return
+  try {
+    window.localStorage.removeItem(STORAGE_KEY)
+  } catch (error) {
+    console.warn('清除本地聊天缓存失败:', error)
+  }
+}
+
 export const upsertServiceConversationCache = (
   chatId: string,
   patch: Partial<Omit<CachedConversation, 'id'>> = {}
