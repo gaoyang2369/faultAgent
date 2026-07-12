@@ -15,7 +15,6 @@ import {
 } from '@/utils/chatMessageModel.js'
 import {
   buildCachedHistoryTitle,
-  clearServiceConversationCache,
   getCachedServiceConversation,
   isSignedThreadId,
   listCachedServiceHistory,
@@ -382,10 +381,9 @@ export const useChatStream = ({
   }
 
   const resetForIdentitySession = async () => {
-    // The backend rotates the signed session when the development identity
-    // changes.  Cached messages belong to the old scope and must never be
-    // offered as a fallback for the newly selected identity.
-    clearServiceConversationCache()
+    // The backend switches to the selected role's own signed session.  Keep
+    // the cache; server history below determines which signed threads belong
+    // to this role and the active view is rebuilt from that scope.
     deletedChatIds.clear()
     chatHistory.value = []
     historyError.value = ''
@@ -486,7 +484,7 @@ export const useChatStream = ({
       if (deletedChatIds.has(conversation.id)) return
       const title = buildCachedHistoryTitle(conversation)
       if (keyword && !conversation.id.toLowerCase().includes(keyword) && !title.toLowerCase().includes(keyword)) return
-      if (!merged.has(conversation.id)) {
+      if (!merged.has(conversation.id) && !isSignedThreadId(conversation.id)) {
         merged.set(conversation.id, {
           id: conversation.id,
           title,
@@ -523,11 +521,13 @@ export const useChatStream = ({
       historyHasMore.value = false
       historyNextCursor.value = null
 
-      const cachedHistory = listCachedServiceHistory().map(conversation => ({
+      const cachedHistory = listCachedServiceHistory()
+        .filter(conversation => !isSignedThreadId(conversation.id))
+        .map(conversation => ({
         id: conversation.id,
         title: buildCachedHistoryTitle(conversation),
         source: 'local-cache' as const
-      }))
+        }))
 
       chatHistory.value = cachedHistory
       if (cachedHistory.length > 0) {

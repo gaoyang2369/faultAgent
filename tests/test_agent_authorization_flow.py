@@ -157,7 +157,7 @@ def test_dev_login_signs_requested_development_identity_scope(auth_client: TestC
     assert identity["allowed_tables"] == ["real_data_01", "device_alarm", "fault_records"]
 
 
-def test_dev_identity_switch_rotates_session_and_invalidates_old_threads(auth_client: TestClient) -> None:
+def test_dev_identity_switch_uses_independent_restorable_sessions(auth_client: TestClient) -> None:
     manager = auth_client.app.state.session_scope_manager
 
     _dev_login(auth_client, "guest")
@@ -173,6 +173,15 @@ def test_dev_identity_switch_rotates_session_and_invalidates_old_threads(auth_cl
     assert engineer_session_id
     assert engineer_session_id != guest_session_id
     assert manager.is_thread_owned_by_session(guest_thread_id, engineer_session_id) is False
+
+    _dev_login(auth_client, "guest")
+    restored_guest_session_id = manager.verify_session_token(auth_client.cookies.get(SESSION_COOKIE_NAME))
+    assert restored_guest_session_id == guest_session_id
+    assert manager.is_thread_owned_by_session(guest_thread_id, restored_guest_session_id) is True
+
+    _dev_login(auth_client, "guest")
+    same_role_session_id = manager.verify_session_token(auth_client.cookies.get(SESSION_COOKIE_NAME))
+    assert same_role_session_id == guest_session_id
 
 
 def test_dev_login_is_unavailable_when_development_auth_is_disabled(monkeypatch) -> None:

@@ -26,6 +26,11 @@ from fault_diagnosis.platform.settings import (
 SESSION_COOKIE_NAME = "fd_session"
 SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
 SESSION_COOKIE_SALT = "fd-session-v1"
+# Development identity sessions are kept in role-specific cookies so switching
+# back to a role can restore its own history without sharing another role's
+# thread scope.  The active role still uses SESSION_COOKIE_NAME on requests.
+DEV_SESSION_COOKIE_PREFIX = "fd_dev_session_"
+DEV_SESSION_ROLES = {"guest", "engineer", "admin"}
 THREAD_ID_PREFIX = "thread"
 LEGACY_THREAD_COOKIE_NAME = "fd_legacy_threads"
 LEGACY_THREAD_COOKIE_SALT = "fd-legacy-v1"
@@ -99,6 +104,24 @@ class SessionScopeManager:
         if not hmac.compare_digest(signature, expected):
             return None
         return session_id
+
+    def dev_session_cookie_name(self, role: str) -> str:
+        normalized = str(role or "").strip().lower()
+        if normalized not in DEV_SESSION_ROLES:
+            raise ValueError("unsupported development role")
+        return f"{DEV_SESSION_COOKIE_PREFIX}{normalized}"
+
+    def attach_dev_session_cookie(self, response: Response, role: str, session_id: str) -> None:
+        response.set_cookie(
+            key=self.dev_session_cookie_name(role),
+            value=self.issue_session_token(session_id),
+            httponly=True,
+            samesite=self._cookie_samesite,
+            secure=self._cookie_secure,
+            max_age=SESSION_COOKIE_MAX_AGE,
+            domain=self._cookie_domain,
+            path=self._cookie_path,
+        )
 
     def resolve_session_id(self, token: str | None) -> tuple[str, bool]:
         session_id = self.verify_session_token(token)
