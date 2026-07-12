@@ -281,7 +281,7 @@ def test_report_to_workorder_final_answer() -> None:
                 },
             }
         ],
-        allowed_tools=["workorder.create"],
+        allowed_tools=["workorder.propose_draft"],
         forbidden_tools=["workorder.dispatch", "device_control.write", "alarm.close"],
         approval_requirements=[
             {

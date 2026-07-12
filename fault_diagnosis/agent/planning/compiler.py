@@ -72,6 +72,16 @@ class PlanCompiler:
 
         nodes = _normalized_nodes(
             skill_names=skill_names,
+            required_node_types=[
+                node_type
+                for metadata in metadata_items
+                for node_type in metadata.node_policy.required_nodes
+            ],
+            forbidden_node_types=[
+                node_type
+                for metadata in metadata_items
+                for node_type in metadata.node_policy.forbidden_nodes
+            ],
             goal_by_skill=goal_by_skill,
             assets=assets,
             fault_codes=list(fault_codes),
@@ -105,7 +115,7 @@ def _candidate_approvals(
     expected_outputs: list[str],
 ) -> list[dict[str, Any]]:
     has_workorder = (
-        "workorder.create" in allowed_tools
+        bool({"workorder.create", "workorder.propose_draft"}.intersection(allowed_tools))
         or any(node.get("node_type") == "workorder" for node in nodes)
         or any(str(output).startswith("workorder") for output in expected_outputs)
     )
@@ -126,6 +136,8 @@ def _candidate_approvals(
 def _normalized_nodes(
     *,
     skill_names: list[str],
+    required_node_types: list[str],
+    forbidden_node_types: list[str],
     goal_by_skill: dict[str, str],
     assets: list[str],
     fault_codes: list[str],
@@ -140,6 +152,9 @@ def _normalized_nodes(
         context_frame=context_frame,
         effective_request_frame=effective_request_frame,
     )
+    wanted = list(dict.fromkeys([*wanted, *required_node_types]))
+    forbidden = set(forbidden_node_types) - set(required_node_types)
+    wanted = [node_type for node_type in wanted if node_type not in forbidden]
     nodes: list[dict[str, Any]] = []
     for node_type in wanted:
         owner = _node_owner(node_type, skill_names)
@@ -341,6 +356,14 @@ def _normalized_edges(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         edges.append({"from": by_type["analysis"], "to": by_type["report"]})
     if "analysis" in by_type and "workorder" in by_type:
         edges.append({"from": by_type["analysis"], "to": by_type["workorder"], "condition": {"requires": "evidence_quality"}})
+    if "report" in by_type and "workorder" in by_type:
+        edges.append(
+            {
+                "from": by_type["report"],
+                "to": by_type["workorder"],
+                "condition": {"requires": "analysis_or_report_artifact"},
+            }
+        )
     if "workorder" in by_type and "approval" in by_type:
         edges.append({"from": by_type["workorder"], "to": by_type["approval"]})
     if not edges:

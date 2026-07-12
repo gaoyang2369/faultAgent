@@ -9,6 +9,10 @@ optional_slots:
   - device
 required_evidence:
   - fault_code_manual
+  - manual_reference
+  - exact_code_match
+  - source_file
+  - source_page
 allowed_nodes:
   - rag
   - kg
@@ -18,7 +22,67 @@ allowed_tools:
 forbidden_tools:
   - sql.write
   - workorder.dispatch
+  - report.write_draft
+  - workorder.propose_draft
+  - device_control.write
 risk_level: low
 output_variants:
   - answer
 fallback_policy: ask_for_fault_code
+slot_policy:
+  required:
+    - fault_code_refs
+  optional:
+    - device_refs
+  inherit_allowed:
+    - fault_code_refs
+  inherit_forbidden:
+    - device_refs
+evidence_policy:
+  required:
+    - manual_reference
+    - exact_code_match
+    - source_file
+    - source_page
+  optional:
+    - category
+    - cause
+    - remedy
+  freshness_policy: manual_revision_current
+  missing_evidence_behavior: partial_disclose_or_clarify
+node_policy:
+  required_nodes:
+    - rag
+  optional_nodes:
+    - kg
+  forbidden_nodes:
+    - sql
+    - report
+    - workorder
+output_contract:
+  variants:
+    - answer
+  required_fields:
+    - fault_code
+    - meaning
+    - manual_reference
+    - source_file
+    - source_page
+  forbidden_claims:
+    - current_realtime_status
+    - alarm_currently_active
+safety_contract:
+  forbidden_actions:
+    - report
+    - workorder
+    - device_action
+  manual_confirmation_required: false
+  draft_only: false
+composition:
+  can_compose_with:
+    - runtime_status
+    - alarm_triage
+  preferred_primary_when_composed: alarm_triage
+  dependency_rules:
+    - when: runtime_status_selected
+      promote: alarm_triage

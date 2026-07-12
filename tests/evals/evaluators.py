@@ -341,7 +341,7 @@ def _expect_tools(failures: list[str], snapshot: dict[str, Any], expected: list[
         "sql_db_query": {"sql.read"},
         "query_knowledge_base": {"kb.search"},
         "save_report": {"report.write_draft"},
-        "create_workorder": {"workorder.create", "create_workorder"},
+        "create_workorder": {"workorder.propose_draft", "workorder.create", "create_workorder"},
     }
     missing = []
     for item in expected:

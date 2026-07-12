@@ -1,12 +1,29 @@
 input:
-  report_source:
+  report_source_type:
+    type: string
+    required: true
+  reportable_artifact:
+    type: object
+    required: true
+  source_artifact_status:
     type: string
     required: true
   evidence_bundle:
     type: string
     required: false
 output:
-  report_payload:
+  report_source_type:
+    type: string
+    required: true
+  source_artifact_status:
+    type: string
+    required: true
+  freshness_disclosure:
+    type: string
+    required: true
+  report:
     type: object
+    required: true
   report_url:
     type: string
+    required: false

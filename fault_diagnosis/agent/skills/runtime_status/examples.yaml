@@ -2,3 +2,7 @@
   selected_skill: runtime_status
   required_slots:
     device: J1
+  expected_output:
+    - runtime_status
+    - data_window
+    - freshness_disclosure

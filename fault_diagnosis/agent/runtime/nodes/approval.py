@@ -49,10 +49,10 @@ def _normalize_requirement(item: dict[str, Any]) -> dict[str, Any]:
     req_type = str(requirement.get("type") or requirement.get("approval_type") or "approval")
     requirement.setdefault("type", req_type)
     requirement.setdefault("required", True)
-    if req_type in {"workorder", "workorder.create", "workorder_draft"}:
+    if req_type in {"workorder", "workorder.create", "workorder.propose_draft", "workorder_draft"}:
         requirement.setdefault("required_role", "engineer")
         requirement.setdefault("allowed_next_step", "draft_only")
-    elif any(word in req_type for word in ("device", "config", "dispatch")):
+    elif any(word in req_type for word in ("device", "config", "dispatch")) or req_type in {"assign", "execute", "close", "workorder.assign", "workorder.execute", "workorder.close"}:
         requirement.setdefault("required_role", "admin")
         requirement["allowed_next_step"] = "deny"
     else:
@@ -63,4 +63,6 @@ def _normalize_requirement(item: dict[str, Any]) -> dict[str, Any]:
 
 def _is_dangerous(item: dict[str, Any]) -> bool:
     text = " ".join(str(value) for value in item.values()).casefold()
-    return any(word in text for word in ("device_control.write", "config.write", "dispatch", "device_action"))
+    return any(word in text for word in ("device_control.write", "config.write", "dispatch", "device_action")) or any(
+        marker in text for marker in ("workorder.assign", "workorder.execute", "workorder.close")
+    )

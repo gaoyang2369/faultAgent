@@ -8,3 +8,6 @@ input:
 output:
   question:
     type: string
+    required: true
+  tool_calls:
+    forbidden: true

@@ -2,3 +2,10 @@
   selected_skill: fault_code_explain
   required_slots:
     fault_code: A07089
+  required_evidence:
+    - manual_reference
+    - exact_code_match
+    - source_file
+    - source_page
+  forbidden_claims:
+    - current_realtime_status

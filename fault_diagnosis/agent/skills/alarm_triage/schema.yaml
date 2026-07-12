@@ -6,9 +6,32 @@ input:
     type: string
     required: true
 output:
+  status:
+    type: string
+    enum:
+      - complete
+      - partial
+  current_alarm_presence:
+    type: string
+    required: true
+  event_continuity:
+    type: string
+    required: true
+  manual_reaction:
+    type: string
+    required: true
   severity:
     type: string
+    required: true
   recommendation:
     type: string
+    required: true
+  unknowns:
+    type: array
+    required: true
+  next_steps:
+    type: array
+    required: true
   evidence_refs:
     type: array
+    required: true

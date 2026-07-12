@@ -12,6 +12,8 @@ optional_slots:
 required_evidence:
   - latest_runtime_status
   - fault_code_manual
+  - sql_runtime_evidence
+  - rag_manual_evidence
 allowed_nodes:
   - sql
   - rag
@@ -27,3 +29,65 @@ output_variants:
   - answer
   - recommendation
 fallback_policy: run_partial_status_or_code_explain
+slot_policy:
+  required:
+    - device_refs
+    - fault_code_refs
+  optional:
+    - time_window
+  inherit_allowed:
+    - device_refs
+    - fault_code_refs
+    - time_window
+  inherit_forbidden: []
+evidence_policy:
+  required:
+    - sql_runtime_evidence
+    - rag_manual_evidence
+  optional:
+    - field_observation
+    - reset_result
+    - parameter_change_history
+  freshness_policy: runtime_freshness_required
+  missing_evidence_behavior: partial_disclose
+node_policy:
+  required_nodes:
+    - sql
+    - rag
+    - analysis
+  optional_nodes: []
+  forbidden_nodes:
+    - report
+    - workorder
+output_contract:
+  variants:
+    - answer
+    - recommendation
+    - partial
+  required_fields:
+    - current_alarm_presence
+    - event_continuity
+    - manual_reaction
+    - severity
+    - recommendation
+    - unknowns
+    - next_steps
+  forbidden_claims:
+    - definitive_root_cause
+safety_contract:
+  forbidden_actions:
+    - alarm_acknowledge
+    - alarm_close
+    - device_action
+  manual_confirmation_required: false
+  draft_only: false
+composition:
+  can_compose_with:
+    - fault_code_explain
+    - runtime_status
+    - root_cause
+    - workorder_decision
+  preferred_primary_when_composed: alarm_triage
+  dependency_rules:
+    - when: workorder_decision_selected
+      order: workorder_after_analysis

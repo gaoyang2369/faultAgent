@@ -8,5 +8,21 @@ input:
 output:
   root_cause_candidates:
     type: array
-  confidence:
-    type: string
+    required: true
+    items:
+      type: object
+      required_fields:
+        - supporting_evidence
+        - missing_evidence
+        - confidence
+      properties:
+        candidate:
+          type: string
+        supporting_evidence:
+          type: array
+        missing_evidence:
+          type: array
+        confidence:
+          type: number
+  definitive_root_cause:
+    forbidden_without_evidence: true

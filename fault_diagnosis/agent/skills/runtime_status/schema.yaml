@@ -6,9 +6,18 @@ input:
     type: object
     required: false
 output:
-  current_status:
+  runtime_status:
     type: string
+    required: true
+  data_window:
+    type: object
+    required: true
   latest_sample_time:
     type: string
-  freshness:
+    required: true
+  row_count:
+    type: integer
+    required: true
+  freshness_disclosure:
     type: string
+    required: true

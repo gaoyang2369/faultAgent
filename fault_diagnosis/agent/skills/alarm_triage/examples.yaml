@@ -3,3 +3,9 @@
   required_slots:
     device: J1
     fault_code: A07089
+  required_evidence:
+    - sql_runtime_evidence
+    - rag_manual_evidence
+  missing_one_evidence_behavior:
+    status: partial
+    disclose: true

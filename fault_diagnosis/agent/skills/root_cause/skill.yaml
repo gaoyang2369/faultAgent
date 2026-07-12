@@ -11,6 +11,8 @@ optional_slots:
 required_evidence:
   - runtime_trend
   - alarm_history
+  - supporting_evidence
+  - missing_evidence_disclosure
 allowed_nodes:
   - sql
   - rag
@@ -21,8 +23,62 @@ allowed_tools:
 forbidden_tools:
   - sql.write
   - device_control.write
-risk_level: medium
+risk_level: high
 output_variants:
   - answer
   - root_cause_candidates
 fallback_policy: ask_for_time_window_or_device
+slot_policy:
+  required:
+    - device_refs
+  optional:
+    - fault_code_refs
+    - time_window
+  inherit_allowed:
+    - device_refs
+    - fault_code_refs
+    - time_window
+  inherit_forbidden: []
+evidence_policy:
+  required:
+    - runtime_trend
+    - alarm_history
+    - supporting_evidence
+    - missing_evidence_disclosure
+  optional:
+    - field_observation
+    - parameter_change_history
+  freshness_policy: disclose_age_and_scope
+  missing_evidence_behavior: candidate_only_with_uncertainty
+node_policy:
+  required_nodes:
+    - sql
+    - rag
+    - analysis
+  optional_nodes: []
+  forbidden_nodes:
+    - workorder
+    - report
+output_contract:
+  variants:
+    - root_cause_candidates
+  required_fields:
+    - root_cause_candidates
+  forbidden_claims:
+    - single_unsupported_root_cause
+    - definitive_root_cause_without_evidence
+safety_contract:
+  forbidden_actions:
+    - device_action
+    - alarm_acknowledge
+    - alarm_close
+  manual_confirmation_required: false
+  draft_only: false
+composition:
+  can_compose_with:
+    - runtime_status
+    - alarm_triage
+  preferred_primary_when_composed: root_cause
+  dependency_rules:
+    - when: alarm_triage_selected
+      requires: triage_artifact

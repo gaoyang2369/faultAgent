@@ -2,3 +2,6 @@
   selected_skill: clarification
   missing_context:
     - "请确认“它/这个设备”指的是哪个设备。"
+  allowed_nodes:
+    - clarification
+  tool_calls: []

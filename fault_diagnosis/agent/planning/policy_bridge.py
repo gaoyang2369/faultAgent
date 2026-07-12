@@ -35,7 +35,7 @@ V2_TO_LEGACY_TOOLS = {
     "kb.search": ["query_knowledge_base"],
     "kg.lookup": ["query_knowledge_base"],
     "report.write_draft": ["save_report"],
-    "workorder.create": ["create_workorder"],
+    "workorder.propose_draft": ["create_workorder"],
 }
 
 LEGACY_TO_V2_TOOLS = {
@@ -88,7 +88,7 @@ NODE_REQUIRED_TOOL = {
     "rag": "kb.search",
     "kg": "kg.lookup",
     "report": "report.write_draft",
-    "workorder": "workorder.create",
+    "workorder": "workorder.propose_draft",
 }
 
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}

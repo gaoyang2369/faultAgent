@@ -20,3 +20,46 @@ risk_level: low
 output_variants:
   - clarification_question
 fallback_policy: ask_one_question
+slot_policy:
+  required: []
+  optional:
+    - candidates
+    - missing_context
+  inherit_allowed: []
+  inherit_forbidden:
+    - ambiguous_device_refs
+    - ambiguous_fault_code_refs
+evidence_policy:
+  required: []
+  optional:
+    - candidate_context
+  freshness_policy: not_applicable
+  missing_evidence_behavior: ask_one_question
+node_policy:
+  required_nodes:
+    - clarification
+  optional_nodes: []
+  forbidden_nodes:
+    - sql
+    - rag
+    - analysis
+    - report
+    - workorder
+output_contract:
+  variants:
+    - clarification_question
+  required_fields:
+    - question
+  forbidden_claims:
+    - inferred_ambiguous_target
+safety_contract:
+  forbidden_actions:
+    - tool_execution
+    - device_action
+    - workorder
+  manual_confirmation_required: false
+  draft_only: false
+composition:
+  can_compose_with: []
+  preferred_primary_when_composed: clarification
+  dependency_rules: []

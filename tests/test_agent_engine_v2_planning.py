@@ -58,7 +58,7 @@ def test_guest_blocks_report_root_cause_and_workorder_plans() -> None:
         assert snapshot.status == "blocked"
         assert snapshot.output_frame.guardrail_result["authorization"]["mode"] == "deny"
         assert "report.write_draft" not in snapshot.execution_plan.allowed_tools
-        assert "workorder.create" not in snapshot.execution_plan.allowed_tools
+        assert "workorder.propose_draft" not in snapshot.execution_plan.allowed_tools
 
 
 def test_guest_report_for_scoped_device_degrades_to_one_hour_status_query() -> None:

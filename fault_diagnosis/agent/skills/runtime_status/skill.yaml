@@ -10,6 +10,13 @@ optional_slots:
   - fault_code
 required_evidence:
   - latest_runtime_status
+  - asset_identity
+  - data_source
+  - sample_window
+  - latest_sample_time
+  - row_count
+  - freshness
+  - runtime_status
 allowed_nodes:
   - sql
 allowed_tools:
@@ -17,8 +24,67 @@ allowed_tools:
 forbidden_tools:
   - sql.write
   - device_control.write
-risk_level: low
+risk_level: medium
 output_variants:
   - answer
   - status_brief
 fallback_policy: ask_for_device
+slot_policy:
+  required:
+    - device_refs
+  optional:
+    - time_window
+    - fault_code_refs
+  inherit_allowed:
+    - device_refs
+    - time_window
+  inherit_forbidden: []
+evidence_policy:
+  required:
+    - asset_identity
+    - data_source
+    - sample_window
+    - latest_sample_time
+    - row_count
+    - freshness
+    - runtime_status
+  optional:
+    - event_codes
+    - metric_snapshot
+  freshness_policy: calculate_and_disclose
+  missing_evidence_behavior: partial_disclose
+node_policy:
+  required_nodes:
+    - sql
+  optional_nodes: []
+  forbidden_nodes:
+    - workorder
+    - report
+output_contract:
+  variants:
+    - answer
+    - status_brief
+  required_fields:
+    - runtime_status
+    - data_window
+    - latest_sample_time
+    - freshness_disclosure
+  forbidden_claims:
+    - current_without_freshness
+safety_contract:
+  forbidden_actions:
+    - device_action
+    - alarm_acknowledge
+    - alarm_close
+  manual_confirmation_required: false
+  draft_only: false
+composition:
+  can_compose_with:
+    - fault_code_explain
+    - alarm_triage
+    - root_cause
+    - workorder_decision
+  preferred_primary_when_composed: alarm_triage
+  dependency_rules:
+    - when: fault_code_explain_selected
+      promote: alarm_triage

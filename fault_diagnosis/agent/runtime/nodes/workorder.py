@@ -124,7 +124,10 @@ def _is_forbidden_action(action_type: str, node: dict[str, Any]) -> bool:
             " ".join(str(item) for item in node.get("required_tools", []) or []),
         ]
     ).casefold()
-    return any(word in text for word in ("dispatch", "device_control.write", "config.write", "device_action"))
+    return any(word in text for word in ("dispatch", "device_control.write", "config.write", "device_action")) or any(
+        marker in text
+        for marker in ("workorder.assign", "workorder.execute", "workorder.close", "action_type=assign", "action_type=execute", "action_type=close")
+    )
 
 
 def _model(value: Any, model_type: Any, default: Any) -> Any:

@@ -11,6 +11,8 @@ optional_slots:
   - evidence_bundle
 required_evidence:
   - reportable_artifact
+  - report_source_type
+  - source_artifact_status
 allowed_nodes:
   - report
 allowed_tools:
@@ -22,3 +24,59 @@ risk_level: low
 output_variants:
   - report
 fallback_policy: ask_for_report_source_or_refresh
+slot_policy:
+  required:
+    - report_source_type
+    - reportable_artifact
+    - source_artifact_status
+  optional:
+    - device_refs
+    - fault_code_refs
+    - evidence_bundle
+  inherit_allowed:
+    - reportable_artifact
+    - evidence_bundle
+    - device_refs
+    - fault_code_refs
+  inherit_forbidden: []
+evidence_policy:
+  required:
+    - report_source_type
+    - reportable_artifact
+    - source_artifact_status
+  optional:
+    - evidence_bundle
+  freshness_policy: refresh_or_disclose
+  missing_evidence_behavior: block_or_request_source
+node_policy:
+  required_nodes:
+    - report
+  optional_nodes: []
+  forbidden_nodes:
+    - device_action
+output_contract:
+  variants:
+    - report
+  required_fields:
+    - report_source_type
+    - source_artifact_status
+    - freshness_disclosure
+    - report
+  forbidden_claims:
+    - refreshed_without_refresh_evidence
+safety_contract:
+  forbidden_actions:
+    - device_action
+    - workorder_dispatch
+  manual_confirmation_required: false
+  draft_only: true
+composition:
+  can_compose_with:
+    - alarm_triage
+    - root_cause
+    - workorder_decision
+  preferred_primary_when_composed: report_generation
+  dependency_rules:
+    - when: workorder_decision_selected
+      order: report_before_workorder
+      workorder_requires: analysis_or_report_artifact

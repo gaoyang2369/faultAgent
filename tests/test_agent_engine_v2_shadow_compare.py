@@ -50,7 +50,7 @@ def test_plan_compare_marks_dangerous_tool_difference_for_review() -> None:
         plan_version="v2.compare.validated",
         goals=[{"skill": "workorder_decision"}],
         nodes=[{"node_id": "workorder_1", "node_type": "workorder"}],
-        allowed_tools=["workorder.create"],
+        allowed_tools=["workorder.propose_draft"],
         required_evidence=["diagnosis_summary"],
         risk_level="high",
         approval_requirements=[],

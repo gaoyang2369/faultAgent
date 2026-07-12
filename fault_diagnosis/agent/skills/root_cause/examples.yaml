@@ -3,3 +3,11 @@
   required_slots:
     device: J1
     fault_code: A07089
+  expected_output:
+    root_cause_candidates:
+      - candidate: load_or_speed_control_mismatch
+        supporting_evidence:
+          - speed_deviation
+        missing_evidence:
+          - parameter_change_history
+        confidence: 0.6

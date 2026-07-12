@@ -16,7 +16,7 @@ def _plan(nodes: list[dict[str, Any]], *, edges: list[dict[str, Any]] | None = N
         plan_version="v2.phase6.validated",
         nodes=nodes,
         edges=edges or [],
-        allowed_tools=["sql.read", "kb.search", "report.write_draft", "workorder.create"],
+        allowed_tools=["sql.read", "kb.search", "report.write_draft", "workorder.propose_draft"],
         required_evidence=["latest_runtime_status"],
         approval_requirements=approvals or [],
     )

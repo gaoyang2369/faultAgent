@@ -3,3 +3,7 @@
   inherited_slots:
     device: J1
     evidence_bundle: eb_J1
+  expected_action: workorder.propose_draft
+  safety:
+    draft_only: true
+    manual_confirmation_required: true

@@ -6,9 +6,26 @@ input:
     type: string
     required: false
 output:
-  explanation:
+  fault_code:
     type: string
+    required: true
+  meaning:
+    type: string
+    required: true
+  manual_reference:
+    type: string
+    required: true
+  source_file:
+    type: string
+    required: true
+  source_page:
+    type: string
+    required: true
   likely_causes:
     type: array
+    required: false
   suggested_checks:
     type: array
+    required: false
+  realtime_status:
+    forbidden: true

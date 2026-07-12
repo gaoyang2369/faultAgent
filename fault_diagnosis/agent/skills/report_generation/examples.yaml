@@ -2,3 +2,8 @@
   selected_skill: report_generation
   inherited_slots:
     evidence_bundle: eb_J1
+  source_contract:
+    report_source_type: analysis_artifact
+    reportable_artifact: analysis_J1
+    source_artifact_status: stale
+    freshness_policy: refresh_or_disclose

@@ -18,12 +18,82 @@ allowed_nodes:
   - workorder
   - approval
 allowed_tools:
-  - workorder.create
+  - workorder.propose_draft
 forbidden_tools:
   - workorder.dispatch
+  - workorder.assign
+  - workorder.execute
+  - workorder.close
   - device_control.write
 risk_level: high
 output_variants:
   - workorder_decision
   - workorder_draft
 fallback_policy: require_fresh_status_and_human_approval
+slot_policy:
+  required:
+    - device_refs
+  optional:
+    - fault_code_refs
+    - evidence_bundle
+    - reportable_artifact
+  inherit_allowed:
+    - device_refs
+    - fault_code_refs
+    - evidence_bundle
+    - reportable_artifact
+  inherit_forbidden: []
+evidence_policy:
+  required:
+    - fresh_runtime_status
+    - diagnosis_summary
+  optional:
+    - reportable_artifact
+  freshness_policy: refresh_data_first_or_disclose_stale
+  missing_evidence_behavior: refresh_data_first_or_disclose_stale
+node_policy:
+  required_nodes:
+    - workorder
+    - approval
+  optional_nodes:
+    - sql
+    - rag
+    - analysis
+  forbidden_nodes:
+    - device_action
+output_contract:
+  variants:
+    - workorder_decision
+    - workorder_draft
+  required_fields:
+    - need_workorder
+    - reason
+    - evidence_summary
+    - draft_only
+    - manual_confirmation_required
+  forbidden_claims:
+    - dispatched
+    - assigned
+    - executed
+    - closed
+safety_contract:
+  forbidden_actions:
+    - dispatch
+    - assign
+    - execute
+    - close
+    - device_action
+  manual_confirmation_required: true
+  draft_only: true
+composition:
+  can_compose_with:
+    - runtime_status
+    - alarm_triage
+    - report_generation
+  preferred_primary_when_composed: alarm_triage
+  dependency_rules:
+    - when: alarm_triage_selected
+      order: workorder_after_analysis
+    - when: report_generation_selected
+      order: report_before_workorder
+      requires: analysis_or_report_artifact

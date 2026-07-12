@@ -8,7 +8,27 @@ input:
 output:
   need_workorder:
     type: boolean
+    required: true
+  reason:
+    type: string
+    required: true
+  evidence_summary:
+    type: array
+    required: true
   draft_payload:
     type: object
-  approval_required:
+    required: false
+  draft_only:
     type: boolean
+    const: true
+    required: true
+  manual_confirmation_required:
+    type: boolean
+    const: true
+    required: true
+  lifecycle_actions:
+    forbidden:
+      - dispatch
+      - assign
+      - execute
+      - close

@@ -52,7 +52,7 @@ class SkillRouter:
             selected = ["clarification"]
             routing_reason = "上下文存在歧义或缺失，先进入 clarification skill。"
 
-        selected = _dedupe([skill for skill in selected if skill])
+        selected, primary_skill = _resolve_composition(selected)
         loaded_skills = self.loader.load(selected)
         load_set = [
             item
@@ -61,7 +61,7 @@ class SkillRouter:
         ]
         return SkillRoute(
             selected_skills=selected,
-            primary_skill=selected[0] if selected else "",
+            primary_skill=primary_skill,
             skill_inputs=_skill_inputs(intent_frame, rewrite_frame, context_frame, loaded_skills, effective_request_frame),
             load_set=load_set,
             skill_confidence=_confidence(intent_frame, selected, context_frame),
@@ -102,7 +102,7 @@ def _select_skills(
         if set(intent_frame.sub_intents).intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"}):
             selected.append("workorder_decision")
         if selected:
-            return _prioritize_skills(selected)
+            return _dedupe(selected)
     sub_intents = set(intent_frame.sub_intents)
     text = f"{intent_frame.normalized_message} {rewrite_frame.user_rewrite}"
     selected: list[str] = []
@@ -120,10 +120,42 @@ def _select_skills(
         selected.append("report_generation")
     if sub_intents.intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"}):
         selected.append("workorder_decision")
-    return _prioritize_skills(selected) or ["clarification"]
+    return _dedupe(selected) or ["clarification"]
 
 
-def _prioritize_skills(selected: list[str]) -> list[str]:
+def _resolve_composition(selected: list[str]) -> tuple[list[str], str]:
+    candidates = _dedupe([skill for skill in selected if skill])
+    if not candidates:
+        return [], ""
+    if "clarification" in candidates:
+        return ["clarification"], "clarification"
+
+    candidate_set = set(candidates)
+    if {"fault_code_explain", "runtime_status"}.issubset(candidate_set):
+        candidates.append("alarm_triage")
+        candidate_set.add("alarm_triage")
+
+    primary = _default_primary(candidates)
+    if {"report_generation", "workorder_decision"}.issubset(candidate_set):
+        primary = "report_generation"
+    elif {"alarm_triage", "workorder_decision"}.issubset(candidate_set):
+        primary = "alarm_triage"
+    elif {"fault_code_explain", "runtime_status"}.issubset(candidate_set):
+        primary = "alarm_triage"
+
+    ordered = _order_skills(candidates)
+    ordered = [primary, *[skill for skill in ordered if skill != primary]]
+    if "workorder_decision" in ordered and primary != "workorder_decision":
+        ordered = [skill for skill in ordered if skill != "workorder_decision"] + ["workorder_decision"]
+    return _dedupe(ordered), primary
+
+
+def _default_primary(selected: list[str]) -> str:
+    ordered = _order_skills(selected)
+    return ordered[0] if ordered else ""
+
+
+def _order_skills(selected: list[str]) -> list[str]:
     priority = {
         "report_generation": 0,
         "workorder_decision": 1,
@@ -133,7 +165,7 @@ def _prioritize_skills(selected: list[str]) -> list[str]:
         "fault_code_explain": 5,
         "clarification": 6,
     }
-    return sorted(selected, key=lambda skill: priority.get(skill, 100))
+    return sorted(_dedupe(selected), key=lambda skill: priority.get(skill, 100))
 
 
 def _needs_clarification(

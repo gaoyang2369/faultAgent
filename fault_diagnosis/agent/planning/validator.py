@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -24,6 +25,7 @@ from ..contracts import (
     SqlNodeInputs,
     WorkorderNodeInputs,
 )
+from ..skills import SkillMetadata
 from .policy_bridge import (
     BLOCKING_FORBIDDEN_TOOLS,
     GLOBAL_FORBIDDEN_TOOLS,
@@ -87,6 +89,7 @@ class PlanValidator:
             primary_skill = "runtime_status"
             skill_names = ["runtime_status"]
         policy = self.bridge.policy_for_skill(primary_skill)
+        metadata_items = self.bridge.skill_metadata(skill_names)
 
         validated.required_evidence = _dedupe(
             [
@@ -216,6 +219,12 @@ class PlanValidator:
 
         validated.nodes = _sanitize_nodes(validated.nodes, removed_tools, issues)
         _validate_node_inputs(validated, issues, require_runtime_inputs=require_runtime_inputs)
+        contract_metadata = (
+            self.bridge.skill_metadata(["runtime_status"])
+            if _is_guest_report_runtime_status_fallback(validated)
+            else metadata_items
+        )
+        _validate_skill_contracts(validated, contract_metadata, issues)
         removed_tools = _dedupe(removed_tools)
         validated.plan_id = validated.plan_id or f"validated_{uuid4().hex[:12]}"
         if ".validated" not in validated.plan_version:
@@ -277,9 +286,9 @@ def _tools_denied_by_auth(tools: list[str], authorization: AuthorizationDecision
     if "report" in denied_nodes:
         denied.append("report.write_draft")
     if "workorder_decision" in denied_nodes or "action_request" in denied_nodes:
-        denied.append("workorder.create")
+        denied.extend(["workorder.propose_draft", "workorder.create"])
     if authorization.denied_reason_code in {"report_permission_denied", "diagnosis_permission_denied", "missing_workflow_permission"}:
-        denied.extend(["report.write_draft", "workorder.create"])
+        denied.extend(["report.write_draft", "workorder.propose_draft", "workorder.create"])
     return [tool for tool in _dedupe(denied) if tool in tools]
 
 
@@ -407,7 +416,7 @@ def _approval_requirements(plan: ExecutionPlan, dangerous_requested_tools: list[
     node_types = {str(node.get("node_type") or "") for node in plan.nodes}
     outputs = set(plan.expected_outputs)
 
-    if "workorder.create" in tools or "workorder" in node_types or outputs.intersection({"workorder_decision", "workorder_draft"}):
+    if tools.intersection({"workorder.create", "workorder.propose_draft"}) or "workorder" in node_types or outputs.intersection({"workorder_decision", "workorder_draft"}):
         approvals.append(
             {
                 "requirement_id": "approval_workorder_draft",
@@ -529,6 +538,93 @@ def _validate_node_inputs(
                     node_id=node_id,
                 )
             )
+
+
+def _validate_skill_contracts(
+    plan: ExecutionPlan,
+    metadata_items: list[SkillMetadata],
+    issues: list[PlanValidationIssue],
+) -> None:
+    node_types = {str(node.get("node_type") or "") for node in plan.nodes}
+    for metadata in metadata_items:
+        for node_type in metadata.node_policy.required_nodes:
+            if node_type not in node_types:
+                issues.append(
+                    PlanValidationIssue(
+                        code="skill_required_node_missing",
+                        severity="error",
+                        message=f"Skill {metadata.name} requires node type: {node_type}",
+                    )
+                )
+
+        owned_nodes = [node for node in plan.nodes if str(node.get("skill") or "") == metadata.name]
+        for node in owned_nodes:
+            node_type = str(node.get("node_type") or "")
+            if node_type in set(metadata.node_policy.forbidden_nodes):
+                issues.append(
+                    PlanValidationIssue(
+                        code="skill_forbidden_node_requested",
+                        severity="error",
+                        message=f"Skill {metadata.name} forbids node type: {node_type}",
+                        node_id=str(node.get("node_id") or ""),
+                    )
+                )
+
+        action_values = _skill_action_values(owned_nodes)
+        for action in metadata.safety_contract.forbidden_actions:
+            if any(_matches_action(action, value) for value in action_values):
+                issues.append(
+                    PlanValidationIssue(
+                        code="skill_forbidden_action_requested",
+                        severity="error",
+                        message=f"Skill {metadata.name} forbids action: {action}",
+                    )
+                )
+
+        if metadata.safety_contract.draft_only or metadata.safety_contract.manual_confirmation_required:
+            for node in plan.nodes:
+                if str(node.get("node_type") or "") != "workorder":
+                    continue
+                inputs = dict(node.get("inputs") or {})
+                if metadata.safety_contract.draft_only and inputs.get("draft_only") is not True:
+                    issues.append(
+                        PlanValidationIssue(
+                            code="skill_draft_only_required",
+                            severity="error",
+                            message=f"Skill {metadata.name} requires draft-only workorder output.",
+                            node_id=str(node.get("node_id") or ""),
+                        )
+                    )
+                if metadata.safety_contract.manual_confirmation_required and inputs.get("manual_confirmation_required") is not True:
+                    issues.append(
+                        PlanValidationIssue(
+                            code="skill_manual_confirmation_required",
+                            severity="error",
+                            message=f"Skill {metadata.name} requires manual confirmation.",
+                            node_id=str(node.get("node_id") or ""),
+                        )
+                    )
+
+
+def _skill_action_values(nodes: list[dict[str, Any]]) -> list[str]:
+    values: list[str] = []
+    for node in nodes:
+        values.append(str(node.get("node_type") or ""))
+        values.extend(_as_list(node.get("required_tools")))
+        inputs = dict(node.get("inputs") or {})
+        for key in ("requested_action", "action_type", "workorder_action"):
+            if inputs.get(key):
+                values.append(str(inputs[key]))
+    return values
+
+
+def _matches_action(action: str, value: str) -> bool:
+    action_tokens = re.findall(r"[a-z0-9]+", action.lower())
+    value_tokens = re.findall(r"[a-z0-9]+", value.lower())
+    if not action_tokens:
+        return False
+    width = len(action_tokens)
+    return any(value_tokens[index : index + width] == action_tokens for index in range(len(value_tokens) - width + 1))
 
 
 def _coerce_node_inputs(node_type: str, inputs: dict[str, Any]) -> Any:
