@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import re
+from datetime import datetime
 from typing import Any
 
 from fault_diagnosis.domain.security.sql_safety import REAL_DATA_FALLBACK_COLUMN_NAMES
@@ -37,6 +38,21 @@ def parse_sql_rows(raw_output: Any) -> list[dict[str, Any]]:
         }
         rows.append(row)
     return rows
+
+
+def parse_sql_scalar_datetime(raw_output: Any) -> datetime | None:
+    parsed = raw_output if isinstance(raw_output, list) else _literal_eval_sql_output(raw_output)
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    first = parsed[0]
+    value = first[0] if isinstance(first, (list, tuple)) and first else first
+    text = str(value or "").strip().replace("T", " ")
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def _literal_eval_sql_output(raw_output: Any) -> Any:

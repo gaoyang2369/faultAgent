@@ -70,6 +70,7 @@ def build_sql_evidence_items(
     alarm_codes = _unique_codes(rows, "alarm_code")
     effective_codes = dedupe([*fault_codes, *alarm_codes])
     abnormal_count = sum(1 for row in rows if _is_abnormal_row(row))
+    active_fault_count = sum(1 for row in rows if _active_fault_row(row))
     items = [
         EvidenceItem(
             evidence_id="ev_sql_sample_window",
@@ -117,6 +118,7 @@ def build_sql_evidence_items(
                     "alarm_codes": alarm_codes,
                     "effective_codes": effective_codes,
                     "abnormal_count": abnormal_count,
+                    "active_fault_count": active_fault_count,
                     "sample_count": len(rows),
                 },
                 summary=(
@@ -262,3 +264,10 @@ def _parse_datetime(value: Any) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def _active_fault_row(row: dict[str, Any]) -> bool:
+    status = str(row.get("status") or "").strip().lower()
+    status_abnormal = any(word in status for word in ("异常", "故障", "fault", "trip"))
+    fault_code = _normalize_code(row.get("fault_code"))
+    return status_abnormal and bool(fault_code)

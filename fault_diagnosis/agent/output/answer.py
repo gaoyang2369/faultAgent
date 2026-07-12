@@ -14,6 +14,7 @@ from fault_diagnosis.domain.diagnosis.contracts import (
     WorkOrderDraftArtifact,
     WorkOrderSuggestion,
 )
+from fault_diagnosis.domain.diagnosis.runtime_status import RuntimeStatusAssessment
 from fault_diagnosis.domain.diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from ..contracts import NodeResult, OutputFrame
 
@@ -28,12 +29,15 @@ def build_output_frame(
     error: dict[str, Any] | None = None,
     cancelled: bool = False,
     cancel_reason: str | None = None,
+    output_contract: dict[str, Any] | None = None,
 ) -> OutputFrame:
     """Return the internal V2 output frame before frontend compatibility projection."""
 
     artifact_map = dict(artifacts or {})
     bundle = _model(evidence_bundle, EvidenceBundle)
     sql_artifact = _model(artifact_map.get("sql_artifact"), SqlStepArtifact)
+    runtime_assessment = _model(artifact_map.get("runtime_status_assessment"), RuntimeStatusAssessment)
+    clarification_payload = _as_dict(artifact_map.get("clarification"))
     knowledge_artifact = _model(artifact_map.get("knowledge_artifact"), KnowledgeStepArtifact)
     analysis_artifact = _model(artifact_map.get("analysis_artifact"), AnalysisStepArtifact)
     report_artifact = _model(artifact_map.get("report_artifact"), ReportStepArtifact)
@@ -57,7 +61,11 @@ def build_output_frame(
         workorder_suggestion=workorder_suggestion,
         workorder_draft=workorder_draft,
         cancelled=cancelled,
+        runtime_assessment=runtime_assessment,
     )
+    contract_validation = _runtime_status_contract_validation(runtime_assessment, bundle, output_contract=output_contract)
+    if variant == "status_brief_v2" and not contract_validation["contract_satisfied"]:
+        variant = "status_incomplete"
     final_answer = _render_answer(
         variant=variant,
         status=status,
@@ -69,8 +77,15 @@ def build_output_frame(
         evidence_bundle=bundle,
         error=error,
         cancel_reason=cancel_reason,
+        runtime_assessment=runtime_assessment,
+        contract_validation=contract_validation,
+        clarification_payload=clarification_payload,
     )
-    status_brief = _status_brief(sql_artifact=sql_artifact, evidence_bundle=bundle, status=status)
+    status_brief = (
+        _status_brief_v2(runtime_assessment, degraded_notice=_degraded_notice(sql_artifact))
+        if runtime_assessment is not None and contract_validation["contract_satisfied"]
+        else _status_brief(sql_artifact=sql_artifact, evidence_bundle=bundle, status=status)
+    )
     diagnosis_payload = {
         "sql_artifact": _dump(sql_artifact),
         "knowledge_artifact": _dump(knowledge_artifact),
@@ -89,6 +104,7 @@ def build_output_frame(
         "final_claim_ids": list(bundle.final_claim_ids if bundle else []),
         "final_claims_without_evidence": _final_claims_without_evidence(bundle),
         "stale_evidence": _stale_evidence(bundle),
+        **contract_validation,
     }
     if workorder_payload:
         guardrail.update(
@@ -113,6 +129,8 @@ def build_output_frame(
         workorder_draft_payload=workorder_payload,
         artifact_payload={key: _dump(value) for key, value in artifact_map.items()},
         guardrail_result=guardrail,
+        runtime_status_assessment=_dump(runtime_assessment) or {},
+        contract_validation=contract_validation,
     )
 
 
@@ -126,6 +144,7 @@ def _infer_variant(
     workorder_suggestion: WorkOrderSuggestion | None,
     workorder_draft: WorkOrderDraftArtifact | None,
     cancelled: bool,
+    runtime_assessment: RuntimeStatusAssessment | None,
 ) -> str:
     if cancelled or status in {"blocked", "cancelled"}:
         return "blocked"
@@ -143,6 +162,8 @@ def _infer_variant(
         return "knowledge_answer"
     if knowledge_artifact and not knowledge_artifact.success:
         return "tool_error"
+    if runtime_assessment is not None:
+        return "status_brief_v2"
     if sql_artifact and sql_artifact.success:
         return "status_brief"
     return "clarification"
@@ -160,6 +181,9 @@ def _render_answer(
     evidence_bundle: EvidenceBundle | None,
     error: dict[str, Any] | None,
     cancel_reason: str | None,
+    runtime_assessment: RuntimeStatusAssessment | None,
+    contract_validation: dict[str, Any],
+    clarification_payload: dict[str, Any],
 ) -> str:
     if variant == "blocked":
         if status == "cancelled":
@@ -206,8 +230,15 @@ def _render_answer(
         return _render_knowledge_answer(knowledge_artifact, evidence_bundle)
     if variant == "status_brief":
         return _status_brief(sql_artifact=sql_artifact, evidence_bundle=evidence_bundle, status=status)
+    if variant == "status_brief_v2" and runtime_assessment is not None:
+        return _status_brief_v2(runtime_assessment, degraded_notice=_degraded_notice(sql_artifact))
+    if variant == "status_incomplete":
+        missing = "、".join(contract_validation.get("missing_claim_types") or contract_validation.get("missing_fields") or [])
+        return f"暂无法形成完整运行状态摘要：缺少 {missing or '必要状态证据'}。运行状态：暂无法判断。"
     if cancel_reason:
         return f"需要补充信息后才能继续处理。当前停止原因：{cancel_reason}"
+    if clarification_payload.get("clarification_question"):
+        return str(clarification_payload["clarification_question"])
     return "需要补充设备、故障码或时间窗口等关键信息后才能继续处理。"
 
 
@@ -355,6 +386,128 @@ def _status_brief(
     if summaries:
         return "；".join(summaries)
     return f"V2 runtime {status}."
+
+
+def _status_brief_v2(assessment: RuntimeStatusAssessment, *, degraded_notice: str = "") -> str:
+    status_labels = {"normal": "正常", "attention": "需关注", "abnormal": "存在异常迹象", "unknown": "暂无法判断"}
+    mode_labels = {
+        "realtime_window": "实时窗口",
+        "latest_available_fallback": "数据库最新可用数据",
+        "no_data": "无可用数据",
+    }
+    basis = assessment.data_basis
+    lines: list[str] = []
+    if degraded_notice:
+        lines.append(degraded_notice)
+        lines.append("")
+    lines.extend(
+        [
+            "【设备运行状态】",
+            f"设备：{assessment.device}",
+            f"状态：{status_labels[assessment.runtime_status]}",
+            "",
+            "【数据基准】",
+            f"数据模式：{mode_labels[basis.resolution_mode]}",
+        ]
+    )
+    if basis.resolved_window:
+        lines.append(f"数据窗口：{_time_text(basis.resolved_window.start)} ～ {_time_text(basis.resolved_window.end)}")
+    if basis.latest_sample_time:
+        lines.append(f"最新样本：{_time_text(basis.latest_sample_time)}")
+    lines.append(f"样本数量：{assessment.sample_count}")
+    if assessment.key_findings:
+        lines.extend(["", "【关键发现】"])
+        lines.extend(f"{index}. {finding}" for index, finding in enumerate(assessment.key_findings[:5], start=1))
+    if assessment.limitations:
+        lines.extend(["", "【说明】", *assessment.limitations])
+    return "\n".join(lines).strip()
+
+
+def _runtime_status_contract_validation(
+    assessment: RuntimeStatusAssessment | None,
+    bundle: EvidenceBundle | None,
+    *,
+    output_contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    default_required_fields = [
+        "runtime_status",
+        "status_reasons",
+        "data_basis",
+        "data_window",
+        "latest_sample_time",
+        "freshness_disclosure",
+        "supporting_evidence_ids",
+    ]
+    contract = dict(output_contract or {})
+    required_fields = list(contract.get("required_fields") or default_required_fields)
+    missing_fields: list[str] = []
+    if assessment is None:
+        missing_fields = list(required_fields)
+    else:
+        if not assessment.runtime_status:
+            missing_fields.append("runtime_status")
+        if not assessment.status_reasons:
+            missing_fields.append("status_reasons")
+        if not assessment.supporting_evidence_ids:
+            missing_fields.append("supporting_evidence_ids")
+        if assessment.data_basis.resolution_mode != "no_data" and assessment.data_basis.resolved_window is None:
+            missing_fields.append("data_window")
+        if assessment.data_basis.resolution_mode != "no_data" and assessment.data_basis.latest_sample_time is None:
+            missing_fields.append("latest_sample_time")
+        if assessment.data_basis.resolution_mode == "latest_available_fallback" and not assessment.limitations:
+            missing_fields.append("freshness_disclosure")
+    present_claim_types = sorted({claim.claim_type for claim in (bundle.claims if bundle else [])})
+    required_claim_types = list(contract.get("required_claim_types") or (["runtime_status_assessment"] if assessment is not None else []))
+    missing_claim_types = [item for item in required_claim_types if item not in present_claim_types]
+    valid_refs = {
+        item.evidence_id for item in (bundle.evidence_items if bundle else []) if item.evidence_id
+    }
+    claim_refs_valid = all(
+        ref in valid_refs
+        for claim in (bundle.claims if bundle else [])
+        if claim.claim_type == "runtime_status_assessment"
+        for ref in claim.supporting_evidence_ids
+    )
+    ledger_passed = bool((bundle.quality_checks if bundle else {}).get("passed", True))
+    forbidden_claim_types = {
+        "root_cause",
+        "root_cause_conclusion",
+        "diagnosis_summary",
+        "fault_attribution",
+        *[str(item) for item in contract.get("forbidden_claims", [])],
+    }
+    forbidden_present = sorted(forbidden_claim_types.intersection(present_claim_types))
+    satisfied = (
+        assessment is not None
+        and not missing_fields
+        and not missing_claim_types
+        and claim_refs_valid
+        and ledger_passed
+        and not forbidden_present
+    )
+    return {
+        "required_fields": required_fields,
+        "missing_fields": missing_fields,
+        "required_claim_types": required_claim_types,
+        "present_claim_types": present_claim_types,
+        "missing_claim_types": missing_claim_types,
+        "ledger_passed": ledger_passed,
+        "forbidden_claim_types_present": forbidden_present,
+        "contract_satisfied": satisfied,
+    }
+
+
+def _degraded_notice(sql_artifact: SqlStepArtifact | None) -> str:
+    summary = str(getattr(sql_artifact, "summary", "") or "")
+    if "游客不能生成正式报告" in summary or "当前身份不能生成正式报告" in summary:
+        return "当前身份不能生成正式报告，已降级为运行状态摘要。"
+    return ""
+
+
+def _time_text(value: Any) -> str:
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    return str(value or "-")
 
 
 def _render_knowledge_answer(

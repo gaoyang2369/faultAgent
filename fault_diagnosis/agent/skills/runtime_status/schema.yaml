@@ -6,18 +6,41 @@ input:
     type: object
     required: false
 output:
+  device:
+    type: string
+    required: true
+  query_status:
+    type: string
+    enum: [success, empty, failed]
+    required: true
   runtime_status:
     type: string
+    enum: [normal, attention, abnormal, unknown]
+    required: true
+  status_reasons:
+    type: array
+    required: true
+  data_basis:
+    type: object
     required: true
   data_window:
     type: object
-    required: true
+    required: false
+  resolved_window:
+    type: object
+    required: false
   latest_sample_time:
     type: string
-    required: true
-  row_count:
+    required: false
+  sample_count:
     type: integer
+    required: true
+  key_findings:
+    type: array
+    required: true
+  supporting_evidence_ids:
+    type: array
     required: true
   freshness_disclosure:
     type: string
-    required: true
+    required: false

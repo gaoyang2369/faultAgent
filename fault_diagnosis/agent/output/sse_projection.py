@@ -103,6 +103,7 @@ def project_complete(
         error=state.errors[-1] if state.errors else None,
         cancelled=cancelled,
         cancel_reason=cancel_reason,
+        output_contract=state.plan.output_contract,
     )
     artifact_envelope = artifact or project_artifact_envelope(
         thread_id=state.thread_id,
@@ -373,9 +374,9 @@ def _ui_payload(frame: OutputFrame) -> dict[str, Any]:
         ui_type = "workorder_draft_status"
     elif frame.answer_variant == "diagnosis_answer":
         ui_type = "diagnosis_card"
-    elif frame.answer_variant == "status_brief":
+    elif frame.answer_variant in {"status_brief", "status_brief_v2", "status_incomplete"}:
         ui_type = "status_card"
-    elif frame.answer_variant == "blocked":
+    elif frame.answer_variant in {"blocked", "permission_denied"}:
         ui_type = "access_denied"
     else:
         ui_type = "text_only"

@@ -76,7 +76,7 @@ def _select_skills(
     effective_request_frame: EffectiveRequestFrame | None = None,
 ) -> list[str]:
     if effective_request_frame is not None:
-        semantic = effective_request_frame.semantic_intent
+        semantic = effective_request_frame.effective_semantic_intent or effective_request_frame.semantic_intent
         text = f"{intent_frame.normalized_message} {rewrite_frame.user_rewrite}"
         selected: list[str] = []
         if any(word in text for word in ("根因", "原因分析", "为什么", "排查")):
@@ -85,6 +85,10 @@ def _select_skills(
             selected.append("fault_code_explain")
         if semantic in {"check_runtime_status", "refresh_then_decide_workorder"}:
             selected.append("runtime_status")
+        if semantic in {"diagnose_fault", "health_assessment", "diagnose_from_runtime"}:
+            selected.append("alarm_triage")
+        if semantic == "root_cause_analysis":
+            selected.append("root_cause")
         if (
             effective_request_frame.effective_device_refs
             and effective_request_frame.effective_fault_code_refs
@@ -180,6 +184,10 @@ def _needs_clarification(
             return False
     if context_frame.relation_to_previous == "ambiguous":
         return True
+    if "missing_device" in intent_frame.ambiguities and not (
+        effective_request_frame and effective_request_frame.effective_device_refs
+    ):
+        return True
     if context_frame.missing_context and any(item in intent_frame.ambiguities for item in ("missing_device", "deictic_reference_without_context")):
         return True
     return False
@@ -228,7 +236,7 @@ def _skill_inputs(
         "requested_outputs": list(dict.fromkeys(requested_outputs)),
         "requested_output_mode": effective_request_frame.requested_output_mode if effective_request_frame is not None else "",
         "requested_action": effective_request_frame.requested_action if effective_request_frame is not None else "",
-        "semantic_intent": effective_request_frame.semantic_intent if effective_request_frame is not None else "",
+        "semantic_intent": effective_request_frame.effective_semantic_intent if effective_request_frame is not None else "",
         "target_artifact_id": effective_request_frame.target_artifact_id if effective_request_frame is not None else None,
         "target_artifact_type": effective_request_frame.target_artifact_type if effective_request_frame is not None else None,
         "target_evidence_bundle_id": effective_request_frame.target_evidence_bundle_id if effective_request_frame is not None else None,
@@ -265,7 +273,7 @@ def _dedupe(values: list[str]) -> list[str]:
 def _effective_request_has_executable_target(frame: EffectiveRequestFrame) -> bool:
     if frame.target_artifact_id:
         return True
-    semantic = frame.semantic_intent
+    semantic = frame.effective_semantic_intent or frame.semantic_intent
     if semantic in {"explain_fault_code", "expand_previous_answer", "show_manual_fields"}:
         return bool(frame.effective_fault_code_refs)
     if semantic in {"create_workorder_draft", "decide_workorder", "refresh_then_decide_workorder"}:

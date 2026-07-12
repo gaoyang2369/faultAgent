@@ -52,7 +52,7 @@ def test_plan_endpoint_uses_trusted_auth_not_user_identity(monkeypatch) -> None:
     payload = response.json()
     assert payload["auth_context"]["role"] == "guest"
     assert payload["authorization"]["mode"] == "deny"
-    assert payload["authorization"]["denied_reason_code"] == "diagnosis_permission_denied"
+    assert payload["authorization"]["denied_reason_code"] == "root_cause_permission_denied"
     assert "save_report" not in payload["planned_tools"]
     assert "relation_to_previous" in payload["resolved_context"]
     assert "inherited_slots" in payload["resolved_context"]

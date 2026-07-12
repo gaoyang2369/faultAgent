@@ -166,6 +166,13 @@ class PlanValidator:
                 denied_tools = _tools_denied_by_auth(validated.allowed_tools, authorization)
                 removed_tools.extend(denied_tools)
                 validated = _degrade_guest_report_plan(validated, intent_frame=intent_frame)
+                runtime_metadata = self.bridge.skill_metadata(["runtime_status"])
+                if runtime_metadata:
+                    validated.output_contract = {
+                        "required_fields": list(runtime_metadata[0].output_contract.required_fields),
+                        "forbidden_claims": list(runtime_metadata[0].output_contract.forbidden_claims),
+                        "required_claim_types": ["runtime_status_assessment"],
+                    }
                 authorization = _guest_report_degraded_authorization(authorization)
                 issues.append(
                     PlanValidationIssue(

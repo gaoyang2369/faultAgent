@@ -15,6 +15,7 @@ from fault_diagnosis.domain.diagnosis.contracts import (
     WorkOrderDraftArtifact,
     WorkOrderSuggestion,
 )
+from fault_diagnosis.domain.diagnosis.runtime_status import RuntimeStatusAssessment
 
 
 def build_artifact_manifests(
@@ -35,7 +36,12 @@ def build_artifact_manifests(
     manifests: list[ArtifactManifest] = []
 
     sql = _model(artifact_map.get("sql_artifact"), SqlStepArtifact)
+    runtime_assessment = _model(artifact_map.get("runtime_status_assessment"), RuntimeStatusAssessment)
     if sql is not None:
+        basis = runtime_assessment.data_basis if runtime_assessment is not None else None
+        supported_followups = ["check_runtime_status"]
+        if basis is not None and basis.usable_for_report:
+            supported_followups.append("generate_report")
         manifests.append(
             ArtifactManifest(
                 artifact_id=_artifact_id("sql", trace_id, request_id, sql.source_table),
@@ -46,15 +52,29 @@ def build_artifact_manifests(
                 produced_by_skill="runtime_status",
                 produced_by_nodes=node_by_type.get("sql", []),
                 status="completed" if sql.success else "failed",
-                followupable=bool(sql.success),
-                reportable=bool(sql.success),
+                followupable=bool(sql.success and runtime_assessment is not None),
+                reportable=bool(sql.success and basis and basis.usable_for_report),
+                device_refs=[runtime_assessment.device] if runtime_assessment is not None else [],
                 source_table=sql.source_table,
-                freshness=_freshness_from_text(sql.data_state),
-                currentness=sql.data_state,
-                diagnosis_summary=sql.summary,
-                findings=_nonempty([sql.summary, sql.result_preview]),
-                evidence_refs=_evidence_refs(bundle, evidence_types={"device_status", "sql_result"}),
+                requested_window=dict(sql.requested_window),
+                resolved_window=dict(sql.resolved_window),
+                time_window=dict(sql.resolved_window),
+                data_window=dict(sql.resolved_window),
+                data_basis=dict(sql.data_basis),
+                latest_sample_time=sql.latest_sample_time,
+                sample_count=sql.sample_count,
+                runtime_status=sql.runtime_status,
+                freshness=str((sql.data_basis or {}).get("freshness") or "unknown"),
+                currentness=str((sql.data_basis or {}).get("resolution_mode") or ""),
+                status_level=sql.runtime_status,
+                diagnosis_summary=(runtime_assessment.key_findings[0] if runtime_assessment and runtime_assessment.key_findings else sql.summary),
+                findings=list(sql.key_findings),
+                key_findings=list(sql.key_findings),
+                supporting_evidence_ids=list(sql.supporting_evidence_ids),
+                evidence_refs=list(sql.supporting_evidence_ids),
                 evidence_bundle_id=bundle.bundle_id if bundle else "",
+                available_followups=supported_followups,
+                supported_followup_capabilities=supported_followups,
                 authorization_scope_summary=dict(auth_summary or {}),
             )
         )
@@ -248,6 +268,7 @@ def latest_focus_from_manifests(manifests: list[ArtifactManifest]) -> dict[str, 
         "severity": selected.severity,
         "diagnosis_summary": selected.diagnosis_summary,
         "available_followups": list(selected.available_followups),
+        "supported_followup_capabilities": list(selected.supported_followup_capabilities),
         "available_actions": list(selected.available_actions),
     }
 

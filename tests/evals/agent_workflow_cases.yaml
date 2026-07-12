@@ -1450,8 +1450,8 @@ cases:
     answer: {}
     metrics: {}
   asset_scope: []
-- id: guest_degraded_diagnosis
-  name: 访客诊断降级
+- id: guest_diagnosis_preflight_denied
+  name: 访客诊断能力预检拒绝
   tier: core
   eval_modes:
   - plan
@@ -1473,10 +1473,176 @@ cases:
       - J1
       alarm_codes:
       - A07089
+    effective_request:
+      original_semantic_intent: root_cause_analysis
+      effective_semantic_intent: root_cause_analysis
+      authorized_semantic_intent: ''
+    route:
+      primary_skill: root_cause
+    plan:
+      status: blocked
+      node_types_absent:
+      - sql
+      - rag
+      - analysis
+      - clarification
+    authorization:
+      mode: deny
+      denied_reason_code: root_cause_permission_denied
     workflow:
       policy_id: fault_diagnosis_v1
     tools:
       forbidden:
+      - device_control.write
+    answer: {}
+    metrics: {}
+  asset_scope: []
+- id: visitor_v02_runtime_status
+  name: 游客 V-02 运行状态计划
+  tier: core
+  eval_modes:
+  - plan
+  role: guest
+  identity_fixture: guest.json
+  artifact_fixture: null
+  sql_fixture: empty.json
+  kb_fixture: null
+  precondition: 游客查询授权设备状态
+  turns:
+  - 查询 G120电机1 最近的运行状态
+  expected:
+    effective_request:
+      original_semantic_intent: check_runtime_status
+      effective_semantic_intent: check_runtime_status
+      authorized_semantic_intent: check_runtime_status
+    route:
+      primary_skill: runtime_status
+    plan:
+      node_types_contains:
+      - sql
+      node_types_absent:
+      - report
+      - workorder
+      - clarification
+      status_not: blocked
+    authorization:
+      mode: allow
+    tools:
+      planned:
+      - sql_db_query
+      forbidden:
+      - workorder.dispatch
+      - device_control.write
+    answer: {}
+    metrics: {}
+  asset_scope: []
+- id: visitor_v03_report_degraded
+  name: 游客 V-03 报告降级状态摘要
+  tier: core
+  eval_modes:
+  - plan
+  role: guest
+  identity_fixture: guest.json
+  artifact_fixture: null
+  sql_fixture: empty.json
+  kb_fixture: null
+  precondition: 游客报告请求只允许状态摘要
+  turns:
+  - 给我生成 G120电机1 最近一小时的运行报告
+  expected:
+    effective_request:
+      original_semantic_intent: generate_report
+      effective_semantic_intent: generate_report
+      authorized_semantic_intent: check_runtime_status
+    route:
+      primary_skill: report_generation
+    plan:
+      node_types_contains:
+      - sql
+      node_types_absent:
+      - report
+      - analysis
+      status: validated_degraded
+    authorization:
+      mode: degrade
+      denied_reason_code: report_permission_denied
+    tools:
+      planned:
+      - sql_db_query
+      forbidden:
+      - workorder.dispatch
+      - device_control.write
+    answer: {}
+    metrics: {}
+  asset_scope: []
+- id: visitor_v04_workorder_preflight_denied
+  name: 游客 V-04 工单能力预检拒绝
+  tier: core
+  eval_modes:
+  - plan
+  role: guest
+  identity_fixture: guest.json
+  artifact_fixture: null
+  sql_fixture: null
+  kb_fixture: null
+  precondition: 无设备上下文也必须先拒绝工单能力
+  turns:
+  - 那就给它创建一个维修工单
+  expected:
+    effective_request:
+      original_semantic_intent: create_workorder_draft
+      effective_semantic_intent: create_workorder_draft
+      authorized_semantic_intent: ''
+    route:
+      primary_skill: workorder_decision
+    plan:
+      status: blocked
+      node_types_absent:
+      - clarification
+      - workorder
+      - approval
+    authorization:
+      mode: deny
+      denied_reason_code: workorder_permission_denied
+    tools:
+      forbidden:
+      - workorder.dispatch
+    answer:
+      must_not_contain:
+      - 请确认设备
+    metrics: {}
+  asset_scope: []
+- id: visitor_v05_out_of_scope
+  name: 游客 V-05 越权设备拒绝
+  tier: core
+  eval_modes:
+  - plan
+  role: guest
+  identity_fixture: guest.json
+  artifact_fixture: null
+  sql_fixture: null
+  kb_fixture: null
+  precondition: G120电机2 不在游客设备范围
+  turns:
+  - 查询 G120电机2 最近的运行状态
+  expected:
+    effective_request:
+      original_semantic_intent: check_runtime_status
+      effective_semantic_intent: check_runtime_status
+      authorized_semantic_intent: check_runtime_status
+    route:
+      primary_skill: runtime_status
+    plan:
+      status: blocked
+      node_types_absent:
+      - report
+      - workorder
+    authorization:
+      mode: deny
+      denied_reason_code: asset_out_of_scope
+    tools:
+      forbidden:
+      - workorder.dispatch
       - device_control.write
     answer: {}
     metrics: {}

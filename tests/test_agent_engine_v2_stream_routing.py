@@ -125,3 +125,34 @@ async def _assert_v2_failure_returns_server_error_without_legacy_fallback(monkey
 
     server_error = next(event for event in _events(chunks) if event.get("event_type") == "server_error")
     assert server_error["error"]["code"] == "INTERNAL_ERROR"
+
+
+def test_guest_diagnosis_preflight_returns_terminal_denial_without_runtime(monkeypatch) -> None:
+    asyncio.run(_assert_guest_diagnosis_preflight_returns_terminal_denial_without_runtime(monkeypatch))
+
+
+async def _assert_guest_diagnosis_preflight_returns_terminal_denial_without_runtime(monkeypatch) -> None:
+    class ExplodingRuntime:
+        def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("runtime must not be constructed for capability denial")
+
+    monkeypatch.setattr(streaming, "WorkflowRuntimeExecutor", ExplodingRuntime)
+    app = FastAPI()
+    app.state.dev_mode = False
+    chunks = [
+        chunk
+        async for chunk in streaming.token_stream_events(
+            app,
+            "诊断一下 G120电机1 当前是不是有故障",
+            "thread.v2.preflight.denied",
+            request_id="request.v2.preflight.denied",
+            auth_context=build_auth_context(role="guest"),
+        )
+    ]
+    events = _events(chunks)
+    assert not any(event.get("type") == "tool_start" for event in events)
+    complete = next(event for event in events if event.get("type") == "chat_complete")
+    assert complete["status"] == "blocked"
+    assert complete["rendered_answer"]["answer_variant"] == "permission_denied"
+    assert complete["output_guardrail"]["runtime_invoked"] is False
+    assert not any(span["name"] == "workflow.execute" for span in complete["canonical_trace"]["spans"])

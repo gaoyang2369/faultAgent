@@ -66,11 +66,17 @@ output_contract:
     - status_brief
   required_fields:
     - runtime_status
+    - status_reasons
+    - data_basis
     - data_window
+    - resolved_window
     - latest_sample_time
     - freshness_disclosure
+    - supporting_evidence_ids
   forbidden_claims:
     - current_without_freshness
+    - root_cause_conclusion
+    - fault_attribution_without_diagnosis_permission
 safety_contract:
   forbidden_actions:
     - device_action

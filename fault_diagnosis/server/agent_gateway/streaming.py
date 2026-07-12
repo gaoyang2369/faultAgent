@@ -266,10 +266,19 @@ async def _stream_v2_validation_blocked(
 ) -> AsyncGenerator[str, None]:
     message = _validation_blocked_message(snapshot)
     plan = snapshot.execution_plan
+    snapshot_guardrail = dict(snapshot.output_frame.guardrail_result or {})
+    snapshot_authorization = snapshot_guardrail.get("authorization") if isinstance(snapshot_guardrail.get("authorization"), dict) else {}
+    denied = snapshot_authorization.get("mode") == "deny"
     output_frame = OutputFrame(
-        answer_variant="blocked",
+        answer_variant=(
+            "permission_denied"
+            if denied
+            else snapshot.output_frame.answer_variant
+            if snapshot.output_frame.answer_variant != "not_implemented"
+            else "blocked"
+        ),
         final_answer=message,
-        guardrail_result=dict(snapshot.output_frame.guardrail_result or {}),
+        guardrail_result=snapshot_guardrail,
     )
     state = _state_from_plan(
         plan=plan,
@@ -320,7 +329,16 @@ def _validation_blocked_message(snapshot) -> str:
     if isinstance(authorization, dict):
         code = str(authorization.get("denied_reason_code") or "")
         user_message = str(authorization.get("user_message") or "").strip()
-        if code in {"permission_denied", "report_permission_denied", "missing_workflow_permission", "asset_out_of_scope"}:
+        if code in {
+            "permission_denied",
+            "report_permission_denied",
+            "diagnosis_permission_denied",
+            "root_cause_permission_denied",
+            "health_assessment_permission_denied",
+            "workorder_permission_denied",
+            "missing_workflow_permission",
+            "asset_out_of_scope",
+        }:
             return user_message or "当前身份无权执行该任务，请登录具备相应权限的账号。"
     issues = guardrail.get("issues") if isinstance(guardrail, dict) else []
     if isinstance(issues, list):

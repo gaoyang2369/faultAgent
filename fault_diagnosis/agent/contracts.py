@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 ENGINE_VERSION = "v2"
@@ -103,7 +103,14 @@ class ArtifactManifest(AgentEngineContract):
     time_window: dict[str, Any] = Field(default_factory=dict)
     source_table: str = ""
     data_window: dict[str, Any] = Field(default_factory=dict)
+    requested_window: dict[str, Any] = Field(default_factory=dict)
+    resolved_window: dict[str, Any] = Field(default_factory=dict)
+    data_basis: dict[str, Any] = Field(default_factory=dict)
     latest_sample_time: str = ""
+    sample_count: int = 0
+    runtime_status: str = "unknown"
+    key_findings: list[str] = Field(default_factory=list)
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
     freshness: str = "unknown"
     currentness: str = ""
     severity: str = ""
@@ -124,6 +131,7 @@ class ArtifactManifest(AgentEngineContract):
     source_page: str = ""
     parsed_manual_fields: dict[str, Any] = Field(default_factory=dict)
     available_followups: list[str] = Field(default_factory=list)
+    supported_followup_capabilities: list[str] = Field(default_factory=list)
     available_actions: list[str] = Field(default_factory=list)
     authorization_scope_summary: dict[str, Any] = Field(default_factory=dict)
     draft_only: bool = False
@@ -137,6 +145,13 @@ class EffectiveRequestFrame(AgentEngineContract):
     schema_version: str = "effective_request.v1"
     raw_message: str = ""
     normalized_message: str = ""
+    original_semantic_intent: str = ""
+    effective_semantic_intent: str = ""
+    authorized_semantic_intent: str = ""
+    executed_semantic_intent: str = ""
+    original_requested_action: str = ""
+    original_task_family: str = ""
+    authorization_decision: dict[str, Any] = Field(default_factory=dict)
     semantic_intent: str = ""
     task_family: str = ""
     requested_action: str = ""
@@ -362,6 +377,8 @@ class ExecutionPlan(AgentEngineContract):
     approval_requirements: list[dict[str, Any]] = Field(default_factory=list)
     expected_outputs: list[str] = Field(default_factory=list)
     fallbacks: list[dict[str, Any]] = Field(default_factory=list)
+    execution_capability: str = ""
+    output_contract: dict[str, Any] = Field(default_factory=dict)
 
 
 class NodeResult(AgentEngineContract):
@@ -406,6 +423,18 @@ class OutputFrame(AgentEngineContract):
     sse_payload: dict[str, Any] = Field(default_factory=dict)
     artifact_payload: dict[str, Any] = Field(default_factory=dict)
     guardrail_result: dict[str, Any] = Field(default_factory=dict)
+    runtime_status_assessment: dict[str, Any] = Field(default_factory=dict)
+    contract_validation: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_status_brief_v2_contract(self) -> "OutputFrame":
+        if self.answer_variant != "status_brief_v2":
+            return self
+        if not self.runtime_status_assessment:
+            raise ValueError("status_brief_v2 requires runtime_status_assessment")
+        if self.contract_validation.get("contract_satisfied") is not True:
+            raise ValueError("status_brief_v2 output contract is not satisfied")
+        return self
 
 
 class PlanSnapshotV2(AgentEngineContract):

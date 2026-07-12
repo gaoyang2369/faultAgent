@@ -211,6 +211,18 @@ SQL_TIME_ANCHOR_MODE = _env_choice(
     "now" if IS_PRODUCTION else "latest_row_if_stale",
     {"now", "latest_row_if_stale"},
 )
+DATA_RESOLUTION_STRATEGY = _env_choice(
+    "DCMA_DATA_RESOLUTION_STRATEGY",
+    "realtime_then_latest" if not IS_PRODUCTION else "realtime_then_latest",
+    {"realtime_then_latest", "realtime_only", "latest_only"},
+)
+DATA_ENVIRONMENT = _env_choice(
+    "DCMA_DATA_ENVIRONMENT",
+    "production" if IS_PRODUCTION else "simulation",
+    {"simulation", "production"},
+)
+# Action-risk freshness is deliberately independent from read-side resolution.
+HIGH_RISK_REQUIRES_REALTIME_DATA = _env_bool("DCMA_HIGH_RISK_REQUIRES_REALTIME_DATA", IS_PRODUCTION)
 
 # === Admin Auth / PDF Upload ===
 DEFAULT_ADMIN_USERNAME = "DCMA"

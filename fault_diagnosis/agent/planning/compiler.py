@@ -106,6 +106,8 @@ class PlanCompiler:
             approval_requirements=approval_requirements,
             expected_outputs=list(dict.fromkeys(expected_outputs)),
             fallbacks=fallbacks,
+            execution_capability=(effective_request_frame.effective_semantic_intent if effective_request_frame else ""),
+            output_contract=_output_contract(metadata_items),
         )
 
 
@@ -213,7 +215,7 @@ def compile_node_inputs(
 
     target = {
         "requested_output_mode": effective_request_frame.requested_output_mode,
-        "semantic_intent": effective_request_frame.semantic_intent,
+        "semantic_intent": effective_request_frame.effective_semantic_intent or effective_request_frame.semantic_intent,
         "target_artifact_id": effective_request_frame.target_artifact_id,
         "target_artifact_type": effective_request_frame.target_artifact_type,
         "target_evidence_bundle_id": effective_request_frame.target_evidence_bundle_id,
@@ -258,6 +260,16 @@ def compile_node_inputs(
             **target,
             "requested_action": effective_request_frame.requested_action,
             "approval_requirements": [],
+        }
+    if node_type == "clarification":
+        ambiguity = dict(effective_request_frame.ambiguity or {})
+        slot = str(ambiguity.get("slot") or "")
+        return {
+            **common,
+            "clarification_question": effective_request_frame.clarification_question,
+            "missing_slots": [slot] if slot else list(context_frame.missing_context),
+            "candidate_targets": list(ambiguity.get("candidate_targets") or []),
+            "reason": "authorized_but_incomplete",
         }
     return common
 
@@ -378,6 +390,23 @@ def _coerce_plan(plan: ExecutionPlan | dict[str, Any]) -> ExecutionPlan:
     if isinstance(plan, ExecutionPlan):
         return plan.model_copy(deep=True)
     return ExecutionPlan.model_validate(plan)
+
+
+def _output_contract(metadata_items: list[Any]) -> dict[str, Any]:
+    required_fields: list[str] = []
+    forbidden_claims: list[str] = []
+    required_claim_types: list[str] = []
+    for metadata in metadata_items:
+        if metadata.name != "runtime_status":
+            continue
+        required_fields.extend(metadata.output_contract.required_fields)
+        forbidden_claims.extend(metadata.output_contract.forbidden_claims)
+        required_claim_types.append("runtime_status_assessment")
+    return {
+        "required_fields": list(dict.fromkeys(required_fields)),
+        "forbidden_claims": list(dict.fromkeys(forbidden_claims)),
+        "required_claim_types": list(dict.fromkeys(required_claim_types)),
+    }
 
 
 def _as_list(value: Any) -> list[str]:

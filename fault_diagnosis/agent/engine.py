@@ -10,12 +10,16 @@ from .contracts import (
     EffectiveRequestFrame,
     OutputFrame,
     PlanSnapshotV2,
+    ExecutionPlan,
+    SkillRoute,
 )
 from .context import ContextFrameAdapter
 from .context.effective_request import EffectiveRequestBuilder
 from .planning import PlanCompiler, PlanValidator
 from .skills import SkillRouter
 from .understanding import IntentFrameBuilder, RewriteFrameBuilder
+from fault_diagnosis.domain.security.capability import authorize_capability_preflight
+from fault_diagnosis.domain.security.permissions import build_auth_context
 
 
 class AgentEngineV2:
@@ -59,6 +63,27 @@ class AgentEngineV2:
             conversation_context=conversation_context,
             recent_context_signals=recent_context_signals,
         )
+        effective_auth = auth_context or build_auth_context(role="guest")
+        capability_authorization = authorize_capability_preflight(
+            effective_auth,
+            effective_request_frame.original_semantic_intent or effective_request_frame.semantic_intent,
+        )
+        effective_request_frame.authorization_decision = capability_authorization.model_dump(mode="json")
+        effective_request_frame.authorized_semantic_intent = (
+            "check_runtime_status"
+            if capability_authorization.mode == "degrade"
+            else effective_request_frame.effective_semantic_intent
+            if capability_authorization.allowed
+            else ""
+        )
+        if not capability_authorization.allowed:
+            return _capability_blocked_snapshot(
+                intent_frame=intent_frame,
+                context_frame=context_frame,
+                effective_request_frame=effective_request_frame,
+                authorization=capability_authorization.model_dump(mode="json"),
+                metadata=snapshot_metadata,
+            )
         context_frame = _normalize_context_with_effective_request(context_frame, effective_request_frame)
         rewrite_frame = RewriteFrameBuilder().build(
             raw_message,
@@ -91,6 +116,9 @@ class AgentEngineV2:
             if validation.status == "degraded"
             else "validated"
         )
+        execution_capability = "" if validation.status == "blocked" else _execution_capability(validation.validated_plan)
+        validation.validated_plan.execution_capability = execution_capability
+        effective_request_frame.executed_semantic_intent = execution_capability
 
         return PlanSnapshotV2(
             status=snapshot_status,
@@ -177,3 +205,96 @@ def _normalize_context_with_effective_request(
             }
         )
     return context_frame
+
+
+def _capability_blocked_snapshot(
+    *,
+    intent_frame,
+    context_frame,
+    effective_request_frame,
+    authorization: dict[str, Any],
+    metadata: dict[str, Any],
+) -> PlanSnapshotV2:
+    capability = effective_request_frame.original_semantic_intent or effective_request_frame.semantic_intent
+    skill = _skill_for_capability(capability)
+    route = SkillRoute(
+        selected_skills=[skill] if skill else [],
+        primary_skill=skill,
+        routing_reason="Capability preflight denied before clarification and runtime planning.",
+        blocked_skills={skill: authorization.get("denied_reason_code", "capability_permission_denied")} if skill else {},
+    )
+    plan = ExecutionPlan(
+        plan_id="terminal_capability_denied",
+        plan_version="v2.capability_preflight.blocked",
+        nodes=[],
+        allowed_tools=[],
+        execution_capability="",
+    )
+    message = str(authorization.get("user_message") or authorization.get("reason") or "当前身份无权执行该能力。")
+    guardrail = {
+        "status": "blocked",
+        "issues": [{"code": authorization.get("denied_reason_code"), "severity": "error", "message": message}],
+        "authorization": authorization,
+        "runtime_invoked": False,
+    }
+    return PlanSnapshotV2(
+        status="blocked",
+        intent_frame=intent_frame,
+        context_frame=context_frame,
+        effective_request_frame=effective_request_frame,
+        skill_route=route,
+        execution_plan=plan,
+        output_frame=OutputFrame(answer_variant="permission_denied", final_answer=message, guardrail_result=guardrail),
+        trace={
+            "engine": "agent_engine_v2",
+            "mode": "build_plan_snapshot",
+            "status": "blocked",
+            "capability_preflight": authorization,
+            "context_resolution": {
+                "relation_to_previous": context_frame.relation_to_previous,
+                "effective_request": effective_request_frame.model_dump(mode="json", exclude_none=True),
+            },
+            "skill_route": {
+                "primary_skill": route.primary_skill,
+                "selected_skills": list(route.selected_skills),
+                "blocked_skills": dict(route.blocked_skills),
+            },
+            "candidate_plan": plan.model_dump(mode="json"),
+            "validation": {"status": "blocked", "issues": guardrail["issues"], "authorization": authorization},
+        },
+        warnings=[message],
+        metadata=metadata,
+    )
+
+
+def _skill_for_capability(capability: str) -> str:
+    if capability in {"generate_report", "generate_report_from_previous"}:
+        return "report_generation"
+    if capability in {"decide_workorder", "create_workorder_draft", "refresh_then_decide_workorder"}:
+        return "workorder_decision"
+    if capability == "root_cause_analysis":
+        return "root_cause"
+    if capability in {"diagnose_fault", "diagnose_from_runtime", "health_assessment"}:
+        return "alarm_triage"
+    if capability == "check_runtime_status":
+        return "runtime_status"
+    return "fault_code_explain" if capability in {"explain_fault_code", "expand_previous_answer", "show_manual_fields"} else ""
+
+
+def _execution_capability(plan: ExecutionPlan) -> str:
+    if not plan.nodes:
+        return ""
+    node_types = {node.node_type for node in plan.nodes}
+    if "workorder" in node_types:
+        return "create_workorder_draft"
+    if "report" in node_types:
+        return "generate_report"
+    if "analysis" in node_types:
+        return "diagnose_fault"
+    if "sql" in node_types:
+        return "check_runtime_status"
+    if "rag" in node_types:
+        return "explain_fault_code"
+    if "clarification" in node_types:
+        return "clarify_target"
+    return ""

@@ -60,7 +60,7 @@ def project_artifact_envelope(
 def _artifact_type(variant: str) -> DiagnosisArtifactType:
     if variant == "clarification":
         return DiagnosisArtifactType.CLARIFICATION
-    if variant == "status_brief":
+    if variant in {"status_brief", "status_brief_v2", "status_incomplete"}:
         return DiagnosisArtifactType.STATUS_QUERY
     if variant == "report_ready":
         return DiagnosisArtifactType.REPORT_GENERATION

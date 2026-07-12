@@ -1,8 +1,24 @@
-- user: "现在 J1 还故障吗"
+- name: realtime_window
+  user: "查询 G120电机1 当前运行状态"
   selected_skill: runtime_status
-  required_slots:
-    device: J1
   expected_output:
-    - runtime_status
-    - data_window
-    - freshness_disclosure
+    runtime_status: normal
+    resolution_mode: realtime_window
+    fallback_used: false
+
+- name: latest_available_fallback
+  user: "查询 G120电机1 最近的运行状态"
+  selected_skill: runtime_status
+  expected_output:
+    runtime_status: attention
+    resolution_mode: latest_available_fallback
+    fallback_used: true
+    freshness_disclosure: "不代表真实当前时刻状态"
+
+- name: no_data
+  user: "查询授权设备当前运行状态"
+  selected_skill: runtime_status
+  expected_output:
+    runtime_status: unknown
+    resolution_mode: no_data
+    fallback_used: false

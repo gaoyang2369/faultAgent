@@ -15,6 +15,9 @@ _MODEL_CODES = {"G120", "S120", "G130", "G150", "V20"}
 
 _EXPLAIN_WORDS = ("是什么", "什么意思", "含义", "故障码", "告警码", "报警码", "异常码", "详细", "原文", "手册字段", "完整字段")
 _STATUS_WORDS = ("现在", "当前", "最新", "还故障", "还在", "状态", "运行", "看一下")
+_DIAGNOSIS_WORDS = ("诊断", "是否有故障", "是不是有故障", "有没有故障", "是否异常", "有没有异常", "判断异常", "判断它有没有异常")
+_HEALTH_WORDS = ("健康状况", "健康状态", "健康评估")
+_ROOT_CAUSE_WORDS = ("根因", "为什么", "原因", "故障原因", "异常原因", "分析原因", "原因分析")
 _REPORT_WORDS = ("报告", "导出", "生成报告", "出报告", "整理成报告", "形成报告")
 _REPORT_CONTEXT_WORDS = ("刚才", "刚刚", "上一轮", "上一条", "上一次", "前面的结果", "诊断结果", "巡检结果")
 _WORKORDER_DECISION_WORDS = ("要不要工单", "要不要生成工单", "是否需要工单", "是否生成工单", "是不是要生成工单")
@@ -116,7 +119,15 @@ def _infer_sub_intents(compact: str, *, device_refs: list[str], fault_code_refs:
     intents: list[str] = []
     if fault_code_refs and _has_any(compact, _EXPLAIN_WORDS):
         intents.append("explain_fault_code")
-    if device_refs and _has_any(compact, _STATUS_WORDS):
+    if _has_any(compact, _ROOT_CAUSE_WORDS):
+        intents.append("root_cause_analysis")
+    elif _has_any(compact, _HEALTH_WORDS):
+        intents.append("health_assessment")
+    elif _has_any(compact, _DIAGNOSIS_WORDS):
+        intents.append("diagnose_fault")
+    if _has_any(compact, _STATUS_WORDS) and not set(intents).intersection(
+        {"diagnose_fault", "health_assessment", "root_cause_analysis"}
+    ):
         intents.append("check_current_status")
     if _has_any(compact, _REPORT_WORDS):
         intents.append("generate_report")
@@ -124,7 +135,7 @@ def _infer_sub_intents(compact: str, *, device_refs: list[str], fault_code_refs:
         intents.append("decide_workorder")
     if _has_any(compact, _DISPATCH_WORDS):
         intents.append("dispatch_workorder")
-    elif _has_any(compact, _WORKORDER_DRAFT_WORDS) and "decide_workorder" not in intents:
+    elif (_has_any(compact, _WORKORDER_DRAFT_WORDS) or ("工单" in compact and _has_any(compact, ("创建", "生成")))) and "decide_workorder" not in intents:
         intents.append("create_workorder_draft")
     if _has_any(compact, _DEVICE_ACTION_WORDS):
         intents.append("device_action_request")
@@ -135,7 +146,7 @@ def _infer_sub_intents(compact: str, *, device_refs: list[str], fault_code_refs:
 
 def _infer_requested_outputs(sub_intents: list[str]) -> list[str]:
     outputs: list[str] = []
-    if any(item in sub_intents for item in ("explain_fault_code", "check_current_status", "device_action_request")):
+    if any(item in sub_intents for item in ("explain_fault_code", "check_current_status", "diagnose_fault", "health_assessment", "root_cause_analysis", "device_action_request")):
         outputs.append("answer")
     if "generate_report" in sub_intents:
         outputs.append("report")
@@ -184,7 +195,7 @@ def _extract_time_window(compact: str) -> dict[str, Any]:
 def _infer_ambiguities(compact: str, *, device_refs: list[str], sub_intents: list[str]) -> list[str]:
     if device_refs:
         return []
-    if "check_current_status" in sub_intents or "device_action_request" in sub_intents:
+    if set(sub_intents).intersection({"check_current_status", "diagnose_fault", "health_assessment", "root_cause_analysis", "device_action_request"}):
         return ["missing_device"]
     if any(word in compact for word in ("它", "这个", "那")) and not any(word in compact for word in _REPORT_CONTEXT_WORDS):
         return ["deictic_reference_without_context"]
@@ -238,6 +249,9 @@ def _primary_intent(sub_intents: list[str]) -> str:
         "create_workorder_draft",
         "decide_workorder",
         "generate_report",
+        "root_cause_analysis",
+        "health_assessment",
+        "diagnose_fault",
         "check_current_status",
         "explain_fault_code",
     ]

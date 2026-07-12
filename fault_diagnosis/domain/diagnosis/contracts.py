@@ -160,6 +160,16 @@ class SqlStepArtifact(BaseModel):
     parse_status: str = ""
     source_table: str = ""
     data_state: str = "ok"
+    query_status: Literal["success", "empty", "failed"] = "empty"
+    data_basis: dict[str, Any] = Field(default_factory=dict)
+    requested_window: dict[str, Any] = Field(default_factory=dict)
+    resolved_window: dict[str, Any] = Field(default_factory=dict)
+    latest_sample_time: str = ""
+    sample_count: int = 0
+    runtime_status: Literal["normal", "attention", "abnormal", "unknown"] = "unknown"
+    status_reasons: list[str] = Field(default_factory=list)
+    key_findings: list[str] = Field(default_factory=list)
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
 
 
 class FaultCodeEntry(BaseModel):

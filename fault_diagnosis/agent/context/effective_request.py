@@ -139,6 +139,10 @@ class EffectiveRequestBuilder:
         frame = EffectiveRequestFrame(
             raw_message=raw_message,
             normalized_message=intent_frame.normalized_message or (raw_message or "").strip(),
+            original_semantic_intent=_semantic_from_intent(intent_frame),
+            effective_semantic_intent=_semantic_from_intent(intent_frame),
+            original_requested_action=_action_from_intent(intent_frame),
+            original_task_family=_task_family_from_intent(intent_frame),
             semantic_intent=_semantic_from_intent(intent_frame),
             task_family=_task_family_from_intent(intent_frame),
             requested_action=_action_from_intent(intent_frame),
@@ -197,10 +201,19 @@ class EffectiveRequestBuilder:
             frame.target_evidence_bundle_id = str(inherited.get("evidence_bundle"))
         if inherited.get("report") and not frame.target_report_id:
             frame.target_report_id = str(inherited.get("report"))
-        if context_frame.referenced_artifact_id and not frame.target_artifact_id:
+        inherited_artifact_type = str(inherited.get("latest_artifact_type") or "")
+        action_compatible_reference = (
+            _has_any(compact, WORKORDER_WORDS)
+            and inherited_artifact_type in {"report_artifact", "analysis_artifact", "structured_analysis_artifact"}
+        )
+        if context_frame.referenced_artifact_id and not frame.target_artifact_id and (
+            not _has_any(compact, WORKORDER_WORDS) or action_compatible_reference
+        ):
             frame.target_artifact_id = context_frame.referenced_artifact_id
-        if inherited.get("latest_artifact_type") and not frame.target_artifact_type:
-            frame.target_artifact_type = str(inherited.get("latest_artifact_type"))
+        if inherited_artifact_type and not frame.target_artifact_type and (
+            not _has_any(compact, WORKORDER_WORDS) or action_compatible_reference
+        ):
+            frame.target_artifact_type = inherited_artifact_type
 
         _fill_slot(frame, "device", _as_list(active_case.get("active_asset")), "case_state")
         _fill_slot(frame, "fault_codes", _as_list(active_case.get("active_fault_codes")), "case_state")
@@ -222,8 +235,9 @@ class EffectiveRequestBuilder:
         fallback = self.semantic_resolver.resolve(raw_message=raw_message, base=frame, candidates=manifests)
         if fallback:
             frame.resolution_trace.append({"stage": "semantic.fallback", **fallback})
-            frame.semantic_intent = str(fallback.get("semantic_intent") or frame.semantic_intent)
-            frame.requested_action = str(fallback.get("requested_action") or frame.requested_action)
+            if not frame.original_semantic_intent or frame.original_semantic_intent == "clarify_target":
+                frame.semantic_intent = str(fallback.get("semantic_intent") or frame.semantic_intent)
+                frame.requested_action = str(fallback.get("requested_action") or frame.requested_action)
             frame.requested_output_mode = str(fallback.get("requested_output_mode") or frame.requested_output_mode)
             if fallback.get("target_artifact_id"):
                 frame.target_artifact_id = str(fallback.get("target_artifact_id"))
@@ -237,6 +251,7 @@ class EffectiveRequestBuilder:
             frame.confidence = max(frame.confidence, _float(fallback.get("confidence"), 0.0))
 
         _normalize_semantics(frame, compact)
+        frame.effective_semantic_intent = frame.semantic_intent
         _validate_ambiguity(frame, target=target, manifests=manifests, compact=compact)
         _finalize_contract(frame, context_frame=context_frame)
         return frame
@@ -255,7 +270,8 @@ def _select_target(
     if context_frame.referenced_artifact_id:
         for item in completed:
             if item.artifact_id == context_frame.referenced_artifact_id:
-                return item
+                if not wants_action or item.artifact_type in {"report_artifact", "structured_analysis_artifact", "analysis_artifact"}:
+                    return item
     preferred_types: list[str]
     if wants_action:
         preferred_types = ["report_artifact", "structured_analysis_artifact", "analysis_artifact"]
@@ -271,6 +287,8 @@ def _select_target(
         pool = [item for item in completed if item.followupable or item.actionable or item.reportable]
     if pool:
         return sorted(pool, key=lambda item: preferred_types.index(item.artifact_type) if item.artifact_type in preferred_types else 99)[0]
+    if wants_action:
+        return None
     latest_id = str(active_case.get("latest_artifact_id") or "")
     if latest_id:
         for item in completed:
@@ -286,6 +304,11 @@ def _validate_ambiguity(
     manifests: list[ArtifactManifest],
     compact: str,
 ) -> None:
+    if frame.semantic_intent in {"check_runtime_status", "diagnose_fault", "diagnose_from_runtime", "health_assessment", "root_cause_analysis"} and not frame.effective_device_refs:
+        frame.needs_clarification = True
+        frame.clarification_question = "请确认要查询或诊断的设备。"
+        frame.ambiguity = {"slot": "device", "candidate_count": 0, "priority": "current_request"}
+        return
     if frame.effective_device_refs and frame.effective_fault_code_refs:
         return
     if target is not None:
@@ -331,7 +354,7 @@ def _normalize_semantics(frame: EffectiveRequestFrame, compact: str) -> None:
         frame.task_family = "report"
     elif frame.semantic_intent in {"explain_fault_code", "show_manual_fields"}:
         frame.task_family = "knowledge"
-    elif frame.semantic_intent in {"check_runtime_status", "diagnose_from_runtime"}:
+    elif frame.semantic_intent in {"check_runtime_status", "diagnose_from_runtime", "diagnose_fault", "health_assessment", "root_cause_analysis"}:
         frame.task_family = "diagnosis"
 
 
@@ -389,6 +412,9 @@ def _semantic_from_intent(intent: IntentFrame) -> str:
         "decide_workorder": "decide_workorder",
         "create_workorder_draft": "create_workorder_draft",
         "dispatch_workorder": "create_workorder_draft",
+        "diagnose_fault": "diagnose_fault",
+        "health_assessment": "health_assessment",
+        "root_cause_analysis": "root_cause_analysis",
     }
     return mapping.get(intent.primary_intent, intent.primary_intent or "")
 

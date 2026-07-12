@@ -101,9 +101,18 @@ def test_agent_engine_v2_build_plan_snapshot_returns_validated_snapshot() -> Non
     assert snapshot.status in {"validated", "blocked"}
     assert snapshot.intent_frame.raw_message == "  诊断 J1 A07089  "
     assert snapshot.intent_frame.normalized_message == "诊断 J1 A07089"
-    assert snapshot.execution_plan.plan_version.endswith(".validated")
-    assert snapshot.execution_plan.nodes
-    assert snapshot.execution_plan.allowed_tools
+    if snapshot.status == "blocked":
+        assert snapshot.execution_plan.plan_version.endswith(".blocked")
+        assert snapshot.execution_plan.nodes == []
+        assert snapshot.output_frame.guardrail_result["runtime_invoked"] is False
+    else:
+        assert snapshot.execution_plan.plan_version.endswith(".validated")
+    if snapshot.status != "blocked":
+        assert snapshot.execution_plan.nodes
+    if snapshot.status == "blocked":
+        assert snapshot.execution_plan.allowed_tools == []
+    else:
+        assert snapshot.execution_plan.allowed_tools
     assert snapshot.output_frame.guardrail_result["status"] in {"validated", "degraded", "blocked"}
     assert "candidate_plan" in snapshot.trace
     assert "validation" in snapshot.trace

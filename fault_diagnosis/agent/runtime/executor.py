@@ -477,6 +477,7 @@ def _runtime_output_frame(state: RuntimeState, *, status: str, cancelled: bool =
         error=state.errors[-1] if state.errors else None,
         cancelled=cancelled,
         cancel_reason=state.cancel_token.reason if cancelled else None,
+        output_contract=state.plan.output_contract,
     )
 
 

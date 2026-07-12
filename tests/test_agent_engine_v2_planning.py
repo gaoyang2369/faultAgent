@@ -86,11 +86,12 @@ def test_guest_report_for_scoped_device_degrades_to_one_hour_status_query() -> N
     assert result.status == "completed"
     assert "V2 runtime only executes validated plans" not in result.output_frame.final_answer
     assert "游客不能生成正式报告" in result.output_frame.final_answer
-    executed_sql = fake.sql_calls[-1]
-    assert "real_data_01" in executed_sql
-    assert "G120电机1" in executed_sql
-    assert "create_time >= NOW() - INTERVAL 1 HOUR" in executed_sql
-    assert "LIMIT 50" in executed_sql
+    realtime_sql = fake.sql_calls[0]
+    assert "real_data_01" in realtime_sql
+    assert "G120电机1" in realtime_sql
+    assert "create_time >= NOW() - INTERVAL 1 HOUR" in realtime_sql
+    assert "LIMIT 50" in realtime_sql
+    assert any("MAX(create_time)" in query for query in fake.sql_calls)
 
 
 def test_report_authorization_matrix_for_guest_engineer_and_admin() -> None:

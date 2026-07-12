@@ -102,6 +102,9 @@ class TraceRecorder:
                 "effective_device_refs": list(getattr(effective, "effective_device_refs", []) or []),
                 "effective_fault_code_refs": list(getattr(effective, "effective_fault_code_refs", []) or []),
                 "effective_semantic_intent": getattr(effective, "semantic_intent", ""),
+                "original_semantic_intent": getattr(effective, "original_semantic_intent", ""),
+                "authorized_semantic_intent": getattr(effective, "authorized_semantic_intent", ""),
+                "executed_semantic_intent": getattr(effective, "executed_semantic_intent", ""),
                 "effective_target_artifact_id": getattr(effective, "target_artifact_id", None),
                 "effective_target_artifact_type": getattr(effective, "target_artifact_type", None),
                 "effective_slot_sources": dict(getattr(effective, "slot_sources", {}) or {}),
@@ -113,6 +116,20 @@ class TraceRecorder:
                 "candidate_artifact_count": _candidate_artifact_count(context.inherited_slots),
                 "deictic_refs": context.permission_context.get("deictic_refs", []),
                 "recent_corrections": context.permission_context.get("recent_corrections", []),
+            },
+        )
+        capability_auth = dict(getattr(effective, "authorization_decision", {}) or {})
+        self._add_span(
+            span_id="span.plan.capability_preflight",
+            parent_span_id="span.chat.request",
+            name="capability.preflight",
+            kind="guardrail",
+            status="blocked" if capability_auth.get("mode") == "deny" else "completed",
+            attributes={
+                "requested_capability": getattr(effective, "original_semantic_intent", ""),
+                "effective_capability": getattr(effective, "effective_semantic_intent", ""),
+                "authorization": capability_auth,
+                "runtime_invoked": False if capability_auth.get("mode") == "deny" else None,
             },
         )
         self._add_span(
@@ -226,6 +243,20 @@ class TraceRecorder:
                 skipped_nodes.append({"node_id": node_id, "reason": attributes["reason"]})
             else:
                 executed_nodes.append(node_id)
+            if node_type == "sql" and isinstance(output, dict):
+                artifact = output.get("artifact") if isinstance(output.get("artifact"), dict) else {}
+                basis = artifact.get("data_basis") if isinstance(artifact.get("data_basis"), dict) else {}
+                attributes.update(
+                    {
+                        "requested_window": basis.get("requested_window"),
+                        "resolved_window": basis.get("resolved_window"),
+                        "resolution_mode": basis.get("resolution_mode"),
+                        "fallback_used": basis.get("fallback_used"),
+                        "fallback_reason": basis.get("fallback_reason"),
+                        "latest_sample_time": basis.get("latest_sample_time"),
+                        "data_environment": basis.get("data_environment"),
+                    }
+                )
             node_span = self._add_span(
                 span_id=f"span.node.{node_id}",
                 parent_span_id=runtime_span.span_id,
@@ -416,11 +447,20 @@ class TraceRecorder:
             kind="guardrail",
             status="blocked" if result.status == "blocked" else "completed",
             attributes={
-                "evidence_satisfied": not guardrail.get("missing_evidence") and not guardrail.get("final_claims_without_evidence"),
+                "evidence_satisfied": (
+                    guardrail.get("contract_satisfied")
+                    if "contract_satisfied" in guardrail
+                    else not guardrail.get("missing_evidence") and not guardrail.get("final_claims_without_evidence")
+                ),
                 "blocked": result.status == "blocked",
                 "status": guardrail.get("status") or result.status,
                 "missing_evidence": guardrail.get("missing_evidence", []),
                 "stale_evidence": guardrail.get("stale_evidence", []),
+                "required_claim_types": guardrail.get("required_claim_types", []),
+                "present_claim_types": guardrail.get("present_claim_types", []),
+                "missing_claim_types": guardrail.get("missing_claim_types", []),
+                "ledger_passed": guardrail.get("ledger_passed"),
+                "contract_satisfied": guardrail.get("contract_satisfied"),
             },
         )
 

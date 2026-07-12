@@ -168,6 +168,9 @@ def evaluate_plan_case(case: dict[str, Any], snapshot: dict[str, Any]) -> EvalRe
     tools = expected.get("tools") or {}
 
     _evaluate_native_v2_expectations(failures, snapshot, route, effective_request, plan_expected)
+    authorization_expected = expected.get("authorization") or {}
+    for key, value in authorization_expected.items():
+        expect_equal(failures, snapshot, f"authorization.{key}", value)
 
     if "intent_axes" in snapshot:
         expect_equal(failures, snapshot, "intent_axes.domain_task", intent.get("domain_task"))
@@ -264,6 +267,8 @@ def _evaluate_native_v2_expectations(
     expect_not_contains_any(failures, {"plan": {"node_types": node_types}}, "plan.node_types", plan_expected.get("node_types_absent"))
     if "status_not" in plan_expected and snapshot.get("status") == plan_expected.get("status_not"):
         failures.append(f"status: expected not {plan_expected.get('status_not')!r}, got {snapshot.get('status')!r}")
+    if "status" in plan_expected:
+        expect_equal(failures, snapshot, "status", plan_expected.get("status"))
 
 
 def _expect_effective_contains(failures: list[str], snapshot: dict[str, Any], path: str, expected: list[Any] | None) -> None:

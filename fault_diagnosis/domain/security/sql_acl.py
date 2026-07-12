@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import os
+from datetime import datetime, timedelta
 from typing import Any
 
 from .assets import (
@@ -194,6 +195,8 @@ def apply_sql_acl(
     auth: AuthContext,
     request: Any = None,
     decision: Any = None,
+    resolution_phase: str = "default",
+    resolution_anchor: datetime | None = None,
 ) -> SqlAclResult:
     query = _clean_query(sql_query)
     if not is_readonly_sql(query):
@@ -252,14 +255,30 @@ def apply_sql_acl(
         if not auth.asset_scope:
             return _deny("该数据表查询要求配置设备范围。", "missing_asset_scope")
 
-    if auth.role == "guest":
+    if resolution_phase == "latest_lookup":
+        filters.append("latest_sample_lookup")
+    elif resolution_phase == "latest_window" and resolution_anchor is not None:
+        time_column = _time_column(table_name)
+        lookback_hours = scope.max_lookback_hours or min(scope.max_time_window_days * 24, 24)
+        start = resolution_anchor - timedelta(hours=lookback_hours)
+        predicate = (
+            f"{time_column} >= '{start.strftime('%Y-%m-%d %H:%M:%S')}' "
+            f"AND {time_column} <= '{resolution_anchor.strftime('%Y-%m-%d %H:%M:%S')}'"
+        )
+        query = _insert_predicate(query, predicate)
+        filters.append("latest_available_window")
+    elif resolution_phase == "realtime":
+        time_column = _time_column(table_name)
+        query = _insert_predicate(query, f"{time_column} >= NOW() - INTERVAL 1 HOUR")
+        filters.append("requested_realtime_window")
+    elif auth.role == "guest":
         time_predicate = _time_window_predicate(
             table_name,
             "create_time",
             1,
             "HOUR",
             scope_predicate=asset_filter_predicate,
-            force_latest_if_stale=True,
+            force_latest_if_stale=resolution_phase == "default",
         )
         query = _insert_predicate(query, time_predicate)
         filters.append("guest_last_1_hour")
