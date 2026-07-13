@@ -5,6 +5,7 @@ import json
 import pytest
 
 from fault_diagnosis.agent import ExecutionPlan, WorkflowRuntimeExecutor
+from fault_diagnosis.agent.contracts import PlanGoal
 from fault_diagnosis.agent.runtime import NodeExecutionOutput
 from fault_diagnosis.agent.output import (
     build_output_frame,
@@ -198,6 +199,39 @@ def test_build_output_frame_variants_are_stable() -> None:
     assert "fake failure" in error_frame.final_answer
     assert clarification_frame.answer_variant == "clarification"
     assert "补充" in clarification_frame.final_answer
+
+
+def test_terminal_and_no_goal_compatibility_calls_use_single_presenter() -> None:
+    sql = SqlStepArtifact(success=True, summary="SQL 查询完成。", data_state="ok")
+    frames = [
+        build_output_frame(status="blocked", error={"message": "安全边界阻止。"}),
+        build_output_frame(status="failed", error={"message": "执行失败。"}),
+        build_output_frame(
+            status="blocked",
+            requested_variant="permission_denied",
+            goals=[
+                PlanGoal(
+                    goal_id="goal_denied",
+                    requested_deliverables=["diagnosis"],
+                    authorization_status="denied",
+                )
+            ],
+        ),
+        build_output_frame(status="cancelled", cancelled=True, cancel_reason="user_stop"),
+        build_output_frame(status="completed", artifacts={"sql_artifact": sql}),
+    ]
+
+    for frame in frames:
+        observation = frame.guardrail_result["output_observation"]
+        assert observation["renderer_calls"] == [
+            "DeliverableAssembler.assemble",
+            "CompositePresenter.render",
+        ]
+        assert observation["legacy_answer_template"] == ""
+        assert frame.final_answer == frame.composite_output.content
+    assert frames[2].answer_variant == "permission_denied"
+    assert frames[3].final_answer == ""
+    assert "SQL 查询完成" in frames[4].final_answer
 
 
 def test_workorder_output_frame_variant() -> None:

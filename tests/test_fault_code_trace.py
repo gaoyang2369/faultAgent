@@ -60,7 +60,7 @@ def test_fault_code_query_trace_contains_retrieval_parse_answer_and_guardrail() 
     assert by_name["fault_code.entry_parse"].attributes["code"] == "A07089"
     assert by_name["fault_code.entry_parse"].attributes["has_cause"] is True
     assert by_name["fault_code.entry_parse"].attributes["has_remedy"] is True
-    assert by_name["answer.render"].attributes["answer_template"] == "fault_code_concise_v1"
+    assert by_name["answer.render"].attributes["answer_template"] == "composite_presenter_v1"
     assert by_name["answer.render"].attributes["citation_count"] >= 1
     assert by_name["guardrail.check"].attributes["blocked"] is False
     assert by_name["evidence.ledger"].attributes["evidence_count"] >= 1

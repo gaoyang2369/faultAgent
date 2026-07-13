@@ -55,7 +55,7 @@ def project_artifact_envelope(
         thread_id=thread_id,
         created_at=datetime.now().isoformat(),
         request_summary=request_summary or output_frame.status_brief or output_frame.answer_variant,
-        final_answer=output_frame.composite_output.content,
+        final_answer=output_frame.final_answer,
         report_filename=report_artifact.get("report_filename") or report_artifact.get("report_url"),
         payload=payload,
         evidence=_evidence_items(evidence_bundle),

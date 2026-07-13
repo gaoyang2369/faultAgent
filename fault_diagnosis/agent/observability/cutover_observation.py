@@ -18,9 +18,6 @@ def build_output_observation(
     *,
     goals: list[Any],
     deliverables: list[Any],
-    variant: str,
-    legacy_content: str,
-    composite_content: str,
     selected_content: str,
 ) -> dict[str, Any]:
     return {
@@ -33,12 +30,12 @@ def build_output_observation(
             }
             for item in deliverables
         ],
-        "renderer_calls": ["_infer_variant", f"_render_answer:{variant}", "_render_composite"],
-        "legacy_answer_template": variant,
-        "selected_content": "composite" if composite_content else "legacy",
+        "renderer_calls": ["DeliverableAssembler.assemble", "CompositePresenter.render"],
+        "legacy_answer_template": "",
+        "answer_template": "composite_presenter_v1",
+        "selected_content": "composite",
         "content_fingerprints": {
-            "legacy": content_fingerprint(legacy_content),
-            "composite": content_fingerprint(composite_content),
+            "composite": content_fingerprint(selected_content),
             "selected": content_fingerprint(selected_content),
         },
     }

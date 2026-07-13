@@ -442,7 +442,7 @@ class TraceRecorder:
             name="answer.render",
             kind="output",
             attributes={
-                "answer_template": _answer_template(frame.answer_variant, knowledge),
+                "answer_template": "composite_presenter_v1",
                 "output_mode": _output_mode(frame.answer_variant),
                 "llm_used": False,
                 "source_count": source_count,
@@ -880,12 +880,6 @@ def _source_selection(resolution_trace: Any) -> dict[str, Any]:
         if isinstance(item, dict) and item.get("stage") == "source.select.observe":
             return item
     return {}
-
-
-def _answer_template(answer_variant: str, knowledge: KnowledgeStepArtifact | None) -> str:
-    if answer_variant == "knowledge_answer" and knowledge and knowledge.fault_code_entries:
-        return "fault_code_concise_v1"
-    return f"{answer_variant or 'answer'}_v1"
 
 
 def _output_mode(answer_variant: str) -> str:

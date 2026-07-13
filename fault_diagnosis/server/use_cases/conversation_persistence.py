@@ -122,6 +122,7 @@ class ConversationPersistenceService:
         status = "cancelled" if event.get("cancelled") else "completed"
         content = str(
             event.get("final_content")
+            or event.get("content")
             or event.get("grounded_final_content")
             or event.get("raw_final_content")
             or ""

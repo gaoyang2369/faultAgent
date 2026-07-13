@@ -18,9 +18,10 @@ from fault_diagnosis.shared.utils import summarize_identifier_for_log
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import commit_artifact, save_thread_artifact
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
 from fault_diagnosis.agent import AgentEngineV2, WorkflowRuntimeExecutor
-from fault_diagnosis.agent.contracts import ArtifactEnvelope, CompositeOutputFrame, OutputFrame
+from fault_diagnosis.agent.contracts import ArtifactEnvelope
 from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_validation
 from fault_diagnosis.agent.output import (
+    build_output_frame,
     project_complete,
     project_start,
     project_task_update,
@@ -271,23 +272,13 @@ async def _stream_v2_validation_blocked(
     snapshot_guardrail = dict(snapshot.output_frame.guardrail_result or {})
     snapshot_authorization = snapshot_guardrail.get("authorization") if isinstance(snapshot_guardrail.get("authorization"), dict) else {}
     denied = snapshot_authorization.get("mode") == "deny"
-    output_frame = OutputFrame(
-        answer_variant=(
-            "permission_denied"
-            if denied
-            else snapshot.output_frame.answer_variant
-            if snapshot.output_frame.answer_variant != "not_implemented"
-            else "blocked"
-        ),
-        final_answer=message,
-        composite_output=CompositeOutputFrame(
-            overall_status="blocked",
-            content=message,
-            answer_variant="permission_denied" if denied else "blocked",
-            legacy_answer_variant="permission_denied" if denied else "blocked",
-        ),
-        guardrail_result=snapshot_guardrail,
+    output_frame = build_output_frame(
+        status="blocked",
+        requested_variant="permission_denied" if denied else "blocked",
+        error={"message": message},
+        goals=plan.goals,
     )
+    output_frame.guardrail_result.update(snapshot_guardrail)
     state = _state_from_plan(
         plan=plan,
         trace_id=trace_id,

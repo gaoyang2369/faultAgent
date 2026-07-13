@@ -209,7 +209,9 @@ def test_real_rag_node_timeout_is_not_usable_evidence() -> None:
     assert result.evidence_ledger.evidence_items == []
     assert result.evidence_ledger.final_claim_ids == []
     assert "ev_kb_001" not in result.evidence_ledger.quality_checks.get("evidence_ids", [])
-    assert result.output_frame.final_answer == "知识库检索超时，未获得可靠证据，请稍后重试或缩小查询范围。"
+    assert result.output_frame.final_answer == (
+        "【故障码解释】\n知识库检索超时，未获得可靠证据，请稍后重试或缩小查询范围。"
+    )
 
 
 def test_tool_runtime_invokes_structured_kb_tool(monkeypatch) -> None:

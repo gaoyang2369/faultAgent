@@ -1,6 +1,8 @@
 """Agent Engine V2 output and compatibility projections."""
 
 from .answer import build_output_frame
+from .deliverables import DeliverableAssembler
+from .presenter import CompositePresenter, PresentedOutput
 from .artifact_projection import project_artifact_envelope
 from .artifact_manifest import build_artifact_manifests, latest_focus_from_manifests
 from .report import build_reportable_payload
@@ -15,6 +17,9 @@ from .sse_projection import (
 
 __all__ = [
     "build_output_frame",
+    "CompositePresenter",
+    "DeliverableAssembler",
+    "PresentedOutput",
     "build_artifact_manifests",
     "build_reportable_payload",
     "latest_focus_from_manifests",

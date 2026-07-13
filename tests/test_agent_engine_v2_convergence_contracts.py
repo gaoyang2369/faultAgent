@@ -106,10 +106,14 @@ def test_static_single_source_entrypoints() -> None:
     goals_source = (repo / "fault_diagnosis/agent/context/goals.py").read_text(encoding="utf-8")
     effective_source = (repo / "fault_diagnosis/agent/context/effective_request.py").read_text(encoding="utf-8")
     answer_source = (repo / "fault_diagnosis/agent/output/answer.py").read_text(encoding="utf-8")
+    presenter_source = (repo / "fault_diagnosis/agent/output/presenter.py").read_text(encoding="utf-8")
 
     assert artifacts_source.count("def artifact_id_factory(") == 1
     assert artifacts_source.count("artifact_id_factory(artifact_type)") == 1
     assert goals_source.count("def canonicalize_requested_goals(") == 1
     assert effective_source.count("canonicalize_requested_goals(") == 1
-    assert answer_source.count("def _render_composite(") == 1
-    assert answer_source.count("_render_composite(deliverables)") == 1
+    assert presenter_source.count("class CompositePresenter:") == 1
+    assert answer_source.count("CompositePresenter().present(") == 1
+    assert "def _infer_variant(" not in answer_source
+    assert "def _render_answer(" not in answer_source
+    assert "def _render_composite(" not in answer_source

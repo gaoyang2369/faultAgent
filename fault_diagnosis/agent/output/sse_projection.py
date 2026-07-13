@@ -74,7 +74,7 @@ def project_tool_end(*, state: "RuntimeState", result: NodeResult, tool: str | N
 
 
 def project_token(output_frame: OutputFrame) -> dict[str, Any]:
-    return {"type": "token", "content": output_frame.composite_output.content}
+    return {"type": "token", "content": output_frame.final_answer}
 
 
 def project_complete(
@@ -115,7 +115,7 @@ def project_complete(
         auth_summary=state.auth_context.audit_summary() if state.auth_context else {},
     )
     workorder_payload = _workorder_payload(frame, state.plan)
-    final_text = "" if cancelled else frame.composite_output.content
+    final_text = "" if cancelled else frame.final_answer
     todos = [] if cancelled else _todos_from_plan_and_results(state.plan, state.node_results)
     complete: dict[str, Any] = {
         "type": "chat_complete",

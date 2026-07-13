@@ -106,17 +106,7 @@ def test_status_transport_is_identical_through_composite_sse_and_sqlite(producti
     turn = _turn(client, db_path, "查询 G120电机1 当前运行状态")
 
     complete = turn.complete
-    composite = str(complete["composite_output"]["content"])
-    contents = {
-        "composite": composite,
-        "token_join": turn.token_content,
-        "complete.content": str(complete.get("content") or ""),
-        "final_content": str(complete.get("final_content") or ""),
-        "sqlite.assistant": str(turn.persisted["content_text"]),
-    }
-    _print_content_fingerprints("status", contents)
-
-    assert len({value for value in contents.values()}) == 1, _first_mismatch(contents)
+    _assert_transport_consistency("status", turn)
     assert complete["sql_artifact"]["success"] is True
     assert complete["rendered_answer"]["runtime_status_assessment"]
     assert complete["composite_output"]["overall_status"] == "completed"
@@ -127,10 +117,6 @@ def test_status_transport_is_identical_through_composite_sse_and_sqlite(producti
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Phase 1: composite runtime_status currently drops human-readable data-basis fields from status_brief_v2",
-)
 def test_status_selected_content_keeps_human_readable_status_fields(production_harness) -> None:
     client, db_path, _ = production_harness
     turn = _turn(client, db_path, "查询 G120电机1 当前运行状态")
@@ -141,10 +127,6 @@ def test_status_selected_content_keeps_human_readable_status_fields(production_h
     assert "最新样本：" in content
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Phase 1: output trace still reports a legacy diagnosis template in the four-goal composite path",
-)
 def test_four_goal_composite_has_one_renderer_path_and_no_legacy_template(production_harness) -> None:
     client, db_path, _ = production_harness
     turn = _turn(
@@ -174,13 +156,31 @@ def test_four_goal_composite_has_one_renderer_path_and_no_legacy_template(produc
 
     assert len(goals) == len(deliverables) == 4
     assert len({item["goal_id"] for item in deliverables}) == 4
+    _assert_transport_consistency("four_goal", turn)
     assert observation["selected_content"] == "composite"
     assert observation["renderer_calls"] == [
-        "_infer_variant",
-        "_render_answer:diagnosis_answer",
-        "_render_composite",
+        "DeliverableAssembler.assemble",
+        "CompositePresenter.render",
     ]
-    assert observation["legacy_answer_template"] in {"", None}
+    assert observation["legacy_answer_template"] == ""
+    assert observation["answer_template"] == "composite_presenter_v1"
+    assert turn.visible_content.count("【故障码解释】") == 1
+    assert turn.visible_content.count("【综合诊断】") == 1
+    assert turn.visible_content.count("【运行状态】") == 1
+    assert turn.visible_content.count("【处理建议】") == 1
+
+
+def test_comparison_transport_is_identical_and_renders_once(production_harness) -> None:
+    client, db_path, _ = production_harness
+    turn = _turn(client, db_path, "比较 G120电机1 和 G120电机2 当前运行状态")
+
+    _assert_transport_consistency("comparison", turn)
+    content = turn.visible_content
+    assert content.count("【运行比较】") == 1
+    assert "G120电机1" in content
+    assert "G120电机2" in content
+    assert "结论：" in content
+    assert turn.complete["rendered_answer"]["answer_variant"] != "status_brief_v2"
 
 
 @pytest.mark.xfail(
@@ -356,6 +356,19 @@ def _print_content_fingerprints(label: str, contents: dict[str, str]) -> None:
         for key, value in contents.items()
     }
     print(f"CUTOVER {label}", json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+def _assert_transport_consistency(label: str, turn: FrontendTurn) -> None:
+    complete = turn.complete
+    contents = {
+        "composite": str(complete["composite_output"]["content"]),
+        "token_join": turn.token_content,
+        "complete.content": str(complete.get("content") or ""),
+        "final_content": str(complete.get("final_content") or ""),
+        "sqlite.assistant": str(turn.persisted["content_text"]),
+    }
+    _print_content_fingerprints(label, contents)
+    assert len({value for value in contents.values()}) == 1, _first_mismatch(contents)
 
 
 def _first_mismatch(contents: dict[str, str]) -> str:

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from fault_diagnosis.agent.contracts import DeliverableResult
-from fault_diagnosis.agent.output.answer import _render_composite
+from fault_diagnosis.agent.output.presenter import CompositePresenter
 
 
 _GOLDEN_DIR = Path(__file__).parent / "golden" / "agent_engine_v2"
@@ -24,7 +24,13 @@ def _status() -> DeliverableResult:
                 {
                     "device": "G120电机1",
                     "runtime_status": "attention",
-                    "data_basis": {"latest_sample_time": "2026-07-13T10:00:00"},
+                    "data_basis": {
+                        "resolution_mode": "latest_available_fallback",
+                        "resolved_window": {"start": "2026-07-13T09:00:00", "end": "2026-07-13T10:00:00"},
+                        "latest_sample_time": "2026-07-13T10:00:00",
+                    },
+                    "sample_count": 60,
+                    "key_findings": ["速度偏差达到关注阈值。"],
                     "limitations": ["非实时历史最新样本。"],
                 }
             ]
@@ -103,4 +109,4 @@ def _cases() -> dict[str, list[DeliverableResult]]:
 @pytest.mark.parametrize("name", sorted(_cases()))
 def test_composite_content_matches_golden(name: str) -> None:
     expected = (_GOLDEN_DIR / f"{name}.txt").read_text(encoding="utf-8").rstrip("\n")
-    assert _render_composite(_cases()[name]) == expected
+    assert CompositePresenter().present(deliverables=_cases()[name], status="completed").content == expected
