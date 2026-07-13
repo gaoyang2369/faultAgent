@@ -20,6 +20,14 @@ ArtifactType = Literal[
     "structured_analysis_artifact",
     "report_artifact",
     "workorder_artifact",
+    "comparison_artifact",
+]
+
+FailurePolicy = Literal[
+    "continue_independent_goals",
+    "continue_degraded",
+    "block_dependents",
+    "block_all",
 ]
 
 
@@ -76,6 +84,68 @@ class ContextFrame(AgentEngineContract):
     permission_context: dict[str, Any] = Field(default_factory=dict)
     reuse_decision: str = "collect_new"
     reuse_blockers: list[str] = Field(default_factory=list)
+
+
+class EffectiveGoal(AgentEngineContract):
+    """Canonical executable capability plus its user-visible deliverables."""
+
+    schema_version: str = "effective_goal.v1"
+    goal_id: str
+    capability: str
+    target_scope_id: str | None = None
+    requested_deliverables: list[str] = Field(default_factory=list)
+    required_slots: list[str] = Field(default_factory=list)
+    optional_slots: list[str] = Field(default_factory=list)
+    evidence_requirements: list[str] = Field(default_factory=list)
+    source_policy: str = "collect_new"
+    priority: int = 100
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    explicit: bool = True
+    depends_on_goal_ids: list[str] = Field(default_factory=list)
+
+
+class EffectiveGoalSet(AgentEngineContract):
+    schema_version: str = "effective_goal_set.v1"
+    goals: list[EffectiveGoal] = Field(default_factory=list)
+    primary_goal_id: str = ""
+
+
+class TargetScope(AgentEngineContract):
+    schema_version: str = "target_scope.v1"
+    scope_id: str = "scope_current"
+    operation: Literal["keep", "replace", "compare"] = "keep"
+    included_devices: list[str] = Field(default_factory=list)
+    excluded_devices: list[str] = Field(default_factory=list)
+    resolved_devices: list[str] = Field(default_factory=list)
+    explicit_switch: bool = False
+    source: Literal["current_message", "artifact", "case_state", "context_signal"] = "current_message"
+
+
+class GoalQuerySpec(AgentEngineContract):
+    schema_version: str = "goal_query_spec.v1"
+    query_spec_id: str
+    goal_id: str
+    capability: str
+    sql_question: str | None = None
+    rag_query: str | None = None
+    analysis_request: dict[str, Any] | None = None
+    target_devices: list[str] = Field(default_factory=list)
+    fault_codes: list[str] = Field(default_factory=list)
+
+
+class ArtifactLineage(AgentEngineContract):
+    schema_version: str = "artifact_lineage.v1"
+    lineage_status: Literal["complete", "legacy_partial", "invalid"] = "legacy_partial"
+    artifact_id: str = ""
+    artifact_type: str = ""
+    subject_device_refs: list[str] = Field(default_factory=list)
+    fault_code_refs: list[str] = Field(default_factory=list)
+    source_artifact_ids: list[str] = Field(default_factory=list)
+    source_evidence_bundle_ids: list[str] = Field(default_factory=list)
+    data_basis: list[dict[str, Any]] = Field(default_factory=list)
+    source_tables: list[str] = Field(default_factory=list)
+    time_windows: list[dict[str, Any]] = Field(default_factory=list)
+    created_from_goal_ids: list[str] = Field(default_factory=list)
 
 
 class ArtifactManifest(AgentEngineContract):
@@ -137,6 +207,9 @@ class ArtifactManifest(AgentEngineContract):
     draft_only: bool = False
     manual_confirmation_required: bool = False
     dispatch_forbidden: bool = False
+    owner_user_id: str = ""
+    owner_session_id: str = ""
+    lineage: ArtifactLineage = Field(default_factory=ArtifactLineage)
 
 
 class EffectiveRequestFrame(AgentEngineContract):
@@ -175,6 +248,14 @@ class EffectiveRequestFrame(AgentEngineContract):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     resolution_trace: list[dict[str, Any]] = Field(default_factory=list)
     safety_flags: list[str] = Field(default_factory=list)
+    effective_goal_set: EffectiveGoalSet = Field(default_factory=EffectiveGoalSet)
+    target_scope: TargetScope = Field(default_factory=TargetScope)
+    goal_query_specs: list[GoalQuerySpec] = Field(default_factory=list)
+    requested_goals: list[str] = Field(default_factory=list)
+    authorized_goal_ids: list[str] = Field(default_factory=list)
+    dropped_goals: list[dict[str, Any]] = Field(default_factory=list)
+    clarification_reasons: list[dict[str, Any]] = Field(default_factory=list)
+    discarded_artifact_ids: list[str] = Field(default_factory=list)
 
 
 class SkillRoute(AgentEngineContract):
@@ -235,6 +316,18 @@ class PlanGoal(_DictCompatContract):
     expected_outputs: list[str] = Field(default_factory=list)
     risk_level: RiskLevel = "low"
     source: str = "skill_compiler"
+    capability: str = ""
+    target_scope_id: str | None = None
+    requested_deliverables: list[str] = Field(default_factory=list)
+    required_slots: list[str] = Field(default_factory=list)
+    optional_slots: list[str] = Field(default_factory=list)
+    evidence_requirements: list[str] = Field(default_factory=list)
+    source_policy: str = "collect_new"
+    priority: int = 100
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    depends_on_goal_ids: list[str] = Field(default_factory=list)
+    authorization_status: Literal["authorized", "denied"] = "authorized"
+    drop_reason: str = ""
 
 
 class PlanEdge(_DictCompatContract):
@@ -247,7 +340,13 @@ class PlanEdge(_DictCompatContract):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
-class SqlNodeInputs(AgentEngineContract):
+class GoalScopedNodeInputs(AgentEngineContract):
+    goal_ids: list[str] = Field(default_factory=list)
+    query_spec_id: str = ""
+    target_scope_id: str = ""
+
+
+class SqlNodeInputs(GoalScopedNodeInputs):
     sql_query: str = ""
     use_checker: bool = False
     equipment_hint: str = ""
@@ -267,7 +366,7 @@ class SqlNodeInputs(AgentEngineContract):
     stale_evidence_disclosure_required: bool = False
 
 
-class RagNodeInputs(AgentEngineContract):
+class RagNodeInputs(GoalScopedNodeInputs):
     query: str = ""
     retrieval_strategy: str = ""
     top_k: int = Field(default=1, ge=1, le=10)
@@ -285,7 +384,7 @@ class RagNodeInputs(AgentEngineContract):
     stale_evidence_disclosure_required: bool = False
 
 
-class ReportNodeInputs(AgentEngineContract):
+class ReportNodeInputs(GoalScopedNodeInputs):
     title: str = ""
     chart_payload: Any = None
     operation_report_payload: str = ""
@@ -304,7 +403,7 @@ class ReportNodeInputs(AgentEngineContract):
     stale_evidence_disclosure_required: bool = False
 
 
-class WorkorderNodeInputs(AgentEngineContract):
+class WorkorderNodeInputs(GoalScopedNodeInputs):
     create_draft: bool = True
     action_type: str = ""
     workorder_action: str = ""
@@ -327,9 +426,10 @@ class WorkorderNodeInputs(AgentEngineContract):
     report_url: str = ""
     manual_confirmation_required: bool = True
     draft_only: bool = True
+    artifact_access_error: str = ""
 
 
-class ApprovalNodeInputs(AgentEngineContract):
+class ApprovalNodeInputs(GoalScopedNodeInputs):
     approval_requirements: list[dict[str, Any]] = Field(default_factory=list)
     interrupt_id: str = ""
     device_refs: list[str] = Field(default_factory=list)
@@ -358,6 +458,10 @@ class PlanNode(_DictCompatContract):
     retry: dict[str, Any] = Field(default_factory=dict)
     condition: dict[str, Any] = Field(default_factory=dict)
     requested_tables: list[str] = Field(default_factory=list)
+    goal_ids: list[str] = Field(default_factory=list)
+    query_spec_id: str = ""
+    target_scope_id: str = ""
+    failure_policy: FailurePolicy = "block_all"
 
 
 class ExecutionPlan(AgentEngineContract):
@@ -395,6 +499,9 @@ class NodeResult(AgentEngineContract):
     error: dict[str, Any] | None = None
     retry_count: int = Field(default=0, ge=0)
     duration_ms: float = Field(default=0.0, ge=0.0)
+    goal_ids: list[str] = Field(default_factory=list)
+    query_spec_id: str = ""
+    target_scope_id: str = ""
 
 
 class EvidenceLedger(AgentEngineContract):
@@ -411,6 +518,34 @@ class EvidenceLedger(AgentEngineContract):
     authorization_refs: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class DeliverableResult(AgentEngineContract):
+    schema_version: str = "deliverable_result.v1"
+    goal_id: str = ""
+    deliverable_type: Literal[
+        "fault_code_explanation",
+        "runtime_status",
+        "runtime_comparison",
+        "diagnosis",
+        "recommendations",
+        "report",
+        "workorder_draft",
+        "clarification",
+        "permission_denied",
+    ]
+    status: Literal["completed", "partial", "failed", "blocked"]
+    payload: dict[str, Any] = Field(default_factory=dict)
+    source_artifact_ids: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class CompositeOutputFrame(AgentEngineContract):
+    schema_version: str = "composite_output_frame.v1"
+    deliverables: list[DeliverableResult] = Field(default_factory=list)
+    overall_status: str = "not_implemented"
+    legacy_answer_variant: str = "not_implemented"
+
+
 class OutputFrame(AgentEngineContract):
     """V2 output before compatibility projection."""
 
@@ -425,6 +560,7 @@ class OutputFrame(AgentEngineContract):
     guardrail_result: dict[str, Any] = Field(default_factory=dict)
     runtime_status_assessment: dict[str, Any] = Field(default_factory=dict)
     contract_validation: dict[str, Any] = Field(default_factory=dict)
+    composite_output: CompositeOutputFrame = Field(default_factory=CompositeOutputFrame)
 
     @model_validator(mode="after")
     def validate_status_brief_v2_contract(self) -> "OutputFrame":

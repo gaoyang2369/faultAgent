@@ -13,6 +13,7 @@ from .report import ReportNode
 from .sql import SqlNode
 from .workorder import WorkorderNode
 from .clarification import ClarificationNode
+from .comparison import ComparisonNode
 
 
 def build_real_node_registry(*, tool_runtime: ToolRuntime) -> dict[str, Any]:
@@ -25,6 +26,7 @@ def build_real_node_registry(*, tool_runtime: ToolRuntime) -> dict[str, Any]:
         "workorder": WorkorderNode(),
         "approval": ApprovalNode(),
         "clarification": ClarificationNode(),
+        "comparison": ComparisonNode(),
     }
 
 
@@ -37,5 +39,6 @@ __all__ = [
     "SqlNode",
     "WorkorderNode",
     "ClarificationNode",
+    "ComparisonNode",
     "build_real_node_registry",
 ]

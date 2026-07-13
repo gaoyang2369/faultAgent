@@ -15,10 +15,22 @@ class AnalysisNode:
     node_type = "analysis"
 
     def run(self, *, node: dict[str, Any], state: RuntimeState) -> NodeExecutionOutput:
-        sql_artifact = _sql_artifact(state.artifacts.get("sql_artifact"))
+        inputs = dict(node.get("inputs") or {})
+        access_error = str(inputs.get("artifact_access_error") or "")
+        if access_error:
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"success": False, "artifact_access_error": access_error},
+                error={"code": access_error, "message": "目标 Artifact 精确读取或 lineage 校验失败。"},
+            )
+        source_payload = inputs.get("source_artifact_payload")
+        sql_artifact = _sql_artifact(source_payload if inputs.get("source_artifact_type") == "sql_artifact" else state.artifacts.get("sql_artifact"))
         knowledge_artifact = _knowledge_artifact(state.artifacts.get("knowledge_artifact"))
         request = build_request(state, node, goal="DCMA 运行诊断分析")
         structured = diagnose_dcma_runtime(sql_artifact, knowledge_artifact, request)
+        structured.analysis_artifact.artifact_id = (
+            f"analysis:{state.trace_id or state.request_id or state.plan.plan_id}:{str(node.get('node_id') or 'analysis')}"
+        )
         state.artifacts["analysis_artifact"] = structured.analysis_artifact
         state.artifacts["structured_analysis_artifact"] = structured
         return NodeExecutionOutput(

@@ -23,6 +23,7 @@ class ReportNode:
         self.tool_runtime = tool_runtime
 
     def run(self, *, node: dict[str, Any], state: RuntimeState) -> NodeExecutionOutput:
+        artifact_id = f"report:{state.trace_id or state.request_id or state.plan.plan_id}:{str(node.get('node_id') or 'report')}"
         report_filename = str(
             input_value(node, "report_filename", "")
             or f"v2_runtime_report_{state.thread_id or state.trace_id or timestamp_for_filename()}"
@@ -34,6 +35,7 @@ class ReportNode:
         if not operation_report_payload:
             if not _has_reportable_material(state):
                 artifact = ReportStepArtifact(
+                    artifact_id=artifact_id,
                     success=False,
                     report_title=str(input_value(node, "title", "") or "DCMA 运行诊断报告"),
                     error="missing_reportable_artifact",
@@ -65,6 +67,7 @@ class ReportNode:
         report_url = _report_url(text)
         success = bool(report_url) and "报告保存失败" not in text
         artifact = ReportStepArtifact(
+            artifact_id=artifact_id,
             success=success,
             report_filename=report_url.rsplit("/", 1)[-1] if report_url else None,
             report_title=str(input_value(node, "title", "") or "DCMA 运行诊断报告"),

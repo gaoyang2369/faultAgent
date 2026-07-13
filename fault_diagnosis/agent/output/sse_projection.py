@@ -113,6 +113,7 @@ def project_complete(
         node_results=state.node_results,
         trace=state.trace_payload(),
         request_summary=_request_summary(state.plan),
+        auth_summary=state.auth_context.audit_summary() if state.auth_context else {},
     )
     workorder_payload = _workorder_payload(frame, state.plan)
     final_text = "" if cancelled else (final_content or frame.final_answer)
@@ -127,11 +128,13 @@ def project_complete(
         "task_family": _task_family(state.plan),
         "policy_id": _policy_id(state.plan),
         "final_content": final_text,
+        "content": final_text,
         "report_filename": _report_artifact(state.artifacts).get("report_filename"),
         "report_url": _report_artifact(state.artifacts).get("report_url"),
         "decision": _decision_payload(state.plan),
         "resolved_context": {},
         "goal_set": _goal_set(state.plan),
+        "composite_output": frame.composite_output.model_dump(mode="json", exclude_none=True),
         "readiness": {"diagnosis": {}, "workorder_action": {}},
         "diagnosis_readiness": {},
         "workorder_action_readiness": {},

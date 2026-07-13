@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fault_diagnosis.agent.contracts import ArtifactManifest
+from fault_diagnosis.agent.contracts import ArtifactLineage, ArtifactManifest
 from fault_diagnosis.domain.diagnosis.contracts import (
     AnalysisStepArtifact,
     EvidenceBundle,
@@ -15,7 +15,7 @@ from fault_diagnosis.domain.diagnosis.contracts import (
     WorkOrderDraftArtifact,
     WorkOrderSuggestion,
 )
-from fault_diagnosis.domain.diagnosis.runtime_status import RuntimeStatusAssessment
+from fault_diagnosis.domain.diagnosis.runtime_status import RuntimeComparisonArtifact, RuntimeStatusAssessment
 
 
 def build_artifact_manifests(
@@ -33,18 +33,18 @@ def build_artifact_manifests(
     trace = trace if isinstance(trace, dict) else {}
     trace_id = str(trace.get("trace_id") or (bundle.trace_id if bundle else "") or "")
     node_by_type = _nodes_by_type(node_results or [])
+    goal_by_type = _goals_by_type(node_results or [])
     manifests: list[ArtifactManifest] = []
 
-    sql = _model(artifact_map.get("sql_artifact"), SqlStepArtifact)
-    runtime_assessment = _model(artifact_map.get("runtime_status_assessment"), RuntimeStatusAssessment)
-    if sql is not None:
+    sql_entries = _sql_entries(artifact_map)
+    for runtime_artifact_id, sql, runtime_assessment in sql_entries:
         basis = runtime_assessment.data_basis if runtime_assessment is not None else None
         supported_followups = ["check_runtime_status"]
         if basis is not None and basis.usable_for_report:
             supported_followups.append("generate_report")
         manifests.append(
             ArtifactManifest(
-                artifact_id=_artifact_id("sql", trace_id, request_id, sql.source_table),
+                artifact_id=runtime_artifact_id or sql.artifact_id or _artifact_id("sql", trace_id, request_id, f"{sql.source_table}:{getattr(runtime_assessment, 'device', '')}"),
                 artifact_type="sql_artifact",
                 thread_id=thread_id,
                 request_id=request_id,
@@ -85,7 +85,7 @@ def build_artifact_manifests(
         fields = entry.model_dump(mode="json", exclude_none=True) if entry is not None else {}
         manifests.append(
             ArtifactManifest(
-                artifact_id=_artifact_id("knowledge", trace_id, request_id, ",".join(knowledge.fault_codes)),
+                artifact_id=knowledge.artifact_id or _artifact_id("knowledge", trace_id, request_id, ",".join(knowledge.fault_codes)),
                 artifact_type="knowledge_artifact",
                 thread_id=thread_id,
                 request_id=request_id,
@@ -118,7 +118,7 @@ def build_artifact_manifests(
     if analysis is not None:
         manifests.append(
             ArtifactManifest(
-                artifact_id=_artifact_id("analysis", trace_id, request_id, analysis.conclusion),
+                artifact_id=analysis.artifact_id or _artifact_id("analysis", trace_id, request_id, analysis.conclusion),
                 artifact_type="analysis_artifact",
                 thread_id=thread_id,
                 request_id=request_id,
@@ -184,7 +184,7 @@ def build_artifact_manifests(
     if report is not None:
         manifests.append(
             ArtifactManifest(
-                artifact_id=report.report_url or report.report_filename or _artifact_id("report", trace_id, request_id, ""),
+                artifact_id=report.artifact_id or _artifact_id("report", trace_id, request_id, report.report_filename or "report"),
                 artifact_type="report_artifact",
                 thread_id=thread_id,
                 request_id=request_id,
@@ -250,6 +250,28 @@ def build_artifact_manifests(
                 dispatch_forbidden=True,
             )
         )
+    comparison = _model(artifact_map.get("comparison_artifact"), RuntimeComparisonArtifact)
+    if comparison is not None:
+        manifests.append(
+            ArtifactManifest(
+                artifact_id=_artifact_id("comparison", trace_id, request_id, ":".join(comparison.devices)),
+                artifact_type="comparison_artifact",
+                thread_id=thread_id,
+                request_id=request_id,
+                trace_id=trace_id,
+                produced_by_skill="runtime_status",
+                produced_by_nodes=node_by_type.get("comparison", []),
+                status="completed",
+                followupable=True,
+                reportable=True,
+                device_refs=list(comparison.devices),
+                diagnosis_summary=comparison.conclusion,
+                findings=[item.conclusion for item in comparison.comparison_dimensions],
+                authorization_scope_summary=dict(auth_summary or {}),
+            )
+        )
+
+    _attach_lineage(manifests, bundle=bundle, auth_summary=auth_summary or {}, goal_by_type=goal_by_type)
     return manifests
 
 
@@ -316,6 +338,16 @@ def _nodes_by_type(node_results: list[Any]) -> dict[str, list[str]]:
         if node_type and node_id:
             result.setdefault(node_type, []).append(node_id)
     return result
+
+
+def _goals_by_type(node_results: list[Any]) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for item in node_results:
+        dumped = _dump(item) or {}
+        node_type = str(dumped.get("node_type") or "")
+        if node_type:
+            result.setdefault(node_type, []).extend(str(goal_id) for goal_id in dumped.get("goal_ids", []) if str(goal_id))
+    return {key: _dedupe(value) for key, value in result.items()}
 
 
 def _best_entry(artifact: KnowledgeStepArtifact) -> Any:
@@ -447,6 +479,109 @@ def _latest_id(manifests: list[ArtifactManifest], artifact_type: str) -> str:
         if item.artifact_type == artifact_type:
             return item.artifact_id
     return ""
+
+
+def _sql_entries(artifact_map: dict[str, Any]) -> list[tuple[str, SqlStepArtifact, RuntimeStatusAssessment | None]]:
+    raw_sql = artifact_map.get("sql_artifacts")
+    assessments = artifact_map.get("runtime_status_assessments")
+    result: list[tuple[str, SqlStepArtifact, RuntimeStatusAssessment | None]] = []
+    if isinstance(raw_sql, dict):
+        assessment_values = list(assessments.values()) if isinstance(assessments, dict) else []
+        for index, (artifact_id, value) in enumerate(raw_sql.items()):
+            sql = _model(value, SqlStepArtifact)
+            if sql is None:
+                continue
+            assessment = _model(assessment_values[index], RuntimeStatusAssessment) if index < len(assessment_values) else None
+            result.append((str(artifact_id), sql, assessment))
+    if result:
+        return result
+    sql = _model(artifact_map.get("sql_artifact"), SqlStepArtifact)
+    assessment = _model(artifact_map.get("runtime_status_assessment"), RuntimeStatusAssessment)
+    return [("", sql, assessment)] if sql is not None else []
+
+
+def _attach_lineage(
+    manifests: list[ArtifactManifest],
+    *,
+    bundle: EvidenceBundle | None,
+    auth_summary: dict[str, Any],
+    goal_by_type: dict[str, list[str]],
+) -> None:
+    sql_ids = [item.artifact_id for item in manifests if item.artifact_type == "sql_artifact"]
+    knowledge_ids = [item.artifact_id for item in manifests if item.artifact_type == "knowledge_artifact"]
+    analysis_ids = [item.artifact_id for item in manifests if item.artifact_type in {"analysis_artifact", "structured_analysis_artifact"}]
+    report_ids = [item.artifact_id for item in manifests if item.artifact_type == "report_artifact"]
+    comparison_ids = [item.artifact_id for item in manifests if item.artifact_type == "comparison_artifact"]
+    sql_devices = _dedupe(device for item in manifests if item.artifact_type == "sql_artifact" for device in item.device_refs)
+    for item in manifests:
+        if item.artifact_type in {"analysis_artifact", "structured_analysis_artifact", "report_artifact"} and not item.device_refs:
+            item.device_refs = list(sql_devices)
+        if item.artifact_type == "sql_artifact":
+            sources: list[str] = []
+        elif item.artifact_type == "knowledge_artifact":
+            sources = []
+        elif item.artifact_type in {"analysis_artifact", "structured_analysis_artifact"}:
+            sources = [*sql_ids, *knowledge_ids]
+        elif item.artifact_type == "comparison_artifact":
+            sources = list(sql_ids)
+        elif item.artifact_type == "report_artifact":
+            sources = [*analysis_ids, *comparison_ids] or list(sql_ids)
+        elif item.artifact_type == "workorder_artifact":
+            sources = [*report_ids, *analysis_ids]
+        else:
+            sources = []
+        complete = bool(item.artifact_id) and (
+            item.artifact_type == "knowledge_artifact"
+            or bool(item.device_refs)
+        )
+        if item.artifact_type == "workorder_artifact":
+            complete = complete and len(item.device_refs) == 1 and bool(sources)
+        if item.artifact_type in {"analysis_artifact", "structured_analysis_artifact", "comparison_artifact", "report_artifact"}:
+            complete = complete and bool(sources)
+        item.owner_user_id = str(auth_summary.get("user_id") or "")
+        item.owner_session_id = str(auth_summary.get("session_id") or "")
+        item.lineage = ArtifactLineage(
+            lineage_status="complete" if complete else "invalid",
+            artifact_id=item.artifact_id,
+            artifact_type=item.artifact_type,
+            subject_device_refs=list(item.device_refs),
+            fault_code_refs=list(item.fault_code_refs),
+            source_artifact_ids=_dedupe(sources),
+            source_evidence_bundle_ids=[bundle.bundle_id] if bundle and bundle.bundle_id else [],
+            data_basis=(
+                [dict(item.data_basis)]
+                if item.data_basis
+                else [basis for source in manifests if source.artifact_id in sources for basis in source.lineage.data_basis]
+            ),
+            source_tables=(
+                [item.source_table]
+                if item.source_table
+                else _dedupe(
+                    table
+                    for source in manifests
+                    if source.artifact_id in sources
+                    for table in ([source.source_table] if source.source_table else source.lineage.source_tables)
+                )
+            ),
+            time_windows=(
+                [dict(item.resolved_window or item.time_window)]
+                if (item.resolved_window or item.time_window)
+                else [window for source in manifests if source.artifact_id in sources for window in source.lineage.time_windows]
+            ),
+            created_from_goal_ids=list(goal_by_type.get(_node_type_for_artifact(item.artifact_type), [])),
+        )
+
+
+def _node_type_for_artifact(artifact_type: str) -> str:
+    return {
+        "sql_artifact": "sql",
+        "knowledge_artifact": "rag",
+        "analysis_artifact": "analysis",
+        "structured_analysis_artifact": "analysis",
+        "comparison_artifact": "comparison",
+        "report_artifact": "report",
+        "workorder_artifact": "workorder",
+    }.get(artifact_type, "")
 
 
 def _artifact_id(prefix: str, trace_id: str, request_id: str, seed: str) -> str:

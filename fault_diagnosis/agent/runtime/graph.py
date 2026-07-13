@@ -20,6 +20,7 @@ class RuntimeGraph:
         self.nodes = _normalize_nodes(plan.nodes)
         self.parents: dict[str, set[str]] = {node_id: set() for node_id in self.nodes}
         self.children: dict[str, set[str]] = {node_id: set() for node_id in self.nodes}
+        self.edge_conditions: dict[tuple[str, str], dict[str, Any]] = {}
         self._load_edges(plan.edges)
         self.execution_order = self._topological_order()
 
@@ -28,6 +29,9 @@ class RuntimeGraph:
 
     def dependencies(self, node_id: str) -> set[str]:
         return set(self.parents.get(node_id, set()))
+
+    def dependency_is_optional(self, source: str, target: str) -> bool:
+        return bool(self.edge_conditions.get((source, target), {}).get("optional_on_failure"))
 
     def _load_edges(self, edges: list[dict[str, Any]]) -> None:
         if not edges:
@@ -38,15 +42,16 @@ class RuntimeGraph:
         for edge in edges:
             source = str(edge.get("from") or edge.get("source") or "").strip()
             target = str(edge.get("to") or edge.get("target") or "").strip()
-            self._add_edge(source, target)
+            self._add_edge(source, target, condition=dict(edge.get("condition") or {}))
 
-    def _add_edge(self, source: str, target: str) -> None:
+    def _add_edge(self, source: str, target: str, condition: dict[str, Any] | None = None) -> None:
         if source not in self.nodes or target not in self.nodes:
             raise RuntimeGraphError(f"Plan edge references unknown node: {source}->{target}")
         if source == target:
             raise RuntimeGraphError(f"Plan edge cannot be self-referential: {source}")
         self.children[source].add(target)
         self.parents[target].add(source)
+        self.edge_conditions[(source, target)] = dict(condition or {})
 
     def _topological_order(self) -> list[str]:
         indegree = {node_id: len(parents) for node_id, parents in self.parents.items()}

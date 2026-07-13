@@ -148,6 +148,7 @@ class EvidenceBundle(BaseModel):
 class SqlStepArtifact(BaseModel):
     """SQL 阶段产物。"""
 
+    artifact_id: str = ""
     success: bool
     summary: str
     sql_used: list[str] = Field(default_factory=list)
@@ -195,6 +196,7 @@ class FaultCodeEntry(BaseModel):
 class KnowledgeStepArtifact(BaseModel):
     """知识检索阶段产物。"""
 
+    artifact_id: str = ""
     success: bool
     query: str
     snippets: list[str] = Field(default_factory=list)
@@ -211,6 +213,7 @@ class KnowledgeStepArtifact(BaseModel):
 class AnalysisStepArtifact(BaseModel):
     """分析阶段产物。"""
 
+    artifact_id: str = ""
     success: bool
     conclusion: str
     basis: list[str] = Field(default_factory=list)
@@ -292,6 +295,7 @@ class WorkOrderDraftArtifact(BaseModel):
 class ReportStepArtifact(BaseModel):
     """报告阶段产物。"""
 
+    artifact_id: str = ""
     success: bool
     report_filename: str | None = None
     report_title: str | None = None

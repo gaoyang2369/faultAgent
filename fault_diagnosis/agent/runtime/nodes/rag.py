@@ -10,7 +10,7 @@ from fault_diagnosis.domain.diagnosis.contracts import KnowledgeStepArtifact
 from fault_diagnosis.domain.diagnosis.steps.knowledge_lookup import extract_fault_code_entries, extract_fault_codes_from_text
 from fault_diagnosis.domain.security.runtime_context import reset_current_auth_context, set_current_auth_context
 from fault_diagnosis.domain.diagnosis.evidence.knowledge import build_knowledge_evidence_items
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact
+from ...context.artifact_access import resolve_target_artifact
 from fault_diagnosis.agent.evidence.claims import build_v2_claim
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
@@ -79,6 +79,7 @@ class RagNode:
         entries = extract_fault_code_entries(text, requested_codes=requested_codes)
         fault_codes = [entry.code for entry in entries] or extract_fault_codes_from_text(text)
         artifact = KnowledgeStepArtifact(
+            artifact_id=f"knowledge:{state.trace_id or state.request_id or state.plan.plan_id}:{str(node.get('node_id') or 'rag')}",
             success=success,
             query=query,
             snippets=snippets,
@@ -195,14 +196,18 @@ def _previous_knowledge_artifact(*, node: dict[str, Any], state: RuntimeState) -
     source_refs = input_value(node, "source_artifact_refs", []) or []
     if not source_refs or not state.thread_id:
         return None
-    try:
-        envelope = get_thread_artifact(state.thread_id)
-    except Exception:
+    target_id = str((source_refs[0] if isinstance(source_refs[0], dict) else {}).get("artifact_id") or "")
+    access = resolve_target_artifact(
+        thread_id=state.thread_id,
+        artifact_id=target_id,
+        auth=auth_context(state),
+        expected_types={"knowledge_artifact"},
+        expected_devices=[],
+        require_complete_lineage=True,
+    )
+    if not access.allowed or access.record is None:
         return None
-    payload = getattr(envelope, "payload", None)
-    if not isinstance(payload, dict):
-        return None
-    artifact = _find_knowledge_artifact(payload)
+    artifact = _find_knowledge_artifact(access.record.payload)
     if artifact is None or not artifact.success:
         return None
     requested_codes = {str(code).upper() for code in input_value(node, "fault_code_refs", []) or []}

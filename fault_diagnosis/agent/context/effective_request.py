@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from fault_diagnosis.agent.contracts import ArtifactManifest, ContextFrame, EffectiveRequestFrame, IntentFrame
+from .goals import build_goal_query_specs, build_target_scope, canonicalize_goals, missing_goal_slots
 
 
 DETAIL_WORDS = ("详细", "展开", "手册字段", "完整字段", "原文")
@@ -250,9 +251,64 @@ class EffectiveRequestBuilder:
                 frame.clarification_question = str(fallback.get("clarification_question") or frame.clarification_question)
             frame.confidence = max(frame.confidence, _float(fallback.get("confidence"), 0.0))
 
+        inherited_devices = [item for item in frame.effective_device_refs if item not in intent_frame.device_refs]
+        scope_source = "artifact" if target is not None else "case_state" if active_case else "context_signal"
+        frame.target_scope = build_target_scope(
+            raw_message=raw_message,
+            current_devices=list(intent_frame.device_refs),
+            inherited_devices=inherited_devices,
+            source=scope_source,
+        )
+        frame.effective_device_refs = list(frame.target_scope.resolved_devices)
+        if frame.target_scope.operation == "replace" and target is not None:
+            if set(target.device_refs).intersection(frame.target_scope.excluded_devices) or (
+                target.device_refs and not set(target.device_refs).issubset(frame.target_scope.resolved_devices)
+            ):
+                frame.discarded_artifact_ids.append(target.artifact_id)
+                frame.target_artifact_id = None
+                frame.target_artifact_type = None
+                frame.target_evidence_bundle_id = None
+                frame.target_report_id = None
+                frame.effective_fault_code_refs = list(intent_frame.fault_code_refs)
+                frame.effective_time_window = dict(intent_frame.time_window)
+                frame.resolution_trace.append(
+                    {"stage": "target.discard", "artifact_id": target.artifact_id, "reason": "explicit_device_replace"}
+                )
+                target = None
+
+        frame.effective_goal_set = canonicalize_goals(
+            intent_frame,
+            target_scope=frame.target_scope,
+            source_policy=frame.evidence_policy,
+        )
+        frame.requested_goals = [goal.capability for goal in frame.effective_goal_set.goals]
+        frame.goal_query_specs = build_goal_query_specs(
+            goals=frame.effective_goal_set,
+            target_scope=frame.target_scope,
+            fault_codes=frame.effective_fault_code_refs,
+            time_window=frame.effective_time_window,
+        )
         _normalize_semantics(frame, compact)
         frame.effective_semantic_intent = frame.semantic_intent
         _validate_ambiguity(frame, target=target, manifests=manifests, compact=compact)
+        lineage_status = target.lineage.lineage_status if target is not None else ""
+        frame.clarification_reasons = missing_goal_slots(
+            goals=frame.effective_goal_set,
+            devices=frame.effective_device_refs,
+            fault_codes=frame.effective_fault_code_refs,
+            target_artifact_type=frame.target_artifact_type,
+            target_lineage_status=lineage_status,
+        )
+        if frame.clarification_reasons:
+            reason = frame.clarification_reasons[0]
+            frame.needs_clarification = True
+            frame.ambiguity = {
+                "goal_id": reason["goal_id"],
+                "slot": reason["missing_slot"],
+                "valid_slots": reason["valid_slots"],
+                "inheritance_failure": reason["inheritance_failure"],
+            }
+            frame.clarification_question = _clarification_question(str(reason["missing_slot"]))
         _finalize_contract(frame, context_frame=context_frame)
         return frame
 
@@ -277,7 +333,7 @@ def _select_target(
         preferred_types = ["report_artifact", "structured_analysis_artifact", "analysis_artifact"]
         pool = [item for item in completed if item.artifact_type in preferred_types and (item.actionable or item.available_actions)]
     elif wants_detail:
-        preferred_types = ["knowledge_artifact", "analysis_artifact", "structured_analysis_artifact", "report_artifact"]
+        preferred_types = ["analysis_artifact", "structured_analysis_artifact", "sql_artifact", "knowledge_artifact", "report_artifact"]
         pool = [item for item in completed if item.artifact_type in preferred_types and item.followupable]
     elif wants_report:
         preferred_types = ["structured_analysis_artifact", "analysis_artifact", "report_artifact", "sql_artifact"]
@@ -318,19 +374,23 @@ def _validate_ambiguity(
             frame.needs_clarification = True
             frame.clarification_question = "请确认要为哪个设备创建或判断工单。"
             frame.ambiguity = {"slot": "device", "candidate_count": len(target_or_effective_devices), "priority": "target_artifact"}
-        if _has_any(compact, DETAIL_WORDS) and len(target_or_effective_faults) != 1:
-            frame.needs_clarification = True
-            frame.clarification_question = "请确认要展开哪个故障码。"
-            frame.ambiguity = {"slot": "fault_code", "candidate_count": len(target_or_effective_faults), "priority": "target_artifact"}
         return
     if _has_any(compact, WORKORDER_WORDS) and len(_unique_device_refs(manifests)) > 1:
         frame.needs_clarification = True
         frame.clarification_question = "请确认要为哪个设备创建或判断工单。"
         frame.ambiguity = {"slot": "device", "candidate_count": len(_unique_device_refs(manifests)), "priority": "history"}
-    if _has_any(compact, DETAIL_WORDS) and len(_unique_fault_codes(manifests)) > 1:
-        frame.needs_clarification = True
-        frame.clarification_question = "请确认要展开哪个故障码。"
-        frame.ambiguity = {"slot": "fault_code", "candidate_count": len(_unique_fault_codes(manifests)), "priority": "history"}
+
+
+def _clarification_question(slot: str) -> str:
+    if slot == "fault_code":
+        return "请确认需要解释的故障码。"
+    if slot == "at_least_two_devices":
+        return "请至少确认两台需要比较的设备。"
+    if slot == "exactly_one_device":
+        return "该操作必须绑定一台设备，请明确要处理的设备。"
+    if slot in {"reportable_source", "complete_analysis_or_report_lineage"}:
+        return "缺少可安全继承的完整来源产物，请先重新查询或分析。"
+    return "请确认要查询或诊断的设备。"
 
 
 def _normalize_semantics(frame: EffectiveRequestFrame, compact: str) -> None:

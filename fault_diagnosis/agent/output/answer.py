@@ -16,7 +16,7 @@ from fault_diagnosis.domain.diagnosis.contracts import (
 )
 from fault_diagnosis.domain.diagnosis.runtime_status import RuntimeStatusAssessment
 from fault_diagnosis.domain.diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
-from ..contracts import NodeResult, OutputFrame
+from ..contracts import CompositeOutputFrame, DeliverableResult, NodeResult, OutputFrame, PlanGoal
 
 
 def build_output_frame(
@@ -30,6 +30,7 @@ def build_output_frame(
     cancelled: bool = False,
     cancel_reason: str | None = None,
     output_contract: dict[str, Any] | None = None,
+    goals: list[PlanGoal] | list[dict[str, Any]] | None = None,
 ) -> OutputFrame:
     """Return the internal V2 output frame before frontend compatibility projection."""
 
@@ -121,6 +122,23 @@ def build_output_frame(
         guardrail["error"] = dict(error)
     if cancel_reason:
         guardrail["cancel_reason"] = cancel_reason
+    deliverables = _build_deliverables(
+        goals=list(goals or []),
+        artifact_map=artifact_map,
+        knowledge_artifact=knowledge_artifact,
+        analysis_artifact=analysis_artifact,
+        report_artifact=report_artifact,
+        workorder_payload=workorder_payload,
+        node_results=node_result_items,
+    )
+    composite = CompositeOutputFrame(
+        deliverables=deliverables,
+        overall_status=_composite_status(deliverables, status),
+        legacy_answer_variant=variant,
+    )
+    composite_answer = _render_composite(deliverables)
+    if composite_answer:
+        final_answer = composite_answer
     return OutputFrame(
         answer_variant=variant,
         final_answer=final_answer,
@@ -131,6 +149,7 @@ def build_output_frame(
         guardrail_result=guardrail,
         runtime_status_assessment=_dump(runtime_assessment) or {},
         contract_validation=contract_validation,
+        composite_output=composite,
     )
 
 
@@ -167,6 +186,233 @@ def _infer_variant(
     if sql_artifact and sql_artifact.success:
         return "status_brief"
     return "clarification"
+
+
+def _build_deliverables(
+    *,
+    goals: list[PlanGoal] | list[dict[str, Any]],
+    artifact_map: dict[str, Any],
+    knowledge_artifact: KnowledgeStepArtifact | None,
+    analysis_artifact: AnalysisStepArtifact | None,
+    report_artifact: ReportStepArtifact | None,
+    workorder_payload: dict[str, Any],
+    node_results: list[Any],
+) -> list[DeliverableResult]:
+    results: list[DeliverableResult] = []
+    assessments_raw = artifact_map.get("runtime_status_assessments")
+    assessments = list(assessments_raw.values()) if isinstance(assessments_raw, dict) else []
+    if not assessments and artifact_map.get("runtime_status_assessment") is not None:
+        assessments = [artifact_map.get("runtime_status_assessment")]
+    comparison = _as_dict(artifact_map.get("comparison_artifact"))
+    clarification = _as_dict(artifact_map.get("clarification"))
+    sql_ids = [str(item) for item in artifact_map.get("sql_artifact_ids", []) if str(item)]
+    node_by_goal: dict[str, list[Any]] = {}
+    for node_result_item in node_results:
+        dumped = _dump(node_result_item) or {}
+        for goal_id in dumped.get("goal_ids", []) or []:
+            node_by_goal.setdefault(str(goal_id), []).append(dumped)
+
+    for raw_goal in goals:
+        goal = _dump(raw_goal) or {}
+        goal_id = str(goal.get("goal_id") or "")
+        deliverable_types = list(goal.get("requested_deliverables") or goal.get("expected_outputs") or [])
+        if goal.get("authorization_status") == "denied":
+            results.append(
+                DeliverableResult(
+                    goal_id=goal_id,
+                    deliverable_type="permission_denied",
+                    status="blocked",
+                    payload={"capability": goal.get("capability")},
+                    error_code=str(goal.get("drop_reason") or "capability_permission_denied"),
+                    error_message="当前身份无权执行该子目标。",
+                )
+            )
+            continue
+        if clarification:
+            results.append(
+                DeliverableResult(
+                    goal_id=goal_id,
+                    deliverable_type="clarification",
+                    status="blocked",
+                    payload=clarification,
+                    error_code="missing_required_slot",
+                    error_message=str(clarification.get("clarification_question") or "请确认缺失信息后继续。"),
+                )
+            )
+            continue
+        for deliverable_type in deliverable_types:
+            if deliverable_type not in {
+                "fault_code_explanation", "runtime_status", "runtime_comparison", "diagnosis",
+                "recommendations", "report", "workorder_draft", "clarification", "permission_denied",
+            }:
+                continue
+            if deliverable_type == "fault_code_explanation":
+                success = bool(knowledge_artifact and knowledge_artifact.success)
+                results.append(
+                    DeliverableResult(
+                        goal_id=goal_id,
+                        deliverable_type=deliverable_type,
+                        status="completed" if success else "failed",
+                        payload=_dump(knowledge_artifact) or {},
+                        error_code=None if success else str(getattr(knowledge_artifact, "error_code", "") or "knowledge_unavailable"),
+                        error_message=None if success else str(getattr(knowledge_artifact, "error", "") or "知识库未返回可靠释义。"),
+                    )
+                )
+            elif deliverable_type == "runtime_status":
+                results.append(
+                    DeliverableResult(
+                        goal_id=goal_id,
+                        deliverable_type=deliverable_type,
+                        status="completed" if assessments else _goal_failure_status(node_by_goal.get(goal_id, [])),
+                        payload={"assessments": [_dump(item) for item in assessments]},
+                        source_artifact_ids=sql_ids,
+                        error_code=None if assessments else "runtime_status_unavailable",
+                    )
+                )
+            elif deliverable_type == "runtime_comparison":
+                results.append(
+                    DeliverableResult(
+                        goal_id=goal_id,
+                        deliverable_type=deliverable_type,
+                        status="completed" if comparison else _goal_failure_status(node_by_goal.get(goal_id, [])),
+                        payload=comparison,
+                        source_artifact_ids=list(comparison.get("source_artifact_ids") or sql_ids),
+                        error_code=None if comparison else "comparison_unavailable",
+                    )
+                )
+            elif deliverable_type in {"diagnosis", "recommendations"}:
+                success = bool(analysis_artifact and analysis_artifact.success)
+                degraded = bool(knowledge_artifact is not None and not knowledge_artifact.success)
+                payload = (
+                    _dump(analysis_artifact) or {}
+                    if deliverable_type == "diagnosis"
+                    else {"recommendations": list(getattr(analysis_artifact, "recommendations", []) or [])}
+                )
+                results.append(
+                    DeliverableResult(
+                        goal_id=goal_id,
+                        deliverable_type=deliverable_type,
+                        status="partial" if success and degraded else "completed" if success else _goal_failure_status(node_by_goal.get(goal_id, [])),
+                        payload=payload,
+                        source_artifact_ids=sql_ids,
+                        error_code="knowledge_evidence_unavailable" if success and degraded else None if success else "analysis_unavailable",
+                    )
+                )
+            elif deliverable_type == "report":
+                success = bool(report_artifact and report_artifact.success)
+                results.append(
+                    DeliverableResult(
+                        goal_id=goal_id,
+                        deliverable_type=deliverable_type,
+                        status="completed" if success else _goal_failure_status(node_by_goal.get(goal_id, [])),
+                        payload=_dump(report_artifact) or {},
+                        source_artifact_ids=sql_ids,
+                        error_code=None if success else "report_unavailable",
+                    )
+                )
+            elif deliverable_type == "workorder_draft":
+                success = bool(workorder_payload.get("draft") or workorder_payload.get("draft_id"))
+                results.append(
+                    DeliverableResult(
+                        goal_id=goal_id,
+                        deliverable_type=deliverable_type,
+                        status="completed" if success else _goal_failure_status(node_by_goal.get(goal_id, [])),
+                        payload=dict(workorder_payload),
+                        source_artifact_ids=[
+                            str(item.get("artifact_id"))
+                            for item in workorder_payload.get("source_artifact_refs", [])
+                            if isinstance(item, dict) and item.get("artifact_id")
+                        ],
+                        error_code=None if success else "workorder_draft_unavailable",
+                    )
+                )
+    return results
+
+
+def _goal_failure_status(results: list[dict[str, Any]]) -> str:
+    statuses = {str(item.get("status") or "") for item in results}
+    if "blocked" in statuses or "skipped" in statuses:
+        return "blocked"
+    return "failed"
+
+
+def _composite_status(deliverables: list[DeliverableResult], fallback: str) -> str:
+    if not deliverables:
+        return fallback
+    statuses = {item.status for item in deliverables}
+    if statuses == {"completed"}:
+        return "completed"
+    if statuses.intersection({"completed", "partial"}):
+        return "partial"
+    if statuses == {"blocked"}:
+        return "blocked"
+    return "failed"
+
+
+def _render_composite(deliverables: list[DeliverableResult]) -> str:
+    headings = {
+        "fault_code_explanation": "故障码解释",
+        "runtime_status": "运行状态",
+        "runtime_comparison": "运行比较",
+        "diagnosis": "综合诊断",
+        "recommendations": "处理建议",
+        "report": "运行报告",
+        "workorder_draft": "工单草稿",
+        "clarification": "需要确认",
+        "permission_denied": "权限限制",
+    }
+    sections: list[str] = []
+    for item in deliverables:
+        if item.status in {"failed", "blocked"}:
+            body = item.error_message or {
+                "fault_code_explanation": "知识库未获得可靠释义。",
+                "runtime_status": "未获得可用运行数据。",
+                "runtime_comparison": "比较所需的设备数据不完整。",
+                "diagnosis": "依赖的运行证据不可用，未形成诊断结论。",
+                "recommendations": "缺少可靠诊断依据，未形成处理建议。",
+                "report": "依赖来源不可用，未生成报告。",
+                "workorder_draft": "来源或设备不满足要求，未生成工单草稿。",
+                "permission_denied": "当前身份无权执行该子目标。",
+            }.get(item.deliverable_type, "该交付物未完成。")
+        else:
+            body = _deliverable_body(item)
+            if item.status == "partial" and item.error_code:
+                body = f"{body}\n说明：部分证据不可用，结论已降级。".strip()
+        sections.append(f"【{headings[item.deliverable_type]}】\n{body}".strip())
+    return "\n\n".join(sections)
+
+
+def _deliverable_body(item: DeliverableResult) -> str:
+    payload = item.payload
+    if item.deliverable_type == "fault_code_explanation":
+        entries = payload.get("fault_code_entries") or []
+        if entries and isinstance(entries[0], dict):
+            entry = entries[0]
+            return "；".join(str(value) for value in (entry.get("code"), entry.get("meaning"), entry.get("cause"), entry.get("remedy")) if value)
+        return str(payload.get("raw_output") or payload.get("query") or "已获得知识库解释。")
+    if item.deliverable_type == "runtime_status":
+        lines = []
+        for assessment in payload.get("assessments", []):
+            if isinstance(assessment, dict):
+                basis = assessment.get("data_basis") if isinstance(assessment.get("data_basis"), dict) else {}
+                latest = str(basis.get("latest_sample_time") or "").replace("T", " ")
+                suffix = f" 最新样本：{latest}。" if latest else ""
+                limitations = " ".join(str(item) for item in assessment.get("limitations", []) if str(item))
+                limitation_suffix = f" {limitations}" if limitations else ""
+                lines.append(f"{assessment.get('device', '设备')}：{assessment.get('runtime_status', 'unknown')}。{suffix}{limitation_suffix}".strip())
+        return "\n".join(lines) or "已完成运行状态评估。"
+    if item.deliverable_type == "runtime_comparison":
+        return str(payload.get("conclusion") or "已完成设备运行比较。")
+    if item.deliverable_type == "diagnosis":
+        return str(payload.get("conclusion") or "已完成综合诊断。")
+    if item.deliverable_type == "recommendations":
+        return "\n".join(f"{index}. {value}" for index, value in enumerate(payload.get("recommendations", []), start=1)) or "暂无额外处理建议。"
+    if item.deliverable_type == "report":
+        link = payload.get("report_url") or payload.get("report_filename") or ""
+        return f"报告已生成：{link}" if link else "报告已生成。"
+    if item.deliverable_type == "workorder_draft":
+        return "工单草稿已生成，需人工确认后方可进入后续流程；本轮未派发。"
+    return str(payload.get("message") or "已完成。")
 
 
 def _render_answer(

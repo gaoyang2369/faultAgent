@@ -15,7 +15,12 @@ _MODEL_CODES = {"G120", "S120", "G130", "G150", "V20"}
 
 _EXPLAIN_WORDS = ("是什么", "什么意思", "含义", "故障码", "告警码", "报警码", "异常码", "详细", "原文", "手册字段", "完整字段")
 _STATUS_WORDS = ("现在", "当前", "最新", "还故障", "还在", "状态", "运行", "看一下")
-_DIAGNOSIS_WORDS = ("诊断", "是否有故障", "是不是有故障", "有没有故障", "是否异常", "有没有异常", "判断异常", "判断它有没有异常")
+_DIAGNOSIS_WORDS = (
+    "诊断", "是否有故障", "是不是有故障", "有没有故障", "是否存在故障", "判断是否存在故障",
+    "是否异常", "是否存在异常", "有没有异常", "判断异常", "判断它有没有异常",
+)
+_RECOMMENDATION_WORDS = ("处理建议", "处置建议", "解决建议", "维修建议", "给出建议", "怎么处理")
+_COMPARE_WORDS = ("比较", "对比", "差异")
 _HEALTH_WORDS = ("健康状况", "健康状态", "健康评估")
 _ROOT_CAUSE_WORDS = ("根因", "为什么", "原因", "故障原因", "异常原因", "分析原因", "原因分析")
 _REPORT_WORDS = ("报告", "导出", "生成报告", "出报告", "整理成报告", "形成报告")
@@ -125,10 +130,15 @@ def _infer_sub_intents(compact: str, *, device_refs: list[str], fault_code_refs:
         intents.append("health_assessment")
     elif _has_any(compact, _DIAGNOSIS_WORDS):
         intents.append("diagnose_fault")
-    if _has_any(compact, _STATUS_WORDS) and not set(intents).intersection(
-        {"diagnose_fault", "health_assessment", "root_cause_analysis"}
-    ):
-        intents.append("check_current_status")
+    if _has_any(compact, _COMPARE_WORDS) and len(device_refs) >= 2:
+        intents.append("compare_runtime_status")
+    elif _has_any(compact, _STATUS_WORDS):
+        has_diagnosis = bool(set(intents).intersection({"diagnose_fault", "health_assessment", "root_cause_analysis"}))
+        explicitly_queries_status = any(word in compact for word in ("查询", "运行状态", "最近", "状态"))
+        if not has_diagnosis or explicitly_queries_status:
+            intents.append("check_current_status")
+    if _has_any(compact, _RECOMMENDATION_WORDS):
+        intents.append("resolution_recommendation")
     if _has_any(compact, _REPORT_WORDS):
         intents.append("generate_report")
     if _has_any(compact, _WORKORDER_DECISION_WORDS):
@@ -150,6 +160,10 @@ def _infer_requested_outputs(sub_intents: list[str]) -> list[str]:
         outputs.append("answer")
     if "generate_report" in sub_intents:
         outputs.append("report")
+    if "compare_runtime_status" in sub_intents:
+        outputs.append("runtime_comparison")
+    if "resolution_recommendation" in sub_intents:
+        outputs.append("recommendations")
     if "decide_workorder" in sub_intents:
         outputs.append("workorder_decision")
     if "create_workorder_draft" in sub_intents:
@@ -249,6 +263,8 @@ def _primary_intent(sub_intents: list[str]) -> str:
         "create_workorder_draft",
         "decide_workorder",
         "generate_report",
+        "resolution_recommendation",
+        "compare_runtime_status",
         "root_cause_analysis",
         "health_assessment",
         "diagnose_fault",

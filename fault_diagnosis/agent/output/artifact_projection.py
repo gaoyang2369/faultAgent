@@ -20,6 +20,7 @@ def project_artifact_envelope(
     node_results: list[NodeResult] | list[dict[str, Any]] | None = None,
     trace: dict[str, Any] | None = None,
     request_summary: str = "",
+    auth_summary: dict[str, Any] | None = None,
 ) -> DiagnosisArtifactEnvelope:
     """Build the legacy persisted artifact envelope from V2 output."""
 
@@ -32,6 +33,7 @@ def project_artifact_envelope(
         evidence_bundle=evidence_bundle,
         node_results=node_results or [],
         trace=trace,
+        auth_summary=auth_summary,
     )
     payload = {
         "engine": "agent_engine_v2",
@@ -41,6 +43,7 @@ def project_artifact_envelope(
         "trace": dict(trace or {}),
         "artifact_manifests": [item.model_dump(mode="json", exclude_none=True) for item in manifests],
         "latest_focus": latest_focus_from_manifests(manifests),
+        "artifacts_by_id": _artifacts_by_id(manifests, artifact_map),
         **{key: _dump(value) for key, value in artifact_map.items()},
     }
     envelope = DiagnosisArtifactEnvelope(
@@ -86,3 +89,24 @@ def _dump(value: Any) -> Any:
     if isinstance(value, dict):
         return dict(value)
     return value
+
+
+def _artifacts_by_id(manifests: list[Any], artifacts: dict[str, Any]) -> dict[str, Any]:
+    key_by_type = {
+        "knowledge_artifact": "knowledge_artifact",
+        "analysis_artifact": "analysis_artifact",
+        "structured_analysis_artifact": "structured_analysis_artifact",
+        "comparison_artifact": "comparison_artifact",
+        "report_artifact": "report_artifact",
+        "workorder_artifact": "workorder_draft",
+    }
+    result: dict[str, Any] = {}
+    sql_registry = artifacts.get("sql_artifacts") if isinstance(artifacts.get("sql_artifacts"), dict) else {}
+    for manifest in manifests:
+        if manifest.artifact_type == "sql_artifact" and manifest.artifact_id in sql_registry:
+            result[manifest.artifact_id] = _dump(sql_registry[manifest.artifact_id])
+            continue
+        key = key_by_type.get(manifest.artifact_type)
+        if key and artifacts.get(key) is not None:
+            result[manifest.artifact_id] = _dump(artifacts[key])
+    return result

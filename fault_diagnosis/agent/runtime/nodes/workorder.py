@@ -12,7 +12,7 @@ from fault_diagnosis.domain.diagnosis.workorder.drafts import (
 )
 from fault_diagnosis.domain.diagnosis.workorder.suggestions import build_workorder_suggestion
 from fault_diagnosis.domain.diagnosis.workorder.suggestions import build_workorder_suggestion_from_artifact
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact
+from ...context.artifact_access import resolve_target_artifact
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
 from .base import auth_context, build_decision_stub, build_request, input_value, model_to_dict
@@ -35,7 +35,36 @@ class WorkorderNode:
                 output=output,
                 error={"code": "workorder_dispatch_forbidden", "message": output["reason"]},
             )
-
+        access_error = str(input_value(node, "artifact_access_error", "") or "")
+        devices = [str(item) for item in (input_value(node, "device_refs", []) or []) if str(item)]
+        if access_error:
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"success": False, "artifact_access_error": access_error},
+                error={"code": access_error, "message": "目标 Artifact 精确读取或 lineage 校验失败。"},
+            )
+        if len(devices) != 1:
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"success": False, "device_refs": devices},
+                error={"code": "workorder_requires_exactly_one_device", "message": "工单草稿必须明确绑定一台设备。"},
+            )
+        target_id = str(input_value(node, "target_artifact_id", "") or "")
+        if target_id and not any(key in state.artifacts for key in ("analysis_artifact", "structured_analysis_artifact", "report_artifact")):
+            access = resolve_target_artifact(
+                thread_id=state.thread_id or "",
+                artifact_id=target_id,
+                auth=auth_context(state),
+                expected_types={"report_artifact", "analysis_artifact", "structured_analysis_artifact"},
+                expected_devices=devices,
+                require_complete_lineage=True,
+            )
+            if not access.allowed:
+                return NodeExecutionOutput(
+                    status="blocked",
+                    output={"success": False, "artifact_access_error": access.code},
+                    error={"code": access.code, "message": "目标 Artifact 精确读取或 lineage 校验失败。"},
+                )
         suggestion = _suggestion_from_target_artifact(node, state)
         if suggestion is None:
             request = build_request(state, node, goal="工单建议")
@@ -145,12 +174,19 @@ def _suggestion_from_target_artifact(node: dict[str, Any], state: RuntimeState) 
     source_refs = input_value(node, "source_artifact_refs", []) or []
     if not target_id and not source_refs:
         return None
-    envelope = get_thread_artifact(state.thread_id or "")
-    if envelope is None:
+    access = resolve_target_artifact(
+        thread_id=state.thread_id or "",
+        artifact_id=target_id,
+        auth=auth_context(state),
+        expected_types={"report_artifact", "analysis_artifact", "structured_analysis_artifact"},
+        expected_devices=[str(item) for item in (input_value(node, "device_refs", []) or []) if str(item)],
+        require_complete_lineage=True,
+    )
+    if not access.allowed or access.record is None:
         return None
     try:
         return build_workorder_suggestion_from_artifact(
-            envelope=envelope,
+            envelope=access.record.envelope,
             decision=build_decision_stub(node),
             user_identity=(auth_context(state).display_name or auth_context(state).user_id or auth_context(state).role),
         )
@@ -160,10 +196,10 @@ def _suggestion_from_target_artifact(node: dict[str, Any], state: RuntimeState) 
 
 def _report_artifact_id(state: RuntimeState) -> str | None:
     report = state.artifacts.get("report_artifact")
-    if hasattr(report, "report_url"):
-        return report.report_url
+    if hasattr(report, "artifact_id"):
+        return report.artifact_id or None
     if isinstance(report, dict):
-        return report.get("report_url") or report.get("report_filename")
+        return report.get("artifact_id")
     return None
 
 

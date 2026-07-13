@@ -174,6 +174,16 @@ class SqlNode:
         artifact.status_reasons = list(assessment.status_reasons)
         artifact.key_findings = list(assessment.key_findings)
         artifact.supporting_evidence_ids = list(assessment.supporting_evidence_ids)
+        node_id = str(node.get("node_id") or "sql")
+        runtime_artifact_id = f"sql:{state.trace_id or state.request_id or state.plan.plan_id}:{node_id}"
+        artifact.artifact_id = runtime_artifact_id
+        sql_artifacts = state.artifacts.setdefault("sql_artifacts", {})
+        sql_rows_by_device = state.artifacts.setdefault("sql_rows_by_device", {})
+        assessments = state.artifacts.setdefault("runtime_status_assessments", {})
+        sql_artifacts[runtime_artifact_id] = artifact
+        sql_rows_by_device[assessment.device] = rows
+        assessments[assessment.device] = assessment
+        state.artifacts.setdefault("sql_artifact_ids", []).append(runtime_artifact_id)
         state.artifacts["sql_artifact"] = artifact
         state.artifacts["sql_rows"] = rows
         state.artifacts["runtime_status_assessment"] = assessment
@@ -187,11 +197,21 @@ class SqlNode:
                 "normalized_rows": rows,
                 "sql_used": sql_used,
                 "claim_type": "runtime_status_assessment",
+                "artifact_id": runtime_artifact_id,
+                "device": assessment.device,
             },
             tool_call_refs=tool_call_refs,
             proposed_evidence=evidence,
             proposed_claims=[model_to_dict(claim)],
-            artifacts={"sql_artifact": artifact, "sql_rows": rows, "runtime_status_assessment": assessment},
+            artifacts={
+                "sql_artifact": artifact,
+                "sql_rows": rows,
+                "runtime_status_assessment": assessment,
+                "sql_artifacts": sql_artifacts,
+                "sql_rows_by_device": sql_rows_by_device,
+                "runtime_status_assessments": assessments,
+                "sql_artifact_ids": state.artifacts["sql_artifact_ids"],
+            },
         )
 
 

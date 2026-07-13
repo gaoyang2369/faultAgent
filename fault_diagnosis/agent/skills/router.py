@@ -77,15 +77,20 @@ def _select_skills(
 ) -> list[str]:
     if effective_request_frame is not None:
         semantic = effective_request_frame.effective_semantic_intent or effective_request_frame.semantic_intent
+        capabilities = {
+            goal.capability
+            for goal in effective_request_frame.effective_goal_set.goals
+            if not effective_request_frame.authorized_goal_ids or goal.goal_id in effective_request_frame.authorized_goal_ids
+        }
         text = f"{intent_frame.normalized_message} {rewrite_frame.user_rewrite}"
         selected: list[str] = []
         if any(word in text for word in ("根因", "原因分析", "为什么", "排查")):
             selected.append("root_cause")
-        if semantic in {"explain_fault_code", "expand_previous_answer", "show_manual_fields"}:
+        if capabilities.intersection({"explain_fault_code"}) or semantic in {"explain_fault_code", "expand_previous_answer", "show_manual_fields"}:
             selected.append("fault_code_explain")
-        if semantic in {"check_runtime_status", "refresh_then_decide_workorder"}:
+        if capabilities.intersection({"check_runtime_status", "compare_runtime_status"}) or semantic in {"check_runtime_status", "refresh_then_decide_workorder"}:
             selected.append("runtime_status")
-        if semantic in {"diagnose_fault", "health_assessment", "diagnose_from_runtime"}:
+        if capabilities.intersection({"diagnose_fault", "resolution_recommendation"}) or semantic in {"diagnose_fault", "health_assessment", "diagnose_from_runtime"}:
             selected.append("alarm_triage")
         if semantic == "root_cause_analysis":
             selected.append("root_cause")
@@ -97,11 +102,11 @@ def _select_skills(
             selected.append("alarm_triage")
         if semantic in {"diagnose_from_runtime", "refresh_then_decide_workorder"}:
             selected.extend(["alarm_triage", "root_cause"])
-        if semantic in {"generate_report", "generate_report_from_previous"}:
+        if "generate_report" in capabilities or semantic in {"generate_report", "generate_report_from_previous"}:
             selected.append("report_generation")
         if "generate_report" in set(intent_frame.sub_intents) or "report" in intent_frame.requested_outputs:
             selected.append("report_generation")
-        if semantic in {"decide_workorder", "create_workorder_draft", "refresh_then_decide_workorder"}:
+        if "create_workorder_draft" in capabilities or semantic in {"decide_workorder", "create_workorder_draft", "refresh_then_decide_workorder"}:
             selected.append("workorder_decision")
         if set(intent_frame.sub_intents).intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"}):
             selected.append("workorder_decision")

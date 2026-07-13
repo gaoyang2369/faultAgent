@@ -65,6 +65,7 @@ class RuntimeState(BaseModel):
     trace_events: list[RuntimeTraceEvent] = Field(default_factory=list)
     interrupts: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[dict[str, Any]] = Field(default_factory=list)
+    deliverable_statuses: list[dict[str, Any]] = Field(default_factory=list)
     started_at: str = Field(default_factory=lambda: _timestamp())
 
     def add_trace(self, event_type: str, **payload: Any) -> RuntimeTraceEvent:
@@ -109,6 +110,16 @@ class RuntimeState(BaseModel):
 
     def trace_payload(self) -> dict[str, Any]:
         events = [event.model_dump(mode="json") for event in self.trace_events]
+        requested_goals = [goal.model_dump(mode="json") for goal in self.plan.goals]
+        executed_goal_ids = list(
+            dict.fromkeys(
+                goal_id
+                for result in self.node_results
+                if result.status in {"completed", "failed", "blocked"}
+                for goal_id in result.goal_ids
+            )
+        )
+        first_inputs = dict(self.plan.nodes[0].inputs) if self.plan.nodes else {}
         return {
             "runtime": "agent_engine_v2",
             "status": self.status,
@@ -125,6 +136,26 @@ class RuntimeState(BaseModel):
             "errors": list(self.errors),
             "interrupts": list(self.interrupts),
             "evidence_quality": dict(self.evidence_ledger.quality_checks),
+            "requested_goals": requested_goals,
+            "authorized_goals": [item for item in requested_goals if item.get("authorization_status") == "authorized"],
+            "executed_goals": executed_goal_ids,
+            "dropped_goals": [item for item in requested_goals if item.get("authorization_status") == "denied"],
+            "goal_node_mapping": {
+                goal.goal_id: [node.node_id for node in self.plan.nodes if goal.goal_id in node.goal_ids]
+                for goal in self.plan.goals
+            },
+            "target_scope_id": str(first_inputs.get("target_scope_id") or ""),
+            "resolved_devices": list(dict.fromkeys(
+                str(device)
+                for node in self.plan.nodes
+                for device in (node.inputs.get("device_refs") or [])
+                if str(device)
+            )),
+            "deliverable_statuses": list(self.deliverable_statuses),
+            "artifacts": {
+                "sql_artifact_ids": list(self.artifacts.get("sql_artifact_ids", [])),
+                "available_types": [key for key, value in self.artifacts.items() if value is not None],
+            },
         }
 
 
@@ -187,6 +218,9 @@ def node_result(
         error=error,
         retry_count=retry_count,
         duration_ms=max(0.0, duration_ms),
+        goal_ids=list(node.get("goal_ids") or ([node.get("goal_id")] if node.get("goal_id") else [])),
+        query_spec_id=str(node.get("query_spec_id") or ""),
+        target_scope_id=str(node.get("target_scope_id") or ""),
     )
 
 

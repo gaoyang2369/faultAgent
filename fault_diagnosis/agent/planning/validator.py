@@ -102,6 +102,7 @@ class PlanValidator:
         validated.risk_level = self.bridge.max_risk([validated.risk_level, policy.risk_level])
 
         allowed_by_skill = set(self.bridge.allowed_tools_for_skills(skill_names))
+        validated.forbidden_tools = [tool for tool in validated.forbidden_tools if tool not in allowed_by_skill]
         if not allowed_by_skill and primary_skill == "clarification":
             allowed_by_skill = set()
         allowed_tools: list[str] = []

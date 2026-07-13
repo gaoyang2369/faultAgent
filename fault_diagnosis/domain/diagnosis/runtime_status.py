@@ -65,6 +65,20 @@ class RuntimeStatusAssessment(_Contract):
     supporting_evidence_ids: list[str] = Field(default_factory=list)
 
 
+class ComparisonFinding(_Contract):
+    dimension: str
+    values_by_device: dict[str, Any] = Field(default_factory=dict)
+    conclusion: str
+
+
+class RuntimeComparisonArtifact(_Contract):
+    devices: list[str]
+    assessments: list[RuntimeStatusAssessment]
+    comparison_dimensions: list[ComparisonFinding] = Field(default_factory=list)
+    conclusion: str
+    source_artifact_ids: list[str] = Field(default_factory=list)
+
+
 class DataResolutionPolicy(_Contract):
     strategy: ResolutionStrategy = "realtime_then_latest"
     data_environment: Literal["simulation", "production"] = "simulation"

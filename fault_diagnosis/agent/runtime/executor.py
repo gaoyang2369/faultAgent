@@ -110,6 +110,7 @@ class WorkflowRuntimeExecutor:
                 "workorder": FakeTypedNode("workorder", emits_evidence=False),
                 "approval": FakeTypedNode("approval", emits_evidence=False),
                 "clarification": FakeTypedNode("clarification", emits_evidence=False),
+                "comparison": FakeTypedNode("comparison", emits_evidence=False),
             }
         registry.update(node_registry or {})
         self.node_registry = registry
@@ -162,7 +163,11 @@ class WorkflowRuntimeExecutor:
                 self._cancel_remaining(state, graph, after_node_id=node_id, node_status=node_status)
                 return self._finish_cancelled(state)
 
-            failed_deps = [dep for dep in graph.dependencies(node_id) if node_status.get(dep) != "completed"]
+            failed_deps = [
+                dep
+                for dep in graph.dependencies(node_id)
+                if node_status.get(dep) != "completed" and not graph.dependency_is_optional(dep, node_id)
+            ]
             if failed_deps:
                 result = node_result(
                     node=node,
@@ -234,14 +239,19 @@ class WorkflowRuntimeExecutor:
             if result.status == "cancelled":
                 self._cancel_remaining(state, graph, after_node_id=node_id, node_status=node_status)
                 return self._finish_cancelled(state)
+            failure_policy = str(node.get("failure_policy") or "block_all")
             if result.status == "blocked":
-                return self._finish_blocked(
-                    state,
-                    code=(result.error or {}).get("code", "node_blocked"),
-                    message=(result.error or {}).get("message", "Node blocked execution."),
-                )
+                if failure_policy == "block_all":
+                    return self._finish_blocked(
+                        state,
+                        code=(result.error or {}).get("code", "node_blocked"),
+                        message=(result.error or {}).get("message", "Node blocked execution."),
+                    )
+                continue
             if result.status == "failed":
-                return self._finish_failed(state, error=result.error or {})
+                if failure_policy == "block_all":
+                    return self._finish_failed(state, error=result.error or {})
+                continue
 
         return self._finish_completed(state)
 
@@ -325,6 +335,12 @@ class WorkflowRuntimeExecutor:
                     duration_ms=duration_ms,
                     retry_count=attempts,
                     error=result.error,
+                    metadata={
+                        "goal_ids": list(node.get("goal_ids") or []),
+                        "query_spec_id": str(node.get("query_spec_id") or ""),
+                        "target_scope_id": str(node.get("target_scope_id") or ""),
+                        "failure_policy": str(node.get("failure_policy") or "block_all"),
+                    },
                 )
                 return result
             except Exception as exc:  # noqa: BLE001 - fake nodes intentionally simulate arbitrary failures.
@@ -362,6 +378,12 @@ class WorkflowRuntimeExecutor:
             duration_ms=duration_ms,
             retry_count=attempts,
             error=result.error,
+            metadata={
+                "goal_ids": list(node.get("goal_ids") or []),
+                "query_spec_id": str(node.get("query_spec_id") or ""),
+                "target_scope_id": str(node.get("target_scope_id") or ""),
+                "failure_policy": str(node.get("failure_policy") or "block_all"),
+            },
         )
         return result
 
@@ -425,6 +447,10 @@ class WorkflowRuntimeExecutor:
         state.finalize_ledger()
         state.add_trace("runtime_status", status="cancelled", metadata={"cancel_reason": state.cancel_token.reason})
         output_frame = _runtime_output_frame(state, status="cancelled", cancelled=True)
+        state.deliverable_statuses = [
+            {"goal_id": item.goal_id, "deliverable_type": item.deliverable_type, "status": item.status}
+            for item in output_frame.composite_output.deliverables
+        ]
         complete = build_complete_payload(
             state=state,
             status="cancelled",
@@ -446,14 +472,25 @@ class WorkflowRuntimeExecutor:
 def _runtime_result(state: RuntimeState, *, status: str, final_content: str) -> RuntimeResult:
     state.finalize_ledger()
     output_frame = _runtime_output_frame(state, status=status)
+    state.deliverable_statuses = [
+        {"goal_id": item.goal_id, "deliverable_type": item.deliverable_type, "status": item.status}
+        for item in output_frame.composite_output.deliverables
+    ]
+    effective_status = status
+    if status == "completed" and not state.artifacts.get("clarification") and output_frame.composite_output.deliverables:
+        if output_frame.composite_output.overall_status == "failed":
+            effective_status = "failed"
+        elif output_frame.composite_output.overall_status == "blocked":
+            effective_status = "blocked"
+    state.status = effective_status  # type: ignore[assignment]
     complete = build_complete_payload(
         state=state,
-        status=status,  # type: ignore[arg-type]
+        status=effective_status,  # type: ignore[arg-type]
         final_content=final_content,
         output_frame=output_frame,
     )
     return RuntimeResult(
-        status=status,  # type: ignore[arg-type]
+        status=effective_status,  # type: ignore[arg-type]
         node_results=list(state.node_results),
         evidence_ledger=state.evidence_ledger,
         output_frame=output_frame,
@@ -478,6 +515,7 @@ def _runtime_output_frame(state: RuntimeState, *, status: str, cancelled: bool =
         cancelled=cancelled,
         cancel_reason=state.cancel_token.reason if cancelled else None,
         output_contract=state.plan.output_contract,
+        goals=state.plan.goals,
     )
 
 

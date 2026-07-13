@@ -6,9 +6,9 @@ trigger_intents:
   - check_current_status
 required_slots:
   - device
-  - fault_code
 optional_slots:
   - time_window
+  - fault_code
 required_evidence:
   - latest_runtime_status
   - fault_code_manual
@@ -32,9 +32,9 @@ fallback_policy: run_partial_status_or_code_explain
 slot_policy:
   required:
     - device_refs
-    - fault_code_refs
   optional:
     - time_window
+    - fault_code_refs
   inherit_allowed:
     - device_refs
     - fault_code_refs
@@ -52,10 +52,10 @@ evidence_policy:
   missing_evidence_behavior: partial_disclose
 node_policy:
   required_nodes:
+    - analysis
+  optional_nodes:
     - sql
     - rag
-    - analysis
-  optional_nodes: []
   forbidden_nodes:
     - report
     - workorder

@@ -9,6 +9,8 @@ from fault_diagnosis.domain.diagnosis.contracts import DiagnosisRequest
 from fault_diagnosis.domain.diagnosis.report_mapper import map_artifact_to_report_payload
 from fault_diagnosis.domain.security.sql_safety import build_fallback_sql_query
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact
+from fault_diagnosis.domain.security.permissions import build_auth_context
+from ..context.artifact_access import resolve_target_artifact
 
 from ..contracts import ExecutionPlan, PlanSnapshotV2
 from ..planning import PlanValidationResult, PlanValidator
@@ -37,7 +39,7 @@ def prepare_v2_execution_validation(
     thread_id: str,
     auth_context: Any | None = None,
 ) -> PlanValidationResult:
-    prepared = _prepare_plan(snapshot.execution_plan, snapshot=snapshot, thread_id=thread_id)
+    prepared = _prepare_plan(snapshot.execution_plan, snapshot=snapshot, thread_id=thread_id, auth_context=auth_context)
     return PlanValidator().validate(
         candidate_plan=prepared,
         skill_route=snapshot.skill_route,
@@ -59,14 +61,15 @@ def decide_v2_execution(
     return V2ExecutionDecision(True, skill_name, "v2", prepared, reason)
 
 
-def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: str) -> ExecutionPlan:
+def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: str, auth_context: Any | None = None) -> ExecutionPlan:
     prepared = plan.model_copy(deep=True)
+    auth = auth_context or build_auth_context(role="guest")
     planned_node_types = {str(node.get("node_type") or "") for node in prepared.nodes}
     for node in prepared.nodes:
         node_type = str(node.get("node_type") or "")
         inputs = dict(node.get("inputs") or {})
         if node_type == "rag":
-            query = _rag_query(snapshot)
+            query = _rag_query(snapshot, node)
             if query:
                 inputs["query"] = query
             inputs.setdefault("retrieval_strategy", _rag_retrieval_strategy(snapshot))
@@ -76,14 +79,20 @@ def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: s
             if refs:
                 inputs.setdefault("source_artifact_refs", refs)
         elif node_type == "sql":
-            request = _diagnosis_request(snapshot)
-            query = build_fallback_sql_query(request, asset_filters=list(_effective_devices(snapshot)))
+            node_devices = [str(item) for item in inputs.get("device_refs", []) if str(item)]
+            request = _diagnosis_request(snapshot, devices=node_devices)
+            query = build_fallback_sql_query(request, asset_filters=node_devices)
             inputs.setdefault("sql_query", query)
             inputs.setdefault("use_checker", False)
             inputs.setdefault("equipment_hint", request.equipment_hint or "")
             inputs.setdefault("fault_code_hint", request.fault_code_hint or "")
         elif node_type == "report":
-            reportable = _reportable_payload(thread_id)
+            reportable = _reportable_payload(
+                thread_id,
+                target_id=str(inputs.get("target_artifact_id") or snapshot.effective_request_frame.target_artifact_id or ""),
+                auth_context=auth,
+                expected_devices=_effective_devices(snapshot),
+            )
             if reportable:
                 inputs.update(
                     {
@@ -95,11 +104,26 @@ def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: s
                 )
             elif not inputs.get("operation_report_payload") and "analysis" in planned_node_types:
                 inputs.setdefault("operation_report_payload", "__runtime_artifacts__")
+        elif node_type == "analysis" and snapshot.effective_request_frame.target_artifact_id:
+            access = resolve_target_artifact(
+                thread_id=thread_id,
+                artifact_id=snapshot.effective_request_frame.target_artifact_id,
+                auth=auth,
+                expected_types={"sql_artifact", "analysis_artifact", "structured_analysis_artifact"},
+                expected_devices=_effective_devices(snapshot),
+                require_complete_lineage=True,
+            )
+            if access.allowed and access.record is not None:
+                inputs["source_artifact_id"] = snapshot.effective_request_frame.target_artifact_id
+                inputs["source_artifact_type"] = str(access.record.manifest.get("artifact_type") or "")
+                inputs["source_artifact_payload"] = access.record.payload
+            else:
+                inputs["artifact_access_error"] = access.code
         if node_type == "workorder":
             inputs.setdefault("create_draft", True)
             inputs.setdefault("manual_confirmation_required", True)
             inputs.setdefault("draft_only", True)
-            inputs.update(_workorder_manifest_inputs(thread_id, snapshot=snapshot, inputs=inputs))
+            inputs.update(_workorder_manifest_inputs(thread_id, snapshot=snapshot, inputs=inputs, auth_context=auth))
         if inputs:
             node["inputs"] = inputs
     return prepared
@@ -111,7 +135,7 @@ def _readiness_blocker(skill_name: str, plan: ExecutionPlan, *, snapshot: PlanSn
         has_query = any(str((node.get("inputs") or {}).get("query") or "").strip() for node in plan.nodes if node.get("node_type") == "rag")
         return "" if "rag" in node_types and has_query else "fault_code_explain_missing_rag_query"
     if skill_name == "runtime_status":
-        has_device = bool(snapshot.intent_frame.device_refs)
+        has_device = bool(_effective_devices(snapshot))
         has_sql = any(str((node.get("inputs") or {}).get("sql_query") or "").strip() for node in plan.nodes if node.get("node_type") == "sql")
         if not has_device:
             return "runtime_status_missing_device"
@@ -124,7 +148,7 @@ def _readiness_blocker(skill_name: str, plan: ExecutionPlan, *, snapshot: PlanSn
         )
         return "" if has_report_payload else "report_generation_missing_reportable_artifact"
     if skill_name in {"alarm_triage", "root_cause"}:
-        has_device = bool(snapshot.intent_frame.device_refs)
+        has_device = bool(_effective_devices(snapshot))
         has_sql = any(str((node.get("inputs") or {}).get("sql_query") or "").strip() for node in plan.nodes if node.get("node_type") == "sql")
         if "sql" in node_types and not has_device:
             return f"{skill_name}_missing_device"
@@ -134,8 +158,12 @@ def _readiness_blocker(skill_name: str, plan: ExecutionPlan, *, snapshot: PlanSn
     return ""
 
 
-def _rag_query(snapshot: PlanSnapshotV2) -> str:
+def _rag_query(snapshot: PlanSnapshotV2, node: Any | None = None) -> str:
     effective = snapshot.effective_request_frame
+    query_spec_id = str((node.get("query_spec_id") if node is not None else "") or "")
+    for spec in effective.goal_query_specs:
+        if spec.query_spec_id == query_spec_id and spec.rag_query:
+            return spec.rag_query
     codes = [item for item in _effective_fault_codes(snapshot) if str(item).strip()]
     if (
         effective.semantic_intent in {"expand_previous_answer", "show_manual_fields"}
@@ -167,8 +195,8 @@ def _rag_source_artifact_refs(snapshot: PlanSnapshotV2) -> list[dict[str, str]]:
     return [{"artifact_id": target_id, "artifact_type": target_type or ""}]
 
 
-def _diagnosis_request(snapshot: PlanSnapshotV2) -> DiagnosisRequest:
-    devices = _effective_devices(snapshot)
+def _diagnosis_request(snapshot: PlanSnapshotV2, *, devices: list[str] | None = None) -> DiagnosisRequest:
+    devices = list(devices if devices is not None else _effective_devices(snapshot))
     codes = _effective_fault_codes(snapshot)
     return DiagnosisRequest(
         user_message=snapshot.intent_frame.raw_message or snapshot.intent_frame.normalized_message,
@@ -191,23 +219,31 @@ def _effective_fault_codes(snapshot: PlanSnapshotV2) -> list[str]:
     return list(snapshot.effective_request_frame.effective_fault_code_refs or snapshot.intent_frame.fault_code_refs)
 
 
-def _artifact_payload(thread_id: str) -> dict[str, Any]:
-    if not thread_id:
-        return {}
-    artifact = get_thread_artifact(thread_id)
-    if artifact is None or not isinstance(artifact.payload, dict):
-        return {}
-    return dict(artifact.payload)
-
-
-def _workorder_manifest_inputs(thread_id: str, *, snapshot: PlanSnapshotV2, inputs: dict[str, Any]) -> dict[str, Any]:
-    manifests = _artifact_manifests(thread_id)
+def _workorder_manifest_inputs(
+    thread_id: str,
+    *,
+    snapshot: PlanSnapshotV2,
+    inputs: dict[str, Any],
+    auth_context: Any,
+) -> dict[str, Any]:
     target_id = str(
         inputs.get("target_artifact_id")
         or snapshot.effective_request_frame.target_artifact_id
         or ""
     )
-    selected = _select_manifest(manifests, target_id=target_id)
+    selected: dict[str, Any] = {}
+    if target_id:
+        access = resolve_target_artifact(
+            thread_id=thread_id,
+            artifact_id=target_id,
+            auth=auth_context,
+            expected_types={"report_artifact", "analysis_artifact", "structured_analysis_artifact"},
+            expected_devices=_effective_devices(snapshot),
+            require_complete_lineage=True,
+        )
+        if not access.allowed or access.record is None:
+            return {"artifact_access_error": access.code}
+        selected = dict(access.record.manifest)
     refs = _source_artifact_refs(selected, target_id=target_id, target_type=str(inputs.get("target_artifact_type") or ""))
     result: dict[str, Any] = {}
     if refs:
@@ -225,31 +261,6 @@ def _workorder_manifest_inputs(thread_id: str, *, snapshot: PlanSnapshotV2, inpu
         result["stale_refresh_required"] = True
         result["stale_evidence_disclosure_required"] = True
     return result
-
-
-def _artifact_manifests(thread_id: str) -> list[dict[str, Any]]:
-    payload = _artifact_payload(thread_id)
-    raw = payload.get("artifact_manifests")
-    return [dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
-
-
-def _select_manifest(manifests: list[dict[str, Any]], *, target_id: str) -> dict[str, Any]:
-    if target_id:
-        for item in manifests:
-            if str(item.get("artifact_id") or "") == target_id:
-                return item
-    priority = {
-        "report_artifact": 0,
-        "structured_analysis_artifact": 1,
-        "analysis_artifact": 2,
-    }
-    candidates = [
-        item
-        for item in manifests
-        if str(item.get("status") or "completed") == "completed"
-        and str(item.get("artifact_type") or "") in priority
-    ]
-    return sorted(candidates, key=lambda item: priority.get(str(item.get("artifact_type") or ""), 99))[0] if candidates else {}
 
 
 def _source_artifact_refs(selected: dict[str, Any], *, target_id: str, target_type: str) -> list[dict[str, str]]:
@@ -276,10 +287,29 @@ def _as_text_list(value: Any) -> list[str]:
     return [str(value)] if str(value).strip() else []
 
 
-def _reportable_payload(thread_id: str) -> dict[str, Any]:
+def _reportable_payload(
+    thread_id: str,
+    *,
+    target_id: str = "",
+    auth_context: Any | None = None,
+    expected_devices: list[str] | None = None,
+) -> dict[str, Any]:
     if not thread_id:
         return {}
-    artifact = get_thread_artifact(thread_id)
+    if target_id:
+        access = resolve_target_artifact(
+            thread_id=thread_id,
+            artifact_id=target_id,
+            auth=auth_context or build_auth_context(role="guest"),
+            expected_types={"sql_artifact", "analysis_artifact", "structured_analysis_artifact", "comparison_artifact", "report_artifact"},
+            expected_devices=list(expected_devices or []),
+            require_complete_lineage=True,
+        )
+        if not access.allowed or access.record is None:
+            return {}
+        artifact = access.record.envelope
+    else:
+        artifact = get_thread_artifact(thread_id)
     if artifact is None:
         return {}
     try:

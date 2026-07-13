@@ -43,15 +43,32 @@ def _historical_data_quality(rows: list[dict[str, object]]) -> dict[str, object]
         value = row.get("create_time") or row.get("timestamp") or "-"
         return str(value or "-")
 
+    parsed_times = [_parse_report_datetime(row_time(row)) for row in rows]
+    valid_times = [item for item in parsed_times if item is not None]
+    latest = max(valid_times) if valid_times else None
+    freshness_seconds = max(0.0, (datetime.now() - latest).total_seconds()) if latest else None
     return {
         "sample_count": len(rows),
         "oldest_sample_time": row_time(rows[-1]) if rows else "-",
         "latest_sample_time": row_time(rows[0]) if rows else "-",
-        "freshness_seconds": 999999999,
+        "freshness_seconds": round(freshness_seconds, 2) if freshness_seconds is not None else None,
         "freshness_label": "已滞后",
         "currentness": "本报告基于已保存的历史线程产物生成，不代表当前实时状态",
         "metric_availability": "未重新评估",
     }
+
+
+def _parse_report_datetime(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text or text == "-":
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        return parsed.astimezone().replace(tzinfo=None)
+    return parsed
 
 
 def _status_summary(rows: list[dict[str, object]], request: DiagnosisRequest) -> dict[str, object]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import Any
 from threading import RLock
 
@@ -16,6 +17,13 @@ from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
 
 _BACKEND: ArtifactStoreBackend | None = None
 _BACKEND_LOCK = RLock()
+
+
+@dataclass(frozen=True)
+class ArtifactLookupResult:
+    envelope: DiagnosisArtifactEnvelope
+    manifest: dict[str, Any]
+    payload: Any
 
 
 def _resolve_default_backend_name() -> str:
@@ -97,6 +105,43 @@ def list_thread_artifacts(thread_id: str, limit: int = 20) -> list[DiagnosisArti
     """读取指定 thread_id 最近若干条结构化产物。"""
 
     return get_artifact_store_backend().list_thread_artifacts(thread_id, limit=limit)
+
+
+def get_artifact_by_id(thread_id: str, artifact_id: str) -> ArtifactLookupResult | None:
+    """Resolve one manifest and its typed payload without a latest-artifact fallback."""
+
+    wanted = str(artifact_id or "").strip()
+    if not thread_id or not wanted:
+        return None
+    for envelope in list_thread_artifacts(thread_id, limit=100):
+        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+        manifests = payload.get("artifact_manifests")
+        for manifest in manifests if isinstance(manifests, list) else []:
+            if not isinstance(manifest, dict) or str(manifest.get("artifact_id") or "") != wanted:
+                continue
+            return ArtifactLookupResult(
+                envelope=envelope,
+                manifest=dict(manifest),
+                payload=_payload_for_manifest(payload, manifest),
+            )
+    return None
+
+
+def _payload_for_manifest(payload: dict[str, Any], manifest: dict[str, Any]) -> Any:
+    artifact_id = str(manifest.get("artifact_id") or "")
+    registry = payload.get("artifacts_by_id")
+    if isinstance(registry, dict) and artifact_id in registry:
+        return registry[artifact_id]
+    key_by_type = {
+        "sql_artifact": "sql_artifact",
+        "knowledge_artifact": "knowledge_artifact",
+        "analysis_artifact": "analysis_artifact",
+        "structured_analysis_artifact": "structured_analysis_artifact",
+        "comparison_artifact": "comparison_artifact",
+        "report_artifact": "report_artifact",
+        "workorder_artifact": "workorder_draft",
+    }
+    return payload.get(key_by_type.get(str(manifest.get("artifact_type") or ""), ""))
 
 
 def _register_domain_artifact_lister() -> None:

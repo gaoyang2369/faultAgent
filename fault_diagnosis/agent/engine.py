@@ -64,24 +64,40 @@ class AgentEngineV2:
             recent_context_signals=recent_context_signals,
         )
         effective_auth = auth_context or build_auth_context(role="guest")
-        capability_authorization = authorize_capability_preflight(
+        goal_authorizations: list[dict[str, Any]] = []
+        authorized_goal_ids: list[str] = []
+        for goal in effective_request_frame.effective_goal_set.goals:
+            decision = authorize_capability_preflight(effective_auth, goal.capability)
+            dumped = {"goal_id": goal.goal_id, "capability": goal.capability, **decision.model_dump(mode="json")}
+            goal_authorizations.append(dumped)
+            if decision.allowed:
+                authorized_goal_ids.append(goal.goal_id)
+            else:
+                effective_request_frame.dropped_goals.append(
+                    {"goal_id": goal.goal_id, "capability": goal.capability, "reason": decision.denied_reason_code or decision.reason}
+                )
+        effective_request_frame.authorized_goal_ids = authorized_goal_ids
+        primary_authorization = authorize_capability_preflight(
             effective_auth,
             effective_request_frame.original_semantic_intent or effective_request_frame.semantic_intent,
         )
-        effective_request_frame.authorization_decision = capability_authorization.model_dump(mode="json")
+        effective_request_frame.authorization_decision = {
+            "goals": goal_authorizations,
+            "primary": primary_authorization.model_dump(mode="json"),
+        }
         effective_request_frame.authorized_semantic_intent = (
             "check_runtime_status"
-            if capability_authorization.mode == "degrade"
+            if primary_authorization.mode == "degrade"
             else effective_request_frame.effective_semantic_intent
-            if capability_authorization.allowed
+            if primary_authorization.allowed
             else ""
         )
-        if not capability_authorization.allowed:
+        if effective_request_frame.effective_goal_set.goals and not authorized_goal_ids:
             return _capability_blocked_snapshot(
                 intent_frame=intent_frame,
                 context_frame=context_frame,
                 effective_request_frame=effective_request_frame,
-                authorization=capability_authorization.model_dump(mode="json"),
+                authorization={**primary_authorization.model_dump(mode="json"), "goals": goal_authorizations},
                 metadata=snapshot_metadata,
             )
         context_frame = _normalize_context_with_effective_request(context_frame, effective_request_frame)
@@ -141,6 +157,20 @@ class AgentEngineV2:
                 "engine": "agent_engine_v2",
                 "mode": "build_plan_snapshot",
                 "status": snapshot_status,
+                "requested_goals": list(effective_request_frame.requested_goals),
+                "effective_goals": [goal.model_dump(mode="json") for goal in effective_request_frame.effective_goal_set.goals],
+                "authorized_goals": list(effective_request_frame.authorized_goal_ids),
+                "dropped_goals": list(effective_request_frame.dropped_goals),
+                "target_operation": effective_request_frame.target_scope.operation,
+                "included_devices": list(effective_request_frame.target_scope.included_devices),
+                "excluded_devices": list(effective_request_frame.target_scope.excluded_devices),
+                "resolved_devices": list(effective_request_frame.target_scope.resolved_devices),
+                "discarded_artifact_ids": list(effective_request_frame.discarded_artifact_ids),
+                "goal_query_specs": [item.model_dump(mode="json") for item in effective_request_frame.goal_query_specs],
+                "goal_node_mapping": {
+                    goal.goal_id: [node.node_id for node in validation.validated_plan.nodes if goal.goal_id in node.goal_ids]
+                    for goal in effective_request_frame.effective_goal_set.goals
+                },
                 "request_understanding": {
                     "raw_message": raw_message,
                     "user_rewrite": rewrite_frame.user_rewrite,
