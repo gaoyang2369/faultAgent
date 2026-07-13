@@ -67,6 +67,7 @@ class TraceRecorder:
         route = snapshot.skill_route
         plan = snapshot.execution_plan
         trace = snapshot.trace if isinstance(snapshot.trace, dict) else {}
+        context_trace = trace.get("context_resolution") if isinstance(trace.get("context_resolution"), dict) else {}
         validation = trace.get("validation") if isinstance(trace.get("validation"), dict) else {}
         candidate_plan = trace.get("candidate_plan") if isinstance(trace.get("candidate_plan"), dict) else plan.model_dump(mode="json")
         skipped_nodes = _skipped_nodes(plan)
@@ -98,7 +99,16 @@ class TraceRecorder:
                 "reuse_blockers": list(context.reuse_blockers),
                 "inherited_device": context.inherited_slots.get("device") or context.inherited_slots.get("asset"),
                 "inherited_fault_codes": context.inherited_slots.get("fault_codes") or [],
-                "selected_artifact_id": context.referenced_artifact_id,
+                "selected_artifact_id": context_trace.get("selected_artifact_id") or context.referenced_artifact_id,
+                "resolution_status": context_trace.get("resolution_status"),
+                "candidate_devices": context_trace.get("candidate_devices", []),
+                "selected_devices": context_trace.get("selected_devices", []),
+                "selected_artifact_type": context_trace.get("selected_artifact_type"),
+                "raw_context_result": context_trace.get("raw_context_result", {}),
+                "effective_request_before_fill": context_trace.get("effective_request_before_fill", {}),
+                "effective_request_after_fill": context_trace.get("effective_request_after_fill", {}),
+                "slot_fill_trace": context_trace.get("slot_fill_trace", []),
+                "source_selection": _source_selection(context_trace.get("slot_fill_trace", [])),
                 "effective_device_refs": list(getattr(effective, "effective_device_refs", []) or []),
                 "effective_fault_code_refs": list(getattr(effective, "effective_fault_code_refs", []) or []),
                 "effective_semantic_intent": getattr(effective, "semantic_intent", ""),
@@ -255,6 +265,8 @@ class TraceRecorder:
                         "fallback_reason": basis.get("fallback_reason"),
                         "latest_sample_time": basis.get("latest_sample_time"),
                         "data_environment": basis.get("data_environment"),
+                        "source_table": artifact.get("source_table"),
+                        "source_table_source": "node.output.artifact.source_table",
                     }
                 )
             node_span = self._add_span(
@@ -437,6 +449,7 @@ class TraceRecorder:
                 "citation_count": source_count,
                 "answer_length": len(frame.final_answer or ""),
                 "blocked_by_guardrail": result.status in {"blocked", "failed"},
+                "output_observation": dict(frame.guardrail_result.get("output_observation") or {}),
             },
         )
         guardrail = dict(frame.guardrail_result or {})
@@ -858,6 +871,15 @@ def _all_final_claims_have_evidence(ledger: Any) -> bool:
         if not claim or not claim.get("supporting_evidence_ids"):
             return False
     return True
+
+
+def _source_selection(resolution_trace: Any) -> dict[str, Any]:
+    if not isinstance(resolution_trace, list):
+        return {}
+    for item in resolution_trace:
+        if isinstance(item, dict) and item.get("stage") == "source.select.observe":
+            return item
+    return {}
 
 
 def _answer_template(answer_variant: str, knowledge: KnowledgeStepArtifact | None) -> str:

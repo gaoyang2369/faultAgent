@@ -179,9 +179,25 @@ class AgentEngineV2:
                 },
                 "context_resolution": {
                     "relation_to_previous": context_frame.relation_to_previous,
+                    "resolution_status": _resolution_status(context_frame, effective_request_frame),
                     "reuse_decision": context_frame.reuse_decision,
                     "missing_context": list(context_frame.missing_context),
                     "reuse_blockers": list(context_frame.reuse_blockers),
+                    "candidate_devices": list(dict.fromkeys([
+                        *intent_frame.device_refs,
+                        *effective_request_frame.effective_device_refs,
+                    ])),
+                    "selected_devices": list(effective_request_frame.effective_device_refs),
+                    "selected_artifact_id": effective_request_frame.target_artifact_id,
+                    "selected_artifact_type": effective_request_frame.target_artifact_type,
+                    "raw_context_result": context_frame.model_dump(mode="json", exclude_none=True),
+                    "effective_request_before_fill": {
+                        "device_refs": list(intent_frame.device_refs),
+                        "fault_code_refs": list(intent_frame.fault_code_refs),
+                        "semantic_intent": effective_request_frame.original_semantic_intent,
+                    },
+                    "effective_request_after_fill": effective_request_frame.model_dump(mode="json", exclude_none=True),
+                    "slot_fill_trace": list(effective_request_frame.resolution_trace),
                     "effective_request": effective_request_frame.model_dump(mode="json", exclude_none=True),
                 },
                 "skill_route": {
@@ -235,6 +251,16 @@ def _normalize_context_with_effective_request(
             }
         )
     return context_frame
+
+
+def _resolution_status(context_frame: ContextFrame, effective_request_frame: EffectiveRequestFrame) -> str:
+    if context_frame.relation_to_previous == "ambiguous":
+        return "ambiguous"
+    if effective_request_frame.needs_clarification:
+        return "unresolved"
+    if effective_request_frame.effective_device_refs or effective_request_frame.effective_fault_code_refs or effective_request_frame.target_artifact_id:
+        return "resolved"
+    return "unresolved"
 
 
 def _capability_blocked_snapshot(

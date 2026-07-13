@@ -19,6 +19,7 @@ from .state import (
 from ..output.answer import build_output_frame
 from ..evidence import project_ledger_to_evidence_bundle
 from ..artifacts import allocate_node_artifact_id, build_node_artifact_envelope
+from ..observability.cutover_observation import summarize_runtime_artifacts
 
 
 class NodeExecutionOutput:
@@ -244,6 +245,7 @@ class WorkflowRuntimeExecutor:
         attempts = 0
         last_error: dict[str, Any] | None = None
         started = time.monotonic()
+        input_artifact_summaries = summarize_runtime_artifacts(state.artifacts, state.artifact_envelopes)
         while attempts <= retry_limit:
             state.add_trace(
                 "node_status",
@@ -327,6 +329,8 @@ class WorkflowRuntimeExecutor:
                         "query_spec_id": str(node.get("query_spec_id") or ""),
                         "target_scope_id": str(node.get("target_scope_id") or ""),
                         "failure_policy": str(node.get("failure_policy") or "block_all"),
+                        "input_artifacts": input_artifact_summaries,
+                        "output_artifacts": summarize_runtime_artifacts(state.artifacts, state.artifact_envelopes),
                     },
                 )
                 return result
@@ -456,6 +460,9 @@ class WorkflowRuntimeExecutor:
 def _runtime_result(state: RuntimeState, *, status: str) -> RuntimeResult:
     state.finalize_ledger()
     output_frame = _runtime_output_frame(state, status=status)
+    state.trace_observations["output_observation"] = dict(
+        output_frame.guardrail_result.get("output_observation") or {}
+    )
     state.deliverable_statuses = [
         {"goal_id": item.goal_id, "deliverable_type": item.deliverable_type, "status": item.status}
         for item in output_frame.composite_output.deliverables

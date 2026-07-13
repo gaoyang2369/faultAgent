@@ -67,6 +67,7 @@ class RuntimeState(BaseModel):
     interrupts: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[dict[str, Any]] = Field(default_factory=list)
     deliverable_statuses: list[dict[str, Any]] = Field(default_factory=list)
+    trace_observations: dict[str, Any] = Field(default_factory=dict)
     started_at: str = Field(default_factory=lambda: _timestamp())
 
     def add_trace(self, event_type: str, **payload: Any) -> RuntimeTraceEvent:
@@ -157,6 +158,7 @@ class RuntimeState(BaseModel):
                 "sql_artifact_ids": list(self.artifacts.get("sql_artifact_ids", [])),
                 "available_types": [key for key, value in self.artifacts.items() if value is not None],
             },
+            **dict(self.trace_observations),
         }
 
 

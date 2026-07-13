@@ -172,6 +172,16 @@ class EffectiveRequestBuilder:
             wants_report=bool(_has_any(compact, REPORT_WORDS)),
             wants_confirmation=bool(_has_any(compact, WORKORDER_CONFIRM_WORDS)),
         )
+        frame.resolution_trace.append(
+            _source_selection_observation(
+                manifests=manifests,
+                target=target,
+                wants_action=bool(_has_any(compact, WORKORDER_WORDS)),
+                wants_detail=bool(_has_any(compact, DETAIL_WORDS)),
+                wants_report=bool(_has_any(compact, REPORT_WORDS)),
+                wants_confirmation=bool(_has_any(compact, WORKORDER_CONFIRM_WORDS)),
+            )
+        )
         if target is not None:
             frame.target_artifact_id = target.artifact_id
             frame.target_artifact_type = target.artifact_type
@@ -380,6 +390,62 @@ def _select_target(
             if item.artifact_id == latest_id:
                 return item
     return completed[0] if completed else None
+
+
+def _source_selection_observation(
+    *,
+    manifests: list[ArtifactManifest],
+    target: ArtifactManifest | None,
+    wants_action: bool,
+    wants_detail: bool,
+    wants_report: bool,
+    wants_confirmation: bool,
+) -> dict[str, Any]:
+    if wants_confirmation:
+        expected_types = ["workorder_artifact"]
+    elif wants_action:
+        expected_types = ["report_artifact", "analysis_artifact"]
+    elif wants_detail:
+        expected_types = ["analysis_artifact", "sql_artifact", "knowledge_artifact", "report_artifact"]
+    elif wants_report:
+        expected_types = ["analysis_artifact", "report_artifact", "sql_artifact"]
+    else:
+        expected_types = ["report_artifact", "analysis_artifact", "knowledge_artifact", "sql_artifact"]
+    before = [_manifest_observation(item) for item in manifests]
+    selected_id = target.artifact_id if target is not None else ""
+    after = sorted(before, key=lambda item: 0 if item["artifact_id"] == selected_id else 1)
+    rejected = [
+        {
+            "artifact_id": item["artifact_id"],
+            "reason": "lower_priority_or_incompatible" if target is not None else "not_selectable",
+        }
+        for item in before
+        if item["artifact_id"] != selected_id
+    ]
+    return {
+        "stage": "source.select.observe",
+        "selector": "_select_target",
+        "expected_types": expected_types,
+        "candidates_before": before,
+        "candidates_after": after,
+        "selected_artifact_id": selected_id,
+        "selected_artifact_type": target.artifact_type if target is not None else "",
+        "selection_reason": "selected_by_existing_policy" if target is not None else "no_candidate_selected",
+        "rejected": rejected,
+    }
+
+
+def _manifest_observation(item: ArtifactManifest) -> dict[str, Any]:
+    return {
+        "artifact_id": item.artifact_id,
+        "artifact_type": item.artifact_type,
+        "subject_devices": list(item.device_refs),
+        "source_artifact_ids": list(item.lineage.source_artifact_ids),
+        "source_tables": list(item.lineage.source_tables),
+        "lineage_status": item.lineage.lineage_status,
+        "persistence_status": item.persistence_status,
+        "readback_verified": item.readback_verified,
+    }
 
 
 def _validate_ambiguity(

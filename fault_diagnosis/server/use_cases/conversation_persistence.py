@@ -10,6 +10,7 @@ from fault_diagnosis.domain.context import ArtifactBackedCaseStore
 from fault_diagnosis.domain.context.conversation_context import ConversationContextAssembler
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_artifact_manifest_exact, get_thread_artifact, list_thread_artifacts
 from fault_diagnosis.platform.persistence.repositories.conversation_store import ConversationRepository
+from fault_diagnosis.agent.observability.cutover_observation import content_fingerprint
 
 
 def parse_sse_payloads(chunk: str) -> list[dict[str, Any]]:
@@ -189,6 +190,7 @@ class ConversationPersistenceService:
                     "channel": context.channel,
                     "session_id": context.session_id,
                     "conversation_context_stats": (context.conversation_context or {}).get("stats", {}),
+                    "content_fingerprint": content_fingerprint(content),
                 },
             )
             self.repository.link_artifacts(

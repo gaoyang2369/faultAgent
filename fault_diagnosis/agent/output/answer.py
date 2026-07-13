@@ -16,6 +16,7 @@ from fault_diagnosis.domain.diagnosis.contracts import (
 )
 from fault_diagnosis.domain.diagnosis.runtime_status import RuntimeStatusAssessment
 from ..contracts import CompositeOutputFrame, DeliverableResult, NodeResult, OutputFrame, PlanGoal
+from ..observability.cutover_observation import build_output_observation
 
 
 def build_output_frame(
@@ -139,6 +140,14 @@ def build_output_frame(
     )
     composite_answer = _render_composite(deliverables)
     composite.content = composite_answer or final_answer
+    guardrail["output_observation"] = build_output_observation(
+        goals=list(goals or []),
+        deliverables=deliverables,
+        variant=variant,
+        legacy_content=final_answer,
+        composite_content=composite_answer,
+        selected_content=composite.content,
+    )
     return OutputFrame(
         answer_variant=composite.answer_variant,
         final_answer=composite.content,
