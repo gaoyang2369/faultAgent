@@ -16,6 +16,7 @@ from fault_diagnosis.server.auth.admin_auth import resolve_auth_context
 from fault_diagnosis.domain.context.conversation_context import ConversationContextAssembler
 from fault_diagnosis.server.devtools.dev_mode import get_dev_messages
 from fault_diagnosis.platform.logging import ensure_request_id, get_logger
+from fault_diagnosis.platform.model_catalog import resolve_model_name
 from fault_diagnosis.platform.persistence.repositories.conversation_store import (
     ConversationRepository,
     get_conversation_repository,
@@ -53,6 +54,7 @@ class AgentChatPayload(BaseModel):
     session_id: str | None = None
     thread_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    model: str | None = None
 
 
 @dataclass(slots=True)
@@ -484,11 +486,16 @@ class ChatService:
         thread_id: str | None = None,
         user_identity: str = "游客",
         stream_id: str | None = None,
+        model_name: str | None = None,
     ):
         request_id = ensure_request_id()
         try:
             if not message:
                 raise HTTPException(status_code=400, detail="message parameter is required")
+            try:
+                resolved_model = resolve_model_name(model_name)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             context = await self.prepare_agent_invocation_context(
                 request,
                 message=message,
@@ -497,6 +504,7 @@ class ChatService:
                 stream_id=stream_id,
                 channel="text",
                 request_id=request_id,
+                metadata={"model": resolved_model},
             )
             self._log.info(
                 "收到聊天流式请求",
@@ -547,6 +555,7 @@ class ChatService:
                         history_messages=context.history_messages,
                         replace_history=False,
                         auth_context=context.auth_context,
+                        model_name=resolved_model,
                         conversation_context=context.conversation_context,
                         complete_payload_enricher=self._build_complete_payload_enricher(context),
                     ),
@@ -591,6 +600,7 @@ class ChatService:
         user_turn_index: int,
         user_identity: str = "游客",
         stream_id: str | None = None,
+        model_name: str | None = None,
     ):
         session_manager, session_id, _, legacy_bindings = resolve_request_scope(request)
         auth_context = resolve_auth_context(request, session_id)
@@ -601,6 +611,10 @@ class ChatService:
         stream_id = (stream_id or "").strip() or str(uuid4())
 
         try:
+            try:
+                resolved_model = resolve_model_name(model_name)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             normalized_message = (message or "").strip()
             if not normalized_message:
                 raise HTTPException(status_code=400, detail="message parameter is required")
@@ -690,6 +704,7 @@ class ChatService:
                     "user_identity": trusted_user_identity,
                     "requested_user_identity": requested_user_identity,
                     "user_turn_index": user_turn_index,
+                    "model": resolved_model,
                 },
                 channel="text_edit",
                 stream_id=stream_id,
@@ -722,6 +737,7 @@ class ChatService:
                         history_messages=to_langchain_history_messages(kept_messages),
                         replace_history=True,
                         auth_context=auth_context,
+                        model_name=resolved_model,
                         conversation_context=edit_context.conversation_context,
                         complete_payload_enricher=self._build_complete_payload_enricher(edit_context),
                     ),
@@ -764,6 +780,10 @@ class ChatService:
             raise HTTPException(status_code=400, detail="message is required")
 
         metadata = payload.metadata or {}
+        try:
+            resolved_model = resolve_model_name(payload.model or metadata.get("model"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         request_id = ensure_request_id()
         context = await self.prepare_agent_invocation_context(
             request,
@@ -775,6 +795,7 @@ class ChatService:
             metadata={
                 **metadata,
                 "client_session_id": payload.session_id,
+                "model": resolved_model,
             },
             request_id=request_id,
         )
@@ -811,6 +832,7 @@ class ChatService:
                     history_messages=context.history_messages,
                     replace_history=False,
                     auth_context=context.auth_context,
+                    model_name=resolved_model,
                     conversation_context=context.conversation_context,
                     complete_payload_enricher=self._build_complete_payload_enricher(context),
                 ),
@@ -867,6 +889,7 @@ class ChatService:
                 "session_id": context.session_id,
                 "channel": context.channel,
                 "auth_context": context.auth_context.audit_summary(),
+                "model": resolved_model,
             },
         }
 

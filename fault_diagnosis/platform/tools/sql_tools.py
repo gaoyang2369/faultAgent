@@ -5,7 +5,7 @@ from fault_diagnosis.platform.logging import get_logger
 _log = get_logger("sql_tools")
 
 _db = None
-_sqltools = None
+_sqltools_by_model = {}
 
 
 def _get_db():
@@ -29,12 +29,12 @@ def _get_db():
     return _db
 
 
-def get_sqltools():
+def get_sqltools(model_name: str | None = None):
     """返回 SQLDatabaseToolkit 生成的工具列表。"""
-    global _sqltools
-    if _sqltools is None:
-        import os
+    import os
 
+    resolved_model = (model_name or os.getenv("MODEL_NAME") or "").strip()
+    if resolved_model not in _sqltools_by_model:
         from dotenv import load_dotenv
         from langchain_community.agent_toolkits import SQLDatabaseToolkit
         from langchain_openai import ChatOpenAI
@@ -42,14 +42,14 @@ def get_sqltools():
         db = _get_db()
         load_dotenv(override=False)
         model = ChatOpenAI(
-            model=os.getenv("MODEL_NAME"),
+            model=resolved_model,
             base_url=os.getenv("OPENAI_BASE_URL"),
             api_key=os.getenv("OPENAI_API_KEY"),
             temperature=0.7,
         )
         toolkit = SQLDatabaseToolkit(db=db, llm=model)
-        _sqltools = toolkit.get_tools()
-    return _sqltools
+        _sqltools_by_model[resolved_model] = toolkit.get_tools()
+    return _sqltools_by_model[resolved_model]
 
 
 __all__ = ["get_sqltools"]

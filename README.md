@@ -89,6 +89,7 @@ APP_ENV=development
 OPENAI_API_KEY=your_api_key
 OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
 MODEL_NAME=your-model
+AVAILABLE_MODEL_NAMES=deepseek-ai/DeepSeek-V3.2,Qwen/Qwen3.5-397B-A17B,zai-org/GLM-5.2,Pro/moonshotai/Kimi-K2.6
 
 HOST=127.0.0.1
 MYSQL_USER=root

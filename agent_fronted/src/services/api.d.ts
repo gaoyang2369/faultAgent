@@ -230,13 +230,17 @@ export interface AdminKnowledgeFileRecord {
 }
 
 export interface ChatAPI {
+  getModels(): Promise<{
+    default_model: string
+    models: Array<{ id: string; label: string; description: string }>
+  }>
   closeActiveStream(reason?: string): void
   getChatHistory(type?: string): Promise<ChatHistoryItem[]>
   getChatHistoryPage(type?: string, options?: { limit?: number; cursor?: string | null; keyword?: string }): Promise<ChatHistoryPage>
   getChatMessages(chatId: string, type?: string): Promise<ChatMessage[]>
   deleteChatHistory(chatId: string, type?: string): Promise<{ deleted: boolean; thread_id: string; server_deleted?: boolean }>
-  sendServiceMessageStream(message: string, threadId: string | null, userIdentity?: string, callbacks?: StreamCallbacks): Promise<StreamResponse>
-  sendEditedServiceMessageStream(message: string, threadId: string, userTurnIndex: number, userIdentity?: string, callbacks?: StreamCallbacks): Promise<StreamResponse>
+  sendServiceMessageStream(message: string, threadId: string | null, userIdentity?: string, callbacks?: StreamCallbacks, options?: { model?: string; edit?: { userTurnIndex: number } }): Promise<StreamResponse>
+  sendEditedServiceMessageStream(message: string, threadId: string, userTurnIndex: number, userIdentity?: string, callbacks?: StreamCallbacks, options?: { model?: string }): Promise<StreamResponse>
   stopStream(streamId: string, reason?: string): Promise<any>
   getThreadTodos(threadId: string): Promise<TodosResponse>
   saveGovernanceSnapshot(payload: {
@@ -375,4 +379,3 @@ export const AdminKnowledgeFileAPI: AdminKnowledgeFileAPI
 export const documentRecognitionAPI: DocumentRecognitionAPI
 export const BASE_URL: string
 export function resolveBaseUrl(): string
-

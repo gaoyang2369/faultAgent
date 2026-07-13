@@ -112,14 +112,24 @@
           {{ scrollToLatestLabel }}
         </button>
 
-        <div class="input-area">
-          <textarea
+        <div class="chat-composer">
+          <div class="chat-composer__toolbar">
+            <ModelSelector
+              v-model="selectedModel"
+              :models="availableModels"
+              :loading="modelsLoading"
+              :disabled="isStreaming"
+            />
+            <span class="chat-composer__hint">模型在本轮发送后锁定，密钥由服务端环境变量管理</span>
+          </div>
+          <div class="input-area">
+            <textarea
               v-model="userInput"
               @keydown.enter.prevent="handleTextSend"
               placeholder="请输入您的问题..."
               rows="1"
               ref="inputRef"
-          ></textarea>
+            ></textarea>
 
           <!-- 语音：麦克风按钮（位于发送按钮左侧，支持点击开始/停止，监听态脉冲） -->
           <button
@@ -161,6 +171,7 @@
           >
             <PaperAirplaneIcon class="icon" />
           </button>
+          </div>
         </div>
       </div>
 
@@ -217,6 +228,8 @@ import {
 import ChatMessage from '../components/ChatMessage.vue'
 import ChatSidebar from '../components/ChatSidebar.vue'
 import TaskPanel from '../components/TaskPanel.vue'
+import ModelSelector from '../components/ModelSelector.vue'
+import { chatAPI } from '@/services/api'
 import { questionTemplates } from '@/config/questionTemplates'
 import { useUserIdentityStore } from '@/stores/userIdentity'
 import { useTodosPanel } from '@/composables/useTodosPanel'
@@ -248,6 +261,37 @@ const isSidebarOpen = ref(false)
 const messagesRef = ref<HTMLElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const userInput = ref('')
+const MODEL_STORAGE_KEY = 'fd_selected_llm'
+const availableModels = ref<Array<{ id: string; label?: string; description?: string }>>([])
+const selectedModel = ref('')
+const modelsLoading = ref(true)
+
+const loadModelCatalog = async () => {
+  modelsLoading.value = true
+  try {
+    const catalog = await chatAPI.getModels()
+    availableModels.value = Array.isArray(catalog?.models) ? catalog.models : []
+    const savedModel = window.localStorage.getItem(MODEL_STORAGE_KEY) || ''
+    const allowedIds = new Set(availableModels.value.map(model => model.id))
+    selectedModel.value = allowedIds.has(savedModel)
+      ? savedModel
+      : String(catalog?.default_model || availableModels.value[0]?.id || '')
+  } catch (error) {
+    console.error('加载模型列表失败:', error)
+    ElMessage.warning('模型列表加载失败，将使用服务端默认模型')
+  } finally {
+    modelsLoading.value = false
+  }
+}
+
+watch(selectedModel, (model) => {
+  if (!model) return
+  try {
+    window.localStorage.setItem(MODEL_STORAGE_KEY, model)
+  } catch {
+    // 本地存储不可用时仅在当前页面保留选择。
+  }
+})
 const currentChatId = ref<string | number | null>(null)
 const chatHistory = ref([])
 
@@ -660,7 +704,8 @@ const {
     areTemplatesCollapsed.value = true
   },
   onAssistantToken: appendStreamingTtsToken,
-  onAssistantComplete: finishStreamingTts
+  onAssistantComplete: finishStreamingTts,
+  modelName: selectedModel
 })
 
 const activeWorkflowTaskSnapshot = computed(() => {
@@ -1260,6 +1305,7 @@ const handleIdentitySessionChanged = () => {
 
 // 开始新对话
 onMounted(() => {
+  void loadModelCatalog()
   disposeVoiceGatewayEvent = onVoiceEvent(event => {
     void handleVoiceGatewayEvent(event)
   })

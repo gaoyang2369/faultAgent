@@ -67,6 +67,7 @@ interface UseChatStreamOptions {
   onSendMessage?: () => void
   onAssistantToken?: (token: string) => void
   onAssistantComplete?: () => void
+  modelName?: Ref<string>
 }
 
 const createToolEventKey = (tool: string, type: string) =>
@@ -94,7 +95,8 @@ export const useChatStream = ({
   scrollToBottom,
   onSendMessage,
   onAssistantToken,
-  onAssistantComplete
+  onAssistantComplete,
+  modelName
 }: UseChatStreamOptions) => {
   const currentMessages = ref<Message[]>([])
   const isStreaming = ref(false)
@@ -1357,13 +1359,15 @@ export const useChatStream = ({
             requestedThreadId,
             editUserTurnIndex,
             userIdentity,
-            streamCallbacks
+            streamCallbacks,
+            { model: modelName?.value || undefined }
           )
         : await chatAPI.sendServiceMessageStream(
             messageContent,
             requestedThreadId,
             userIdentity,
-            streamCallbacks
+            streamCallbacks,
+            { model: modelName?.value || undefined }
           )
 
       if (isCurrentRequest()) {

@@ -18,31 +18,36 @@
       <div class="task-panel__progress-bar" :style="{ width: taskProgressPercent + '%' }"></div>
     </div>
 
-    <div class="task-panel__stats">
-      <span v-for="stat in taskStats" :key="stat.label">{{ stat.label }} {{ stat.value }}</span>
+    <div class="task-panel__progress-copy">
+      <span>{{ completedStepText }}</span>
+      <strong>{{ taskProgressPercent }}%</strong>
     </div>
 
     <div v-if="isLoading && !hasTodos" class="task-panel__empty state-loading">
-      <span class="task-panel__spinner">◐</span>
-      正在规划任务清单...
+      <span class="task-panel__spinner" aria-hidden="true"></span>
+      <span>正在拆解诊断路径...</span>
     </div>
     <ul v-else-if="hasTodos" class="task-panel__list">
-        <li
-          v-for="todo in decoratedTodos"
-          :key="todo.id"
-          class="task-panel__item"
-          :class="`task-panel__item--${todo.displayStatus}`"
-        >
-          <span class="task-panel__item-icon" :class="{ spinning: todo.displayStatus === 'in_progress' }">
-            {{ todo.statusIcon }}
-          </span>
+      <li
+        v-for="(todo, index) in decoratedTodos"
+        :key="todo.id"
+        class="task-panel__item"
+        :class="`task-panel__item--${todo.displayStatus}`"
+        :aria-current="todo.displayStatus === 'in_progress' ? 'step' : undefined"
+      >
+        <span class="task-panel__connector" aria-hidden="true"></span>
+        <span class="task-panel__item-icon" aria-hidden="true">
+          <span v-if="todo.displayStatus === 'completed'">✓</span>
+          <span v-else-if="todo.displayStatus === 'interrupted'">!</span>
+          <span v-else>{{ index + 1 }}</span>
+        </span>
         <div class="task-panel__item-body">
-          <p class="task-panel__item-title">{{ todo.title }}</p>
+          <div class="task-panel__item-heading">
+            <p class="task-panel__item-title">{{ todo.title }}</p>
+            <span class="task-panel__item-status">{{ todo.statusText }}</span>
+          </div>
           <p v-if="todo.description" class="task-panel__item-desc">{{ todo.description }}</p>
         </div>
-        <span class="task-panel__item-status">
-          {{ todo.statusText }}
-        </span>
       </li>
     </ul>
   </section>
@@ -102,19 +107,11 @@ const taskPanelStatusText = computed(() => getTaskStatusText(
   lifecycleState.value
 ))
 const currentExecutingStepText = computed(() => getTaskHeadline(normalizedTodos.value, isLoading.value, lifecycleState.value))
-const taskStats = computed(() => (
-  lifecycleState.value === 'interrupted'
-    ? [
-        { label: '未开始', value: summary.value.pending },
-        { label: '已停止', value: summary.value.interrupted },
-        { label: '已完成', value: summary.value.completed }
-      ]
-    : [
-        { label: '未开始', value: summary.value.pending },
-        { label: '进行中', value: summary.value.in_progress },
-        { label: '已完成', value: summary.value.completed }
-      ]
-))
+const completedStepText = computed(() => {
+  if (lifecycleState.value === 'interrupted') return `已完成 ${summary.value.completed} 个阶段，任务已停止`
+  if (!summary.value.total) return '正在生成诊断路径'
+  return `${summary.value.completed} / ${summary.value.total} 个阶段已完成`
+})
 
 const panelClasses = computed(() => ({
   'task-panel--active': taskProgressState.value === 'active' || isLoading.value,

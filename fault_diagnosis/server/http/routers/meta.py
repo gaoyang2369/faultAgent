@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from fault_diagnosis.platform.model_catalog import get_model_catalog
+
 router = APIRouter()
 
 
@@ -17,3 +19,10 @@ async def root() -> dict[str, object]:
             "Persistent chat history",
         ],
     }
+
+
+@router.get("/api/models")
+async def list_models() -> dict[str, object]:
+    """Return selectable model identifiers without exposing provider credentials."""
+
+    return get_model_catalog()

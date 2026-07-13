@@ -166,6 +166,9 @@ const shouldNotifyInterrupted = (reason) => ['interrupted', 'user_stop'].include
 const shouldRequestBackendStop = (reason) => ['interrupted', 'user_stop'].includes(reason)
 
 export const chatAPI = {
+  async getModels() {
+    return fetchJsonWithSession(`${BASE_URL}/api/models`)
+  },
 
   closeActiveStream(reason = 'interrupted') {
     if (activeStreamHandle) {
@@ -292,6 +295,9 @@ export const chatAPI = {
       }
       if (userIdentity) {
         params.set('user_identity', userIdentity)
+      }
+      if (options?.model) {
+        params.set('model', options.model)
       }
       params.set('stream_id', streamId)
 
@@ -549,13 +555,14 @@ export const chatAPI = {
   },
 
   // 获取指定对话的任务清单
-  async sendEditedServiceMessageStream(message, threadId, userTurnIndex, userIdentity = '游客', callbacks = {}) {
+  async sendEditedServiceMessageStream(message, threadId, userTurnIndex, userIdentity = '游客', callbacks = {}, options = {}) {
     return this.sendServiceMessageStream(
       message,
       threadId,
       userIdentity,
       callbacks,
       {
+        ...options,
         edit: {
           userTurnIndex
         }
@@ -887,4 +894,3 @@ export const documentRecognitionAPI = {
     }
   }
 }
-

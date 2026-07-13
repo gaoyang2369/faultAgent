@@ -46,6 +46,7 @@ async def stream_chat_log_get(
     thread_id: str | None = None,
     user_identity: str = "游客",
     stream_id: str | None = None,
+    model: str | None = None,
 ):
     """
     GET 版本的流式端点，便于前端使用原生 EventSource 进行 SSE 连接。
@@ -60,6 +61,7 @@ async def stream_chat_log_get(
         thread_id=thread_id,
         user_identity=user_identity,
         stream_id=stream_id,
+        model_name=model,
     )
 
 
@@ -71,6 +73,7 @@ async def stream_chat_edit_get(
     user_turn_index: int,
     user_identity: str = "游客",
     stream_id: str | None = None,
+    model: str | None = None,
 ):
     """编辑指定用户轮次后重新生成回答。"""
     return await _chat_service().stream_edit(
@@ -80,6 +83,7 @@ async def stream_chat_edit_get(
         user_turn_index=user_turn_index,
         user_identity=user_identity,
         stream_id=stream_id,
+        model_name=model,
     )
 
 

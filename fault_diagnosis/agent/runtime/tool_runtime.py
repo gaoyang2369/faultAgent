@@ -8,8 +8,9 @@ from typing import Any
 class ToolRuntime:
     """Small sync facade over existing LangChain/tool functions."""
 
-    def __init__(self, *, sql_tools: dict[str, Any] | None = None) -> None:
+    def __init__(self, *, sql_tools: dict[str, Any] | None = None, model_name: str | None = None) -> None:
         self._sql_tools = sql_tools
+        self.model_name = model_name
 
     @property
     def sql_tools(self) -> dict[str, Any]:
@@ -17,7 +18,7 @@ class ToolRuntime:
             from fault_diagnosis.domain.diagnosis.adapters import build_sql_tools_map
             from fault_diagnosis.platform.tools.sql_tools import get_sqltools
 
-            self._sql_tools = build_sql_tools_map(get_sqltools())
+            self._sql_tools = build_sql_tools_map(get_sqltools(self.model_name))
         return self._sql_tools
 
     def invoke_sql_tool(self, tool_name: str, payload: Any) -> Any:

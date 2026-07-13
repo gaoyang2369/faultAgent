@@ -93,6 +93,7 @@ async def token_stream_events(
     auth_context: AuthContext | None = None,
     conversation_context: dict[str, Any] | None = None,
     complete_payload_enricher=None,
+    model_name: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """聊天 SSE 兼容入口：dev mock 或 Agent Engine V2 主链路。"""
 
@@ -107,7 +108,7 @@ async def token_stream_events(
         stream_id=stream_id,
         endpoint="/chat/stream",
         user_message=message,
-        metadata={"source": "chat_stream"},
+        metadata={"source": "chat_stream", "model": model_name or ""},
     )
 
     try:
@@ -136,7 +137,7 @@ async def token_stream_events(
             request_id=request_id,
             auth_context=effective_auth,
             conversation_context=conversation_context,
-            metadata={"stream_id": stream_id, "source": "chat_stream"},
+            metadata={"stream_id": stream_id, "source": "chat_stream", "model": model_name or ""},
         )
         recorder.add_plan_snapshot(v2_snapshot)
         if v2_snapshot.status == "blocked":
@@ -185,6 +186,7 @@ async def token_stream_events(
             auth_context=effective_auth,
             cancel_handle=cancel_handle,
             complete_payload_enricher=complete_payload_enricher,
+            model_name=model_name,
         ):
             yield chunk
         return
@@ -369,6 +371,7 @@ async def _stream_v2_runtime(
     auth_context: AuthContext,
     cancel_handle: StreamCancellationHandle | None,
     complete_payload_enricher,
+    model_name: str | None = None,
 ) -> AsyncGenerator[str, None]:
     yield encode_sse_event(
         "start",
@@ -392,10 +395,12 @@ async def _stream_v2_runtime(
             project_tool_start(state=state_for_start, node=node),
             trace_id=trace_id,
         )
-    executor = WorkflowRuntimeExecutor(
-        real_tools=True,
-        tool_runtime=getattr(app.state, "agent_engine_v2_tool_runtime", None),
-    )
+    tool_runtime = getattr(app.state, "agent_engine_v2_tool_runtime", None)
+    if tool_runtime is None:
+        from fault_diagnosis.agent.runtime import ToolRuntime
+
+        tool_runtime = ToolRuntime(model_name=model_name)
+    executor = WorkflowRuntimeExecutor(real_tools=True, tool_runtime=tool_runtime)
     result = executor.execute(
         plan,
         trace_id=trace_id,
