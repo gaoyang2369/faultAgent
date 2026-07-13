@@ -97,6 +97,4 @@ def _reuse_blockers(resolved: ResolvedContext) -> list[str]:
         blockers.append(reason)
     if not resolved.inherited_slots and any(word in reason for word in ("权限", "身份", "授权")):
         blockers.append(reason)
-    if resolved.stale_evidence:
-        blockers.append("上一轮证据可能已过期，后续阶段需要刷新运行数据。")
     return list(dict.fromkeys(item for item in blockers if item))

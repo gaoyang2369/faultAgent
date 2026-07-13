@@ -175,7 +175,7 @@ class SqlNode:
         artifact.key_findings = list(assessment.key_findings)
         artifact.supporting_evidence_ids = list(assessment.supporting_evidence_ids)
         node_id = str(node.get("node_id") or "sql")
-        runtime_artifact_id = f"sql:{state.trace_id or state.request_id or state.plan.plan_id}:{node_id}"
+        runtime_artifact_id = str(input_value(node, "artifact_id", "") or node.get("artifact_id") or "")
         artifact.artifact_id = runtime_artifact_id
         sql_artifacts = state.artifacts.setdefault("sql_artifacts", {})
         sql_rows_by_device = state.artifacts.setdefault("sql_rows_by_device", {})

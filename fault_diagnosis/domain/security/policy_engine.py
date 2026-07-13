@@ -207,7 +207,7 @@ def requests_report(route_or_decision: Any) -> bool:
 
 def requests_action_or_workorder(route_or_decision: Any) -> bool:
     goals = set(goal_types(route_or_decision))
-    if goals.intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"}):
+    if goals.intersection({"decide_workorder", "create_workorder_draft", "confirm_workorder_draft", "dispatch_workorder"}):
         return True
     if str(_field(route_or_decision, "task_family") or "") == "action_or_workorder":
         return True

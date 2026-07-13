@@ -36,6 +36,7 @@ class RagNode:
         if reused_artifact is not None:
             artifact = reused_artifact.model_copy(
                 update={
+                    "artifact_id": str(input_value(node, "artifact_id", "") or node.get("artifact_id") or ""),
                     "query": query,
                     "available": True,
                     "evidence_usable": True,
@@ -79,7 +80,7 @@ class RagNode:
         entries = extract_fault_code_entries(text, requested_codes=requested_codes)
         fault_codes = [entry.code for entry in entries] or extract_fault_codes_from_text(text)
         artifact = KnowledgeStepArtifact(
-            artifact_id=f"knowledge:{state.trace_id or state.request_id or state.plan.plan_id}:{str(node.get('node_id') or 'rag')}",
+            artifact_id=str(input_value(node, "artifact_id", "") or node.get("artifact_id") or ""),
             success=success,
             query=query,
             snippets=snippets,

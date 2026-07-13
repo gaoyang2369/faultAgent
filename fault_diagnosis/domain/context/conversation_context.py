@@ -10,6 +10,7 @@ from fault_diagnosis.domain.security.contracts import AuthContext
 from .case_store import ArtifactBackedCaseStore
 
 ArtifactGetter = Callable[[str], DiagnosisArtifactEnvelope | None]
+ArtifactManifestGetter = Callable[[str, str], dict[str, Any] | None]
 
 
 class ConversationContextAssembler:
@@ -21,11 +22,13 @@ class ConversationContextAssembler:
         conversation_repository: Any,
         case_store: ArtifactBackedCaseStore | None = None,
         artifact_getter: ArtifactGetter | None = None,
+        artifact_manifest_getter: ArtifactManifestGetter | None = None,
         recent_message_limit: int = 8,
     ) -> None:
         self.conversation_repository = conversation_repository
         self.case_store = case_store or ArtifactBackedCaseStore()
         self.artifact_getter = artifact_getter or _empty_artifact_getter
+        self.artifact_manifest_getter = artifact_manifest_getter or _empty_manifest_getter
         self.recent_message_limit = max(2, int(recent_message_limit))
 
     def build(
@@ -42,8 +45,12 @@ class ConversationContextAssembler:
         )
         case_state = self.case_store.load(thread_id)
         active_case = case_state.active_case
-        artifact_refs = _latest_artifact_refs(thread_id, artifact_getter=self.artifact_getter)
-        artifact_manifests = _latest_artifact_manifests(thread_id, artifact_getter=self.artifact_getter)
+        artifact_manifests = _latest_artifact_manifests(
+            thread_id,
+            artifact_getter=self.artifact_getter,
+            manifest_getter=self.artifact_manifest_getter,
+        )
+        artifact_refs = _latest_artifact_refs(artifact_manifests)
         previous_assistant_turn = self._previous_assistant_turn(recent_messages)
         package = {
             "version": "conversation_context_package.v1",
@@ -110,50 +117,29 @@ def _empty_artifact_getter(thread_id: str) -> DiagnosisArtifactEnvelope | None: 
     return None
 
 
-def _latest_artifact_refs(thread_id: str, *, artifact_getter: ArtifactGetter) -> list[dict[str, Any]]:
-    try:
-        envelope = artifact_getter(thread_id)
-    except Exception:
-        return []
-    if not envelope:
-        return []
-
-    refs: list[dict[str, Any]] = []
-    payload = envelope.payload if isinstance(envelope.payload, dict) else {}
-    if getattr(envelope, "created_at", None):
-        refs.append(
-            {
-                "artifact_id": str(getattr(envelope, "created_at")),
-                "artifact_type": "diagnosis",
-                "artifact_backend": "diagnosis_artifact_store",
-                "ref_role": "context_source",
-            }
-        )
-    report_filename = getattr(envelope, "report_filename", None) or _nested_value(payload, "report_artifact", "report_filename")
-    if report_filename:
-        refs.append(
-            {
-                "artifact_id": str(report_filename),
-                "artifact_type": "report",
-                "artifact_backend": "diagnosis_artifact_store",
-                "ref_role": "context_source",
-            }
-        )
-    evidence_bundle = payload.get("evidence_bundle") if isinstance(payload.get("evidence_bundle"), dict) else {}
-    bundle_id = evidence_bundle.get("bundle_id") or evidence_bundle.get("id")
-    if bundle_id:
-        refs.append(
-            {
-                "artifact_id": str(bundle_id),
-                "artifact_type": "evidence_bundle",
-                "artifact_backend": "diagnosis_artifact_store",
-                "ref_role": "context_source",
-            }
-        )
-    return refs
+def _empty_manifest_getter(thread_id: str, artifact_id: str) -> dict[str, Any] | None:  # noqa: ARG001
+    return None
 
 
-def _latest_artifact_manifests(thread_id: str, *, artifact_getter: ArtifactGetter) -> list[dict[str, Any]]:
+def _latest_artifact_refs(manifests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "artifact_id": str(item["artifact_id"]),
+            "artifact_type": str(item["artifact_type"]),
+            "artifact_backend": "diagnosis_artifact_store",
+            "ref_role": "context_source",
+        }
+        for item in manifests
+        if item.get("artifact_id") and item.get("artifact_type")
+    ]
+
+
+def _latest_artifact_manifests(
+    thread_id: str,
+    *,
+    artifact_getter: ArtifactGetter,
+    manifest_getter: ArtifactManifestGetter,
+) -> list[dict[str, Any]]:
     try:
         envelope = artifact_getter(thread_id)
     except Exception:
@@ -163,13 +149,18 @@ def _latest_artifact_manifests(thread_id: str, *, artifact_getter: ArtifactGette
     manifests = envelope.payload.get("artifact_manifests")
     if not isinstance(manifests, list):
         return []
-    return [dict(item) for item in manifests if isinstance(item, dict)]
-
-
-def _nested_value(payload: dict[str, Any], *keys: str) -> Any:
-    current: Any = payload
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
+    verified: list[dict[str, Any]] = []
+    for item in manifests:
+        if not isinstance(item, dict):
+            continue
+        artifact_id = str(item.get("artifact_id") or "")
+        manifest = manifest_getter(thread_id, artifact_id) if artifact_id else None
+        if (
+            isinstance(manifest, dict)
+            and manifest.get("artifact_status") == "complete"
+            and manifest.get("persistence_status") == "committed"
+            and manifest.get("readback_verified") is True
+            and (manifest.get("lineage") or {}).get("lineage_status") == "complete"
+        ):
+            verified.append(manifest)
+    return verified

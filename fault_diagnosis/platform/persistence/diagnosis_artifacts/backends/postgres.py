@@ -109,6 +109,40 @@ class PostgresArtifactStoreBackend(ArtifactStoreBackend):
                 rows = cur.fetchall()
         return [DiagnosisArtifactEnvelope.model_validate(json.loads(row[0])) for row in rows]
 
+    def save_artifact(self, envelope):  # noqa: ANN001, ANN201
+        from fault_diagnosis.domain.artifacts import ArtifactEnvelope
+        self._ensure_schema()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"DELETE FROM {self.table_name} WHERE thread_id = %s AND envelope->>'artifact_id' = %s",
+                    (envelope.thread_id, envelope.artifact_id),
+                )
+                cur.execute(
+                    f"""
+                    INSERT INTO {self.table_name} (thread_id, workflow_type, envelope_created_at, envelope)
+                    VALUES (%s, %s, %s, %s::jsonb)
+                    """,
+                    (envelope.thread_id, "artifact_envelope", envelope.turn_id or envelope.request_id, envelope.model_dump_json()),
+                )
+        return ArtifactEnvelope.model_validate_json(envelope.model_dump_json())
+
+    def get_artifact(self, thread_id: str, artifact_id: str):  # noqa: ANN201
+        from fault_diagnosis.domain.artifacts import ArtifactEnvelope
+        self._ensure_schema()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT envelope::text FROM {self.table_name}
+                    WHERE thread_id = %s AND envelope->>'artifact_id' = %s
+                    ORDER BY saved_at DESC, id DESC LIMIT 1
+                    """,
+                    (thread_id, artifact_id),
+                )
+                row = cur.fetchone()
+        return ArtifactEnvelope.model_validate(json.loads(row[0])) if row else None
+
     def clear_thread(self, thread_id: str) -> None:
         self._ensure_schema()
         with self._connect() as conn:

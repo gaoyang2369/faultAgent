@@ -57,6 +57,8 @@ class PlanValidationResult(BaseModel):
     authorization: dict[str, Any] = Field(default_factory=dict)
     removed_tools: list[str] = Field(default_factory=list)
     approval_requirements: list[dict[str, Any]] = Field(default_factory=list)
+    execution_mode: Literal["normal", "draft_only"] = "normal"
+    post_execution_confirmation_required: bool = False
 
     @property
     def blocked(self) -> bool:
@@ -253,6 +255,8 @@ class PlanValidator:
             authorization=authorization.model_dump(),
             removed_tools=removed_tools,
             approval_requirements=approvals,
+            execution_mode="draft_only" if any(node.node_type == "workorder" for node in validated.nodes) else "normal",
+            post_execution_confirmation_required=any(node.node_type == "workorder" for node in validated.nodes),
         )
 
     def _filter_tool_permissions(

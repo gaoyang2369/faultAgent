@@ -4,6 +4,7 @@ description: Decide whether a work order draft is appropriate, without dispatchi
 trigger_intents:
   - decide_workorder
   - create_workorder_draft
+  - confirm_workorder_draft
   - dispatch_workorder
 required_slots:
   - device

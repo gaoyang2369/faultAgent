@@ -54,18 +54,10 @@ def set_default_artifact_lister(artifact_lister: ArtifactLister | None) -> None:
 
 
 def case_state_from_artifact(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
-    """Build CaseState from snapshot cache, falling back to raw artifact payload."""
+    """Project decision state only from committed, exact-read manifests."""
 
-    snapshot_warning = _snapshot_rejection_reason(envelope)
-    snapshot_case = _case_from_snapshot(envelope)
-    fallback_case = _case_from_payload(envelope)
-    if snapshot_case is None:
-        if fallback_case is not None and snapshot_warning:
-            fallback_case.projection_warnings.append(snapshot_warning)
-        return fallback_case
-    if fallback_case is None:
-        return snapshot_case
-    return _merge_snapshot_with_fallback(snapshot_case, fallback_case)
+    payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+    return _case_from_manifest_payload(envelope, payload)
 
 
 def build_case_state_snapshot(
@@ -73,7 +65,8 @@ def build_case_state_snapshot(
 ) -> dict[str, Any]:
     """Build an optional cache payload from the saved artifact envelope."""
 
-    case = _case_from_payload(envelope)
+    payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+    case = _case_from_manifest_payload(envelope, payload)
     if case is None:
         return {"schema_version": CASE_STATE_SNAPSHOT_VERSION}
     payload = case.model_dump(exclude_none=True)
@@ -119,7 +112,8 @@ def _snapshot_rejection_reason(envelope: DiagnosisArtifactEnvelope) -> str:
     return ""
 
 
-def _case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
+def _legacy_case_from_payload(envelope: DiagnosisArtifactEnvelope) -> CaseState | None:
+    """Legacy serializer only; it is never consulted for planning decisions."""
     payload = envelope.payload or {}
     manifest_case = _case_from_manifest_payload(envelope, payload)
     if manifest_case is not None:
@@ -335,7 +329,15 @@ def _case_from_manifest_payload(envelope: DiagnosisArtifactEnvelope, payload: di
     manifests = payload.get("artifact_manifests")
     if not isinstance(manifests, list):
         return None
-    typed = [item for item in manifests if isinstance(item, dict) and item.get("status", "completed") == "completed"]
+    typed = [
+        item for item in manifests
+        if isinstance(item, dict)
+        and item.get("status", "completed") == "completed"
+        and item.get("artifact_status") == "complete"
+        and item.get("persistence_status") == "committed"
+        and item.get("readback_verified") is True
+        and (item.get("lineage") or {}).get("lineage_status") == "complete"
+    ]
     if not typed:
         return None
     focus = _select_focus_manifest(typed)
@@ -370,7 +372,7 @@ def _case_from_manifest_payload(envelope: DiagnosisArtifactEnvelope, payload: di
                 source_diagnosis_artifact_id=latest_artifact_id,
                 source_report_artifact_id=latest_report_id,
                 required_role="engineer",
-                stale_refresh_required=str(focus.get("freshness") or "") == "stale",
+                stale_refresh_required=False,
             )
         ]
     return CaseState(
@@ -382,7 +384,7 @@ def _case_from_manifest_payload(envelope: DiagnosisArtifactEnvelope, payload: di
         latest_artifact_id=latest_artifact_id,
         latest_artifact_type=str(focus.get("artifact_type") or ""),
         latest_report_id=latest_report_id,
-        latest_analysis_artifact_id=_latest_manifest_id(typed, {"analysis_artifact", "structured_analysis_artifact"}),
+        latest_analysis_artifact_id=_latest_manifest_id(typed, {"analysis_artifact"}),
         latest_sql_artifact_id=_latest_manifest_id(typed, {"sql_artifact"}),
         latest_evidence_bundle_id=latest_evidence_bundle_id,
         last_report_url=latest_report_id,
@@ -402,7 +404,7 @@ def _case_from_manifest_payload(envelope: DiagnosisArtifactEnvelope, payload: di
         reportable=bool(focus.get("reportable")),
         source_table=str(focus.get("source_table") or ""),
         sql_artifact_id=_latest_manifest_id(typed, {"sql_artifact"}),
-        analysis_artifact_id=_latest_manifest_id(typed, {"analysis_artifact", "structured_analysis_artifact"}),
+        analysis_artifact_id=_latest_manifest_id(typed, {"analysis_artifact"}),
         evidence_bundle_id=latest_evidence_bundle_id,
         data_window=focus.get("data_window") if isinstance(focus.get("data_window"), dict) else {},
         artifact_manifests=[dict(item) for item in typed],
@@ -413,10 +415,9 @@ def _select_focus_manifest(manifests: list[dict[str, Any]]) -> dict[str, Any] | 
     priority = {
         "workorder_artifact": 0,
         "report_artifact": 1,
-        "structured_analysis_artifact": 2,
-        "analysis_artifact": 3,
-        "knowledge_artifact": 4,
-        "sql_artifact": 5,
+        "analysis_artifact": 2,
+        "knowledge_artifact": 3,
+        "sql_artifact": 4,
     }
     usable = [
         item
@@ -461,19 +462,18 @@ def _pending_actions_from_payload(
     lifecycle = str(workorder.get("lifecycle_status") or "").strip()
     if lifecycle != "recommended_draft":
         return []
-    required = ["latest_realtime_status"] if evidence_freshness == "stale" else []
     return [
         PendingAction(
             action_type="workorder_draft",
             status="pending",
             artifact_id=latest_artifact_id,
             reason=str(workorder.get("reason") or ""),
-            required_evidence=required,
+            required_evidence=[],
             source_diagnosis_artifact_id=workorder.get("source_diagnosis_artifact_id") or latest_artifact_id,
             recommendation_artifact_id=latest_artifact_id,
             source_report_artifact_id=workorder.get("source_report_artifact_id"),
             required_role="engineer",
-            stale_refresh_required=evidence_freshness == "stale",
+            stale_refresh_required=False,
         )
     ]
 

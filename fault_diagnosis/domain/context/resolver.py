@@ -258,7 +258,7 @@ class ContextResolver:
             last_evidence_bundle_id=active_case.latest_evidence_bundle_id,
             last_report_url=active_case.last_report_url,
             evidence_mode=_evidence_mode_for_relation(relation, stale),
-            should_refresh_runtime_data=stale or relation == "refresh_current_status",
+            should_refresh_runtime_data=relation == "refresh_current_status",
             conversation_context_signals_summary=signals_summary,
         )
         if active_case.projection_warnings:
@@ -318,7 +318,7 @@ def _relation_to_previous(
 
 def _evidence_mode_for_relation(relation: str, stale: bool) -> str:
     if relation in {"report_handoff", "action_followup", "continuation"}:
-        return "reuse_and_refresh_status" if stale else "reuse_previous_artifact"
+        return "reuse_previous_artifact"
     if relation == "refresh_current_status":
         return "reuse_and_refresh_status"
     return "collect_new"

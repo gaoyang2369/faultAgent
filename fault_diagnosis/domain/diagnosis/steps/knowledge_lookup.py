@@ -22,6 +22,7 @@ _FIELD_LABELS = {
     "参见": "references",
 }
 _FIELD_RE = re.compile(r"(信息类别|驱动对象|组件|传播|反应|应答|原因|处理|参见)\s*[：:]\s*")
+_NON_MANUAL_BOUNDARY_RE = re.compile(r"(?:来源文件|来源页码|检索方式|查询)\s*[：:]\s*")
 
 
 def extract_fault_codes_from_text(text: str, *, limit: int = 5) -> list[str]:
@@ -183,7 +184,11 @@ def _fields_from_text(text: str) -> dict[str, str]:
         label = matched.group(1)
         start = matched.end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(normalized)
-        value = _clean_value(normalized[start:end])
+        value = normalized[start:end]
+        boundary = _NON_MANUAL_BOUNDARY_RE.search(value)
+        if boundary:
+            value = value[: boundary.start()]
+        value = _clean_value(value)
         key = _FIELD_LABELS.get(label)
         if key and value:
             fields[key] = value

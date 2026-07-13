@@ -19,6 +19,7 @@ class MemoryArtifactStoreBackend(ArtifactStoreBackend):
         self.ttl_seconds = ttl_seconds
         self._artifacts: OrderedDict[str, list[tuple[datetime, DiagnosisArtifactEnvelope]]] = OrderedDict()
         self._entry_count = 0
+        self._canonical: dict[tuple[str, str], object] = {}
         self._lock = RLock()
 
     def _is_expired(self, stored_at: datetime) -> bool:
@@ -84,15 +85,29 @@ class MemoryArtifactStoreBackend(ArtifactStoreBackend):
             selected = list(reversed(entries))[:normalized_limit]
             return [deepcopy(envelope) for _, envelope in selected]
 
+    def save_artifact(self, envelope):  # noqa: ANN001, ANN201
+        with self._lock:
+            saved = deepcopy(envelope)
+            self._canonical[(saved.thread_id, saved.artifact_id)] = saved
+            return deepcopy(saved)
+
+    def get_artifact(self, thread_id: str, artifact_id: str):  # noqa: ANN201
+        with self._lock:
+            value = self._canonical.get((thread_id, artifact_id))
+            return deepcopy(value) if value is not None else None
+
     def clear_thread(self, thread_id: str) -> None:
         with self._lock:
             entries = self._artifacts.pop(thread_id, [])
             self._entry_count -= len(entries)
+            for key in [key for key in self._canonical if key[0] == thread_id]:
+                self._canonical.pop(key, None)
 
     def clear_all(self) -> None:
         with self._lock:
             self._artifacts.clear()
             self._entry_count = 0
+            self._canonical.clear()
 
     def health_check(self) -> dict:
         with self._lock:

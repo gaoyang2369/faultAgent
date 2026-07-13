@@ -462,8 +462,6 @@ cases:
       - knowledge
       - analysis
       - report
-      missing_slots:
-      - time_window
     tools:
       planned:
       - sql_db_query
@@ -1180,7 +1178,7 @@ cases:
   asset_scope:
   - '*'
 - id: followup_stale_requires_refresh
-  name: 滞后 artifact 派单前需刷新
+  name: 滞后 artifact 可直接生成草稿并披露非实时
   tier: core
   eval_modes:
   - plan
@@ -1208,15 +1206,12 @@ cases:
       - workorder_decision
       intent_stack_projection_contains:
       - workorder_decision
-      - check_current_status
       goal_types_contains:
-      - refresh_current_status
       - decide_workorder
     workflow:
       plan_mode: workorder_decision_from_artifact
-      evidence_gaps:
-      - latest_realtime_status
       must_skip:
+      - sql
       - report
     tools:
       planned: []
@@ -1288,7 +1283,7 @@ cases:
       - sql
       - report
       missing_slots:
-      - alarm_code
+      - diagnosis_or_runtime_source
     tools:
       forbidden:
       - device_control.write
@@ -1315,7 +1310,7 @@ cases:
       domain_task: status_query
     workflow:
       missing_slots:
-      - device_id_or_system
+      - device
     tools:
       forbidden:
       - device_control.write
@@ -1388,8 +1383,6 @@ cases:
       - severity_assessment
     workflow:
       policy_id: health_assessment_v1
-      missing_slots:
-      - device_id_or_system
     tools:
       forbidden:
       - device_control.write
@@ -1443,7 +1436,7 @@ cases:
       domain_task: root_cause_analysis
     workflow:
       missing_slots:
-      - time_window
+      - device
     tools:
       forbidden:
       - device_control.write

@@ -122,7 +122,7 @@ def test_runtime_retries_fake_node_failure_and_does_not_pollute_evidence_ledger(
     assert any(event["event_type"] == "node_retry" for event in result.trace["events"])
 
 
-def test_runtime_blocks_workorder_or_approval_node_at_approval_boundary() -> None:
+def test_runtime_does_not_preblock_validated_workorder_for_manual_confirmation() -> None:
     plan = _plan(
         nodes=[{"node_id": "workorder_1", "node_type": "workorder"}],
         approval_requirements=[
@@ -139,10 +139,8 @@ def test_runtime_blocks_workorder_or_approval_node_at_approval_boundary() -> Non
 
     result = WorkflowRuntimeExecutor().execute(plan)
 
-    assert result.status == "blocked"
-    assert result.node_results[0].status == "blocked"
-    assert result.node_results[0].error["code"] == "approval_required"
-    assert result.trace["interrupts"]
+    assert result.status == "completed"
+    assert result.node_results[0].status == "completed"
     assert result.evidence_ledger.evidence_items == []
 
 

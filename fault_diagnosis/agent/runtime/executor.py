@@ -18,6 +18,7 @@ from .state import (
 )
 from ..output.answer import build_output_frame
 from ..evidence import project_ledger_to_evidence_bundle
+from ..artifacts import allocate_node_artifact_id, build_node_artifact_envelope
 
 
 class NodeExecutionOutput:
@@ -114,7 +115,6 @@ class WorkflowRuntimeExecutor:
             }
         registry.update(node_registry or {})
         self.node_registry = registry
-        self.preblock_approvals = not real_tools
 
     def execute(
         self,
@@ -153,6 +153,7 @@ class WorkflowRuntimeExecutor:
 
         node_status: dict[str, str] = {}
         for node in graph.ordered_nodes():
+            allocate_node_artifact_id(node)
             node_id = str(node.get("node_id") or "")
             input_summary = _summarize_input(node)
             state.add_trace("node_status", node_id=node_id, node_type=_node_type(node), status="pending", input_summary=input_summary)
@@ -187,31 +188,6 @@ class WorkflowRuntimeExecutor:
                     retry_count=result.retry_count,
                 )
                 continue
-
-            if self.preblock_approvals and self._approval_blocks(node, state.plan):
-                result = node_result(
-                    node=node,
-                    status="blocked",
-                    input_summary=input_summary,
-                    output={
-                        "approval_requirements": list(state.plan.approval_requirements),
-                        "interrupts": list(state.plan.interrupts),
-                    },
-                    error={"code": "approval_required", "message": "Node requires approval boundary."},
-                )
-                state.append_node_result(result)
-                node_status[node_id] = "blocked"
-                state.interrupts.extend(state.plan.interrupts or state.plan.approval_requirements)
-                state.add_trace(
-                    "node_status",
-                    node_id=node_id,
-                    node_type=result.node_type,
-                    status="blocked",
-                    input_summary=input_summary,
-                    output_summary=_summarize_output(result.output),
-                    error=result.error,
-                )
-                return self._finish_blocked(state, code="approval_required", message="Approval boundary blocked execution.")
 
             typed_node = self.node_registry.get(_node_type(node))
             if typed_node is None:
@@ -307,6 +283,16 @@ class WorkflowRuntimeExecutor:
                 if output.status == "completed":
                     evidence_refs = state.commit_evidence(node, output.proposed_evidence)
                     state.commit_claims(output.proposed_claims)
+                envelope = build_node_artifact_envelope(
+                    node=node,
+                    state=state,
+                    node_status=output.status,
+                    evidence_refs=evidence_refs,
+                )
+                if envelope is not None:
+                    state.artifact_envelopes[envelope.artifact_id] = envelope
+                    state.artifacts.setdefault("artifact_envelopes", {})[envelope.artifact_id] = envelope
+                    output.output["artifact_id"] = envelope.artifact_id
                 duration_ms = round((time.monotonic() - started) * 1000, 1)
                 result = node_result(
                     node=node,
@@ -318,6 +304,7 @@ class WorkflowRuntimeExecutor:
                     error=output.error,
                     retry_count=attempts,
                     duration_ms=duration_ms,
+                    artifact_id=envelope.artifact_id if envelope is not None else "",
                 )
                 if output.status in {"failed", "blocked"} and result.error:
                     state.errors.append(result.error)
@@ -387,9 +374,6 @@ class WorkflowRuntimeExecutor:
         )
         return result
 
-    def _approval_blocks(self, node: dict[str, Any], plan: ExecutionPlan) -> bool:
-        return _node_type(node) in {"approval", "workorder"} and bool(plan.approval_requirements or plan.interrupts)
-
     def _cancel_node(self, state: RuntimeState, node: dict[str, Any], *, input_summary: str) -> None:
         result = node_result(
             node=node,
@@ -428,19 +412,19 @@ class WorkflowRuntimeExecutor:
 
     def _finish_completed(self, state: RuntimeState) -> RuntimeResult:
         state.status = "completed"
-        return _runtime_result(state, status="completed", final_content="")
+        return _runtime_result(state, status="completed")
 
     def _finish_blocked(self, state: RuntimeState, *, code: str, message: str) -> RuntimeResult:
         state.status = "blocked"
         error = {"code": code, "message": message}
         state.errors.append(error)
         state.add_trace("runtime_status", status="blocked", error=error)
-        return _runtime_result(state, status="blocked", final_content=message)
+        return _runtime_result(state, status="blocked")
 
     def _finish_failed(self, state: RuntimeState, *, error: dict[str, Any]) -> RuntimeResult:
         state.status = "failed"
         state.add_trace("runtime_status", status="failed", error=error)
-        return _runtime_result(state, status="failed", final_content="")
+        return _runtime_result(state, status="failed")
 
     def _finish_cancelled(self, state: RuntimeState) -> RuntimeResult:
         state.status = "cancelled"
@@ -469,7 +453,7 @@ class WorkflowRuntimeExecutor:
         )
 
 
-def _runtime_result(state: RuntimeState, *, status: str, final_content: str) -> RuntimeResult:
+def _runtime_result(state: RuntimeState, *, status: str) -> RuntimeResult:
     state.finalize_ledger()
     output_frame = _runtime_output_frame(state, status=status)
     state.deliverable_statuses = [
@@ -486,7 +470,6 @@ def _runtime_result(state: RuntimeState, *, status: str, final_content: str) -> 
     complete = build_complete_payload(
         state=state,
         status=effective_status,  # type: ignore[arg-type]
-        final_content=final_content,
         output_frame=output_frame,
     )
     return RuntimeResult(

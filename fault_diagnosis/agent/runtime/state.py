@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..contracts import EvidenceLedger, ExecutionPlan, NodeResult, NodeStatus, OutputFrame
+from ..contracts import ArtifactEnvelope, EvidenceLedger, ExecutionPlan, NodeResult, NodeStatus, OutputFrame
 from ..evidence import create_ledger, finalize_ledger
 from ..evidence.ledger import EvidenceLedgerWriter
 from fault_diagnosis.domain.security.contracts import AuthContext
@@ -62,6 +62,7 @@ class RuntimeState(BaseModel):
     node_results: list[NodeResult] = Field(default_factory=list)
     evidence_ledger: EvidenceLedger = Field(default_factory=EvidenceLedger)
     artifacts: dict[str, Any] = Field(default_factory=dict)
+    artifact_envelopes: dict[str, ArtifactEnvelope] = Field(default_factory=dict)
     trace_events: list[RuntimeTraceEvent] = Field(default_factory=list)
     interrupts: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[dict[str, Any]] = Field(default_factory=list)
@@ -178,7 +179,6 @@ def build_complete_payload(
     *,
     state: RuntimeState,
     status: RuntimeStatus,
-    final_content: str = "",
     output_frame: OutputFrame | None = None,
     cancelled: bool = False,
     cancel_reason: str | None = None,
@@ -189,7 +189,6 @@ def build_complete_payload(
         state=state,
         status=status,
         output_frame=output_frame,
-        final_content=final_content,
         cancelled=cancelled,
         cancel_reason=cancel_reason,
     )
@@ -206,6 +205,7 @@ def node_result(
     error: dict[str, Any] | None = None,
     retry_count: int = 0,
     duration_ms: float = 0.0,
+    artifact_id: str = "",
 ) -> NodeResult:
     return NodeResult(
         node_id=str(node.get("node_id") or ""),
@@ -221,6 +221,7 @@ def node_result(
         goal_ids=list(node.get("goal_ids") or ([node.get("goal_id")] if node.get("goal_id") else [])),
         query_spec_id=str(node.get("query_spec_id") or ""),
         target_scope_id=str(node.get("target_scope_id") or ""),
+        artifact_id=artifact_id,
     )
 
 

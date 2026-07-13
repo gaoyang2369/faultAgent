@@ -15,10 +15,10 @@ from fault_diagnosis.platform.logging import bind_request_id, get_logger, new_re
 from fault_diagnosis.server.session.runtime_namespace import clear_namespace, set_namespace
 from .stream_control import StreamCancellationHandle, clear_stream_handle
 from fault_diagnosis.shared.utils import summarize_identifier_for_log
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import save_thread_artifact
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import commit_artifact, save_thread_artifact
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
 from fault_diagnosis.agent import AgentEngineV2, WorkflowRuntimeExecutor
-from fault_diagnosis.agent.contracts import OutputFrame
+from fault_diagnosis.agent.contracts import ArtifactEnvelope, CompositeOutputFrame, OutputFrame
 from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_validation
 from fault_diagnosis.agent.output import (
     project_complete,
@@ -280,6 +280,12 @@ async def _stream_v2_validation_blocked(
             else "blocked"
         ),
         final_answer=message,
+        composite_output=CompositeOutputFrame(
+            overall_status="blocked",
+            content=message,
+            answer_variant="permission_denied" if denied else "blocked",
+            legacy_answer_variant="permission_denied" if denied else "blocked",
+        ),
         guardrail_result=snapshot_guardrail,
     )
     state = _state_from_plan(
@@ -313,7 +319,6 @@ async def _stream_v2_validation_blocked(
         state=state,
         status="blocked",
         output_frame=output_frame,
-        final_content=message,
     )
     _attach_canonical_trace(complete, canonical_trace.model_dump(mode="json"))
     if complete_payload_enricher is not None:
@@ -548,6 +553,40 @@ def _save_v2_complete_artifact(complete: dict[str, Any], *, thread_id: str) -> N
         return
     try:
         envelope = DiagnosisArtifactEnvelope.model_validate(artifact)
+        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+        raw_envelopes = payload.get("artifact_envelopes") if isinstance(payload.get("artifact_envelopes"), list) else []
+        committed = []
+        failed_ids: list[str] = []
+        for raw in raw_envelopes:
+            try:
+                canonical = ArtifactEnvelope.model_validate(raw)
+                committed.append(commit_artifact(canonical))
+            except Exception as exc:  # noqa: BLE001 - failed readback must not publish a ref.
+                failed_id = str(raw.get("artifact_id") or "") if isinstance(raw, dict) else ""
+                if failed_id:
+                    failed_ids.append(failed_id)
+                _log.warning("V2 canonical artifact commit failed", thread_id=thread_id, artifact_id=failed_id, error=str(exc))
+        committed_ids = {item.artifact_id for item in committed}
+        payload["artifact_envelopes"] = [item.model_dump(mode="json", exclude_none=True) for item in committed]
+        payload["artifact_manifests"] = [
+            item.manifest.model_dump(mode="json", exclude_none=True) for item in committed
+        ]
+        registry = payload.get("artifacts_by_id") if isinstance(payload.get("artifacts_by_id"), dict) else {}
+        payload["artifacts_by_id"] = {key: value for key, value in registry.items() if key in committed_ids}
+        if failed_ids:
+            payload["artifact_commit_failures"] = failed_ids
+        from fault_diagnosis.domain.context.case_store import build_case_state_snapshot
+
+        payload["case_state_snapshot"] = build_case_state_snapshot(envelope)
+        committed_by_id = {item.artifact_id: item for item in committed}
+        complete["produced_artifacts"] = [
+            {
+                **item,
+                "manifest": committed_by_id[str(item.get("artifact_id"))].manifest.model_dump(mode="json", exclude_none=True),
+            }
+            for item in complete.get("produced_artifacts", [])
+            if isinstance(item, dict) and str(item.get("artifact_id") or "") in committed_ids
+        ]
         saved = save_thread_artifact(envelope)
         complete["artifact"] = saved.model_dump(mode="json", exclude_none=True)
     except Exception as exc:  # noqa: BLE001 - artifact save failure should not break streaming response.

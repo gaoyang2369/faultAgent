@@ -8,7 +8,7 @@ from typing import Any, AsyncGenerator
 from fault_diagnosis.shared.utils import summarize_identifier_for_log
 from fault_diagnosis.domain.context import ArtifactBackedCaseStore
 from fault_diagnosis.domain.context.conversation_context import ConversationContextAssembler
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact, list_thread_artifacts
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_artifact_manifest_exact, get_thread_artifact, list_thread_artifacts
 from fault_diagnosis.platform.persistence.repositories.conversation_store import ConversationRepository
 
 
@@ -79,6 +79,7 @@ class ConversationPersistenceService:
                     artifact_lister=lambda thread_id, limit: list_thread_artifacts(thread_id, limit=limit)
                 ),
                 artifact_getter=get_thread_artifact,
+                artifact_manifest_getter=get_artifact_manifest_exact,
             )
             context.conversation_context = assembler.build(
                 thread_id=context.thread_id,

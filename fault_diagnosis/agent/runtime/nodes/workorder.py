@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fault_diagnosis.domain.diagnosis.contracts import AnalysisStepArtifact, KnowledgeStepArtifact, SqlStepArtifact, WorkOrderSuggestion
+from fault_diagnosis.domain.context.contracts import PendingAction
+from fault_diagnosis.domain.diagnosis.contracts import AnalysisStepArtifact, KnowledgeStepArtifact, SqlStepArtifact, WorkOrderDraftArtifact, WorkOrderSuggestion
 from fault_diagnosis.domain.diagnosis.workorder.drafts import (
     build_pending_workorder_draft_action,
     build_workorder_draft_artifact,
@@ -50,12 +51,14 @@ class WorkorderNode:
                 error={"code": "workorder_requires_exactly_one_device", "message": "工单草稿必须明确绑定一台设备。"},
             )
         target_id = str(input_value(node, "target_artifact_id", "") or "")
-        if target_id and not any(key in state.artifacts for key in ("analysis_artifact", "structured_analysis_artifact", "report_artifact")):
+        if action_type == "confirm_workorder_draft":
+            return _confirm_draft(node=node, state=state, target_id=target_id, devices=devices)
+        if target_id and not any(key in state.artifacts for key in ("analysis_artifact", "structured_analysis", "report_artifact")):
             access = resolve_target_artifact(
                 thread_id=state.thread_id or "",
                 artifact_id=target_id,
                 auth=auth_context(state),
-                expected_types={"report_artifact", "analysis_artifact", "structured_analysis_artifact"},
+                expected_types={"report_artifact", "analysis_artifact"},
                 expected_devices=devices,
                 require_complete_lineage=True,
             )
@@ -100,10 +103,10 @@ class WorkorderNode:
             pending = build_pending_workorder_draft_action(
                 thread_id=state.thread_id or state.trace_id or "v2_runtime",
                 suggestion=suggestion,
-                source_diagnosis_artifact_id=state.trace_id or state.request_id or "v2_runtime",
+                source_diagnosis_artifact_id=target_id or _latest_artifact_id(state, "analysis_artifact"),
                 source_report_artifact_id=_report_artifact_id(state),
-                recommendation_artifact_id=f"workorder_recommendation:{state.trace_id or state.request_id or 'v2_runtime'}",
-                stale_refresh_required=bool(input_value(node, "stale_refresh_required", False)),
+                recommendation_artifact_id=str(input_value(node, "artifact_id", "") or node.get("artifact_id") or ""),
+                stale_refresh_required=False,
             )
             ok, reason = validate_pending_workorder_draft_action(
                 pending_action=model_to_dict(pending),
@@ -123,12 +126,15 @@ class WorkorderNode:
                 thread_id=state.thread_id or state.trace_id or "v2_runtime",
                 suggestion=suggestion,
                 pending_action=model_to_dict(pending),
-                source_diagnosis_artifact_id=state.trace_id or state.request_id or "v2_runtime",
+                source_diagnosis_artifact_id=target_id or _latest_artifact_id(state, "analysis_artifact"),
                 source_report_artifact_id=_report_artifact_id(state),
-                stale=bool(input_value(node, "stale_refresh_required", False)),
+                stale=bool(input_value(node, "stale_evidence_disclosure_required", False)),
             )
             state.artifacts["workorder_pending_action"] = pending
             state.artifacts["workorder_draft"] = draft
+            canonical_id = str(input_value(node, "artifact_id", "") or node.get("artifact_id") or "")
+            if canonical_id:
+                draft.draft_id = canonical_id
             output["pending_action"] = model_to_dict(pending)
             output["draft"] = model_to_dict(draft)
         return NodeExecutionOutput(
@@ -159,6 +165,54 @@ def _is_forbidden_action(action_type: str, node: dict[str, Any]) -> bool:
     )
 
 
+def _confirm_draft(*, node: dict[str, Any], state: RuntimeState, target_id: str, devices: list[str]) -> NodeExecutionOutput:
+    access = resolve_target_artifact(
+        thread_id=state.thread_id or "",
+        artifact_id=target_id,
+        auth=auth_context(state),
+        expected_types={"workorder_artifact"},
+        expected_devices=devices,
+        require_complete_lineage=True,
+    )
+    if not access.allowed or access.record is None:
+        return NodeExecutionOutput(
+            status="blocked",
+            output={"success": False, "artifact_access_error": access.code},
+            error={"code": access.code, "message": "工单草稿必须按 thread_id + artifact_id 精确读取。"},
+        )
+    payload = access.record.payload if isinstance(access.record.payload, dict) else {}
+    raw_draft = payload.get("workorder_draft")
+    raw_pending = payload.get("pending_action")
+    if not isinstance(raw_draft, dict) or not isinstance(raw_pending, dict):
+        return NodeExecutionOutput(
+            status="blocked",
+            output={"success": False, "artifact_access_error": "workorder_draft_payload_invalid"},
+            error={"code": "workorder_draft_payload_invalid", "message": "目标 Artifact 不含可确认的结构化草稿。"},
+        )
+    draft = WorkOrderDraftArtifact.model_validate(raw_draft)
+    pending = PendingAction.model_validate(raw_pending).model_copy(
+        update={
+            "status": "confirmed_pending_dispatch_forbidden",
+            "consumed_by_artifact_id": str(input_value(node, "artifact_id", "") or node.get("artifact_id") or ""),
+        }
+    )
+    state.artifacts["workorder_draft"] = draft
+    state.artifacts["workorder_pending_action"] = pending
+    return NodeExecutionOutput(
+        output={
+            "success": True,
+            "status": pending.status,
+            "draft": model_to_dict(draft),
+            "pending_action": model_to_dict(pending),
+            "source_artifact_refs": [{"artifact_id": target_id, "artifact_type": "workorder_artifact"}],
+            "manual_confirmation_required": False,
+            "dispatch_performed": False,
+            "dispatch_forbidden": True,
+        },
+        artifacts={"workorder_draft": draft, "workorder_pending_action": pending},
+    )
+
+
 def _model(value: Any, model_type: Any, default: Any) -> Any:
     if isinstance(value, model_type):
         return value
@@ -168,7 +222,7 @@ def _model(value: Any, model_type: Any, default: Any) -> Any:
 
 
 def _suggestion_from_target_artifact(node: dict[str, Any], state: RuntimeState) -> WorkOrderSuggestion | None:
-    if any(key in state.artifacts for key in ("sql_artifact", "analysis_artifact", "structured_analysis_artifact")):
+    if any(key in state.artifacts for key in ("sql_artifact", "analysis_artifact", "structured_analysis")):
         return None
     target_id = str(input_value(node, "target_artifact_id", "") or "")
     source_refs = input_value(node, "source_artifact_refs", []) or []
@@ -178,7 +232,7 @@ def _suggestion_from_target_artifact(node: dict[str, Any], state: RuntimeState) 
         thread_id=state.thread_id or "",
         artifact_id=target_id,
         auth=auth_context(state),
-        expected_types={"report_artifact", "analysis_artifact", "structured_analysis_artifact"},
+        expected_types={"report_artifact", "analysis_artifact"},
         expected_devices=[str(item) for item in (input_value(node, "device_refs", []) or []) if str(item)],
         require_complete_lineage=True,
     )
@@ -203,6 +257,15 @@ def _report_artifact_id(state: RuntimeState) -> str | None:
     return None
 
 
+def _latest_artifact_id(state: RuntimeState, artifact_type: str) -> str:
+    values = [
+        item.artifact_id
+        for item in state.artifact_envelopes.values()
+        if item.artifact_type == artifact_type and item.status == "complete"
+    ]
+    return values[-1] if values else ""
+
+
 def _source_projection(*, node: dict[str, Any], state: RuntimeState, suggestion: WorkOrderSuggestion) -> dict[str, Any]:
     target_evidence_bundle_id = str(input_value(node, "target_evidence_bundle_id", "") or "").strip()
     source_refs = input_value(node, "source_artifact_refs", []) or []
@@ -213,7 +276,6 @@ def _source_projection(*, node: dict[str, Any], state: RuntimeState, suggestion:
         supporting_refs = []
     stale_required = bool(
         input_value(node, "stale_evidence_disclosure_required", False)
-        or input_value(node, "stale_refresh_required", False)
     )
     evidence_freshness = str(input_value(node, "evidence_freshness", "") or ("stale" if stale_required else "unknown"))
     manual_confirmation_required = bool(
@@ -224,7 +286,6 @@ def _source_projection(*, node: dict[str, Any], state: RuntimeState, suggestion:
         "target_evidence_bundle_id": target_evidence_bundle_id,
         "supporting_evidence_refs": list(supporting_refs),
         "stale_evidence_disclosure_required": stale_required,
-        "stale_refresh_required": bool(input_value(node, "stale_refresh_required", False)),
         "evidence_freshness": evidence_freshness,
         "generated_from_previous_artifact": bool(target_evidence_bundle_id or source_refs),
         "manual_confirmation_required": manual_confirmation_required,

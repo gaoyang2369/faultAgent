@@ -6,12 +6,13 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from fault_diagnosis.agent.contracts import ArtifactManifest, ContextFrame, EffectiveRequestFrame, IntentFrame
-from .goals import build_goal_query_specs, build_target_scope, canonicalize_goals, missing_goal_slots
+from fault_diagnosis.agent.contracts import ArtifactManifest, ContextFrame, EffectiveRequestFrame, IntentFrame, SourceBinding
+from .goals import build_goal_query_specs, build_target_scope, canonicalize_requested_goals, evaluate_goal_slots
 
 
 DETAIL_WORDS = ("详细", "展开", "手册字段", "完整字段", "原文")
 WORKORDER_WORDS = ("工单", "派单", "派人", "维修单")
+WORKORDER_CONFIRM_WORDS = ("确认工单草稿", "确认该工单草稿", "确认这个工单草稿", "确认草稿")
 REPORT_WORDS = ("报告", "导出")
 STATUS_WORDS = ("当前", "现在", "最新", "还在", "还故障", "状态")
 
@@ -103,7 +104,7 @@ class ContextSemanticResolver:
                 "generate_report_from_previous",
                 "decide_workorder",
                 "create_workorder_draft",
-                "refresh_then_decide_workorder",
+                "confirm_workorder_draft",
                 "clarify_target",
             ],
             "forbidden_outputs": ["sql", "tool_call", "dispatch_decision", "device_control_action", "unverified_claim"],
@@ -169,6 +170,7 @@ class EffectiveRequestBuilder:
             wants_action=bool(_has_any(compact, WORKORDER_WORDS)),
             wants_detail=bool(_has_any(compact, DETAIL_WORDS)),
             wants_report=bool(_has_any(compact, REPORT_WORDS)),
+            wants_confirmation=bool(_has_any(compact, WORKORDER_CONFIRM_WORDS)),
         )
         if target is not None:
             frame.target_artifact_id = target.artifact_id
@@ -178,6 +180,22 @@ class EffectiveRequestBuilder:
             frame.available_actions = list(target.available_actions)
             frame.freshness = target.freshness or "unknown"
             frame.stale_evidence_disclosure_required = target.freshness == "stale"
+            if (
+                target.artifact_status == "complete"
+                and target.persistence_status == "committed"
+                and target.readback_verified
+                and target.lineage.lineage_status == "complete"
+            ):
+                frame.source_bindings.append(
+                    SourceBinding(
+                        artifact_id=target.artifact_id,
+                        artifact_type=target.artifact_type,
+                        thread_id=target.thread_id,
+                        lineage_status=target.lineage.lineage_status,
+                        persistence_status=target.persistence_status,
+                        readback_verified=True,
+                    )
+                )
             frame.resolution_trace.append(
                 {
                     "stage": "target.select",
@@ -205,7 +223,7 @@ class EffectiveRequestBuilder:
         inherited_artifact_type = str(inherited.get("latest_artifact_type") or "")
         action_compatible_reference = (
             _has_any(compact, WORKORDER_WORDS)
-            and inherited_artifact_type in {"report_artifact", "analysis_artifact", "structured_analysis_artifact"}
+            and inherited_artifact_type in {"report_artifact", "analysis_artifact"}
         )
         if context_frame.referenced_artifact_id and not frame.target_artifact_id and (
             not _has_any(compact, WORKORDER_WORDS) or action_compatible_reference
@@ -276,14 +294,14 @@ class EffectiveRequestBuilder:
                 )
                 target = None
 
-        frame.effective_goal_set = canonicalize_goals(
+        frame.requested_goal_set = canonicalize_requested_goals(
             intent_frame,
             target_scope=frame.target_scope,
             source_policy=frame.evidence_policy,
         )
-        frame.requested_goals = [goal.capability for goal in frame.effective_goal_set.goals]
+        frame.requested_goals = [goal.capability for goal in frame.requested_goal_set.goals]
         frame.goal_query_specs = build_goal_query_specs(
-            goals=frame.effective_goal_set,
+            goals=frame.requested_goal_set,
             target_scope=frame.target_scope,
             fault_codes=frame.effective_fault_code_refs,
             time_window=frame.effective_time_window,
@@ -292,8 +310,8 @@ class EffectiveRequestBuilder:
         frame.effective_semantic_intent = frame.semantic_intent
         _validate_ambiguity(frame, target=target, manifests=manifests, compact=compact)
         lineage_status = target.lineage.lineage_status if target is not None else ""
-        frame.clarification_reasons = missing_goal_slots(
-            goals=frame.effective_goal_set,
+        frame.clarification_reasons = evaluate_goal_slots(
+            goals=frame.requested_goal_set,
             devices=frame.effective_device_refs,
             fault_codes=frame.effective_fault_code_refs,
             target_artifact_type=frame.target_artifact_type,
@@ -321,25 +339,36 @@ def _select_target(
     wants_action: bool,
     wants_detail: bool,
     wants_report: bool,
+    wants_confirmation: bool,
 ) -> ArtifactManifest | None:
-    completed = [item for item in manifests if item.status == "completed"]
+    completed = [
+        item for item in manifests
+        if item.status == "completed"
+        and item.artifact_status == "complete"
+        and item.persistence_status == "committed"
+        and item.readback_verified
+        and item.lineage.lineage_status == "complete"
+    ]
     if context_frame.referenced_artifact_id:
         for item in completed:
             if item.artifact_id == context_frame.referenced_artifact_id:
-                if not wants_action or item.artifact_type in {"report_artifact", "structured_analysis_artifact", "analysis_artifact"}:
+                if not wants_action or item.artifact_type in {"workorder_artifact", "report_artifact", "analysis_artifact"}:
                     return item
     preferred_types: list[str]
-    if wants_action:
-        preferred_types = ["report_artifact", "structured_analysis_artifact", "analysis_artifact"]
+    if wants_confirmation:
+        preferred_types = ["workorder_artifact"]
+        pool = [item for item in completed if item.artifact_type == "workorder_artifact" and item.followupable]
+    elif wants_action:
+        preferred_types = ["report_artifact", "analysis_artifact"]
         pool = [item for item in completed if item.artifact_type in preferred_types and (item.actionable or item.available_actions)]
     elif wants_detail:
-        preferred_types = ["analysis_artifact", "structured_analysis_artifact", "sql_artifact", "knowledge_artifact", "report_artifact"]
+        preferred_types = ["analysis_artifact", "sql_artifact", "knowledge_artifact", "report_artifact"]
         pool = [item for item in completed if item.artifact_type in preferred_types and item.followupable]
     elif wants_report:
-        preferred_types = ["structured_analysis_artifact", "analysis_artifact", "report_artifact", "sql_artifact"]
+        preferred_types = ["analysis_artifact", "report_artifact", "sql_artifact"]
         pool = [item for item in completed if item.artifact_type in preferred_types and (item.reportable or item.followupable)]
     else:
-        preferred_types = ["report_artifact", "structured_analysis_artifact", "analysis_artifact", "knowledge_artifact", "sql_artifact"]
+        preferred_types = ["report_artifact", "analysis_artifact", "knowledge_artifact", "sql_artifact"]
         pool = [item for item in completed if item.followupable or item.actionable or item.reportable]
     if pool:
         return sorted(pool, key=lambda item: preferred_types.index(item.artifact_type) if item.artifact_type in preferred_types else 99)[0]
@@ -407,7 +436,7 @@ def _normalize_semantics(frame: EffectiveRequestFrame, compact: str) -> None:
             frame.semantic_intent = "check_runtime_status"
     if frame.semantic_intent == "expand_previous_answer" and frame.effective_fault_code_refs:
         frame.task_family = "knowledge"
-    elif frame.semantic_intent in {"decide_workorder", "create_workorder_draft", "refresh_then_decide_workorder"}:
+    elif frame.semantic_intent in {"decide_workorder", "create_workorder_draft", "confirm_workorder_draft"}:
         frame.task_family = "action_or_workorder"
         frame.requested_action = frame.requested_action or frame.semantic_intent
     elif frame.semantic_intent.startswith("generate_report"):
@@ -471,7 +500,8 @@ def _semantic_from_intent(intent: IntentFrame) -> str:
         "generate_report": "generate_report",
         "decide_workorder": "decide_workorder",
         "create_workorder_draft": "create_workorder_draft",
-        "dispatch_workorder": "create_workorder_draft",
+        "confirm_workorder_draft": "confirm_workorder_draft",
+        "dispatch_workorder": "dispatch_workorder",
         "diagnose_fault": "diagnose_fault",
         "health_assessment": "health_assessment",
         "root_cause_analysis": "root_cause_analysis",
@@ -484,7 +514,7 @@ def _task_family_from_intent(intent: IntentFrame) -> str:
         return "knowledge"
     if intent.primary_intent == "generate_report":
         return "report"
-    if intent.primary_intent in {"decide_workorder", "create_workorder_draft", "dispatch_workorder"}:
+    if intent.primary_intent in {"decide_workorder", "create_workorder_draft", "confirm_workorder_draft", "dispatch_workorder"}:
         return "action_or_workorder"
     if intent.primary_intent:
         return "diagnosis"
@@ -492,7 +522,7 @@ def _task_family_from_intent(intent: IntentFrame) -> str:
 
 
 def _action_from_intent(intent: IntentFrame) -> str:
-    if intent.primary_intent in {"decide_workorder", "create_workorder_draft", "dispatch_workorder"}:
+    if intent.primary_intent in {"decide_workorder", "create_workorder_draft", "confirm_workorder_draft", "dispatch_workorder"}:
         return intent.primary_intent
     return ""
 
@@ -562,7 +592,7 @@ def _validated_semantic_result(data: dict[str, Any], candidates: list[ArtifactMa
         "generate_report_from_previous",
         "decide_workorder",
         "create_workorder_draft",
-        "refresh_then_decide_workorder",
+        "confirm_workorder_draft",
         "clarify_target",
     }
     semantic = str(data.get("semantic_intent") or "").strip()
@@ -574,7 +604,7 @@ def _validated_semantic_result(data: dict[str, Any], candidates: list[ArtifactMa
         target = by_id.get(target_id)
         if target is None or target.status != "completed":
             return {}
-        if semantic in {"create_workorder_draft", "decide_workorder"} and not (target.actionable or target.available_actions):
+        if semantic in {"create_workorder_draft", "confirm_workorder_draft", "decide_workorder"} and not (target.actionable or target.available_actions):
             return {}
         if semantic in {"expand_previous_answer", "show_manual_fields"} and not target.followupable:
             return {}

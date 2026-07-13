@@ -12,9 +12,10 @@ from fault_diagnosis.agent import (
     SkillRegistry,
     SkillRouter,
 )
+from fault_diagnosis.agent.contracts import ArtifactEnvelope, ArtifactLineage, ArtifactManifest
 from fault_diagnosis.domain.context import ArtifactBackedCaseStore, ContextManager
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.backends.memory import MemoryArtifactStoreBackend
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import configure_artifact_store_backend, save_thread_artifact
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import commit_artifact, configure_artifact_store_backend, save_thread_artifact
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
 from fault_diagnosis.domain.security.permissions import build_auth_context
 
@@ -33,6 +34,25 @@ def _artifact(
         final_answer=f"上一轮报告：{fault_code} 持续出现。",
         report_filename=f"{asset}.html",
         payload={
+            "artifact_manifests": [
+                {
+                    "artifact_id": f"report:{asset}",
+                    "artifact_type": "report_artifact",
+                    "thread_id": thread_id,
+                    "status": "completed",
+                    "followupable": True,
+                    "reportable": True,
+                    "actionable": True,
+                    "device_refs": [asset],
+                    "fault_code_refs": [fault_code],
+                    "evidence_bundle_id": f"eb_{asset}",
+                    "linked_evidence_bundle_id": f"eb_{asset}",
+                    "report_url": f"/reports/{asset}.html",
+                    "report_filename": f"{asset}.html",
+                    "available_followups": ["generate_report", "create_workorder_draft"],
+                    "available_actions": ["create_workorder_draft"],
+                }
+            ],
             "request": {
                 "user_message": f"生成 {asset} 运行报告",
                 "equipment_hint": asset,
@@ -105,6 +125,36 @@ def _manifest_artifact(
 def _manager_with_artifacts(*artifacts: DiagnosisArtifactEnvelope) -> ContextManager:
     configure_artifact_store_backend(MemoryArtifactStoreBackend())
     for artifact in artifacts:
+        payload = dict(artifact.payload)
+        committed_manifests = []
+        for raw in payload.get("artifact_manifests", []) or []:
+            manifest = ArtifactManifest.model_validate(raw)
+            lineage = ArtifactLineage(
+                lineage_status="complete",
+                artifact_id=manifest.artifact_id,
+                artifact_type=manifest.artifact_type,
+                subject_device_refs=list(manifest.device_refs),
+                fault_code_refs=list(manifest.fault_code_refs),
+                source_artifact_ids=list(manifest.lineage.source_artifact_ids),
+            )
+            manifest = manifest.model_copy(
+                update={"artifact_status": "complete", "lineage": lineage}, deep=True
+            )
+            committed = commit_artifact(
+                ArtifactEnvelope(
+                    artifact_id=manifest.artifact_id,
+                    artifact_type=manifest.artifact_type,
+                    thread_id=artifact.thread_id,
+                    payload={"fixture": True},
+                    manifest=manifest,
+                    lineage=lineage,
+                )
+            )
+            committed_manifests.append(committed.manifest.model_dump(mode="json"))
+        if committed_manifests:
+            payload["artifact_manifests"] = committed_manifests
+            payload["latest_focus"] = committed_manifests[0]
+            artifact = artifact.model_copy(update={"payload": payload}, deep=True)
         save_thread_artifact(artifact)
     return ContextManager(case_store=ArtifactBackedCaseStore())
 

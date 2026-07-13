@@ -9,14 +9,14 @@ from ..contracts import IntentFrame
 
 
 _FAULT_CODE_RE = re.compile(r"(?<![A-Z0-9])([A-Z]\d{3,5})(?![A-Z0-9])", re.IGNORECASE)
-_DEVICE_RE = re.compile(r"([A-Z]{2,}(?:-\d{1,})+|J\d+|\d+号机|[A-Z]+\d+电机\d+)", re.IGNORECASE)
+_DEVICE_RE = re.compile(r"([A-Z]{2,}(?:-\d{1,})+|J\d+号机|J\d+|\d+号机|[A-Z]+\d+电机\d+)", re.IGNORECASE)
 _RECENT_WINDOW_RE = re.compile(r"近\s*(\d+)\s*(分钟|小时|天|日)")
 _MODEL_CODES = {"G120", "S120", "G130", "G150", "V20"}
 
-_EXPLAIN_WORDS = ("是什么", "什么意思", "含义", "故障码", "告警码", "报警码", "异常码", "详细", "原文", "手册字段", "完整字段")
+_EXPLAIN_WORDS = ("解释", "是什么", "什么意思", "含义", "故障码", "告警码", "报警码", "异常码", "详细", "原文", "手册字段", "完整字段")
 _STATUS_WORDS = ("现在", "当前", "最新", "还故障", "还在", "状态", "运行", "看一下")
 _DIAGNOSIS_WORDS = (
-    "诊断", "是否有故障", "是不是有故障", "有没有故障", "是否存在故障", "判断是否存在故障",
+    "诊断", "分析", "是否有故障", "是不是有故障", "有没有故障", "是否存在故障", "判断是否存在故障",
     "是否异常", "是否存在异常", "有没有异常", "判断异常", "判断它有没有异常",
 )
 _RECOMMENDATION_WORDS = ("处理建议", "处置建议", "解决建议", "维修建议", "给出建议", "怎么处理")
@@ -27,6 +27,7 @@ _REPORT_WORDS = ("报告", "导出", "生成报告", "出报告", "整理成报�
 _REPORT_CONTEXT_WORDS = ("刚才", "刚刚", "上一轮", "上一条", "上一次", "前面的结果", "诊断结果", "巡检结果")
 _WORKORDER_DECISION_WORDS = ("要不要工单", "要不要生成工单", "是否需要工单", "是否生成工单", "是不是要生成工单")
 _WORKORDER_DRAFT_WORDS = ("生成工单草稿", "创建工单草稿", "生成工单", "创建工单")
+_WORKORDER_CONFIRM_WORDS = ("确认工单草稿", "确认该工单草稿", "确认这个工单草稿", "确认草稿")
 _DISPATCH_WORDS = ("派发工单", "下发工单", "执行工单", "直接派发", "确认派发", "派单")
 _DEVICE_ACTION_WORDS = ("重启", "复位", "停机", "停止设备", "修改参数", "改参数", "关闭告警", "屏蔽告警")
 _DEICTIC_WORDS = ("刚才", "刚刚", "上一轮", "上一条", "上一次", "它", "这个", "那")
@@ -145,10 +146,34 @@ def _infer_sub_intents(compact: str, *, device_refs: list[str], fault_code_refs:
         intents.append("decide_workorder")
     if _has_any(compact, _DISPATCH_WORDS):
         intents.append("dispatch_workorder")
+    elif _has_any(compact, _WORKORDER_CONFIRM_WORDS):
+        intents.append("confirm_workorder_draft")
     elif (_has_any(compact, _WORKORDER_DRAFT_WORDS) or ("工单" in compact and _has_any(compact, ("创建", "生成")))) and "decide_workorder" not in intents:
         intents.append("create_workorder_draft")
     if _has_any(compact, _DEVICE_ACTION_WORDS):
         intents.append("device_action_request")
+    # Terms before a source preposition describe the artifact to bind, not an
+    # additional requested goal.  Keep this normalization at the structured
+    # intent boundary so history and rewritten queries never influence goals.
+    if "generate_report" in intents and _has_any(
+        compact,
+        ("基于诊断", "根据诊断", "基于分析", "根据分析", "基于诊断结果", "根据诊断结果"),
+    ):
+        intents = [
+            item
+            for item in intents
+            if item not in {"diagnose_fault", "health_assessment", "root_cause_analysis"}
+        ]
+    if set(intents).intersection({"decide_workorder", "create_workorder_draft", "confirm_workorder_draft", "dispatch_workorder"}) and _has_any(
+        compact,
+        ("基于报告", "根据报告", "依据报告", "从报告"),
+    ):
+        intents = [item for item in intents if item != "generate_report"]
+    if _has_any(compact, ("分析并生成报告", "诊断并生成报告")):
+        if "diagnose_fault" not in intents:
+            intents.insert(0, "diagnose_fault")
+        if "generate_report" not in intents:
+            intents.append("generate_report")
     if not intents and device_refs:
         intents.append("check_current_status")
     return _dedupe(intents)
@@ -167,6 +192,8 @@ def _infer_requested_outputs(sub_intents: list[str]) -> list[str]:
     if "decide_workorder" in sub_intents:
         outputs.append("workorder_decision")
     if "create_workorder_draft" in sub_intents:
+        outputs.append("workorder_draft")
+    if "confirm_workorder_draft" in sub_intents:
         outputs.append("workorder_draft")
     if "dispatch_workorder" in sub_intents:
         outputs.append("dispatch_boundary")
@@ -261,6 +288,7 @@ def _primary_intent(sub_intents: list[str]) -> str:
         "dispatch_workorder",
         "device_action_request",
         "create_workorder_draft",
+        "confirm_workorder_draft",
         "decide_workorder",
         "generate_report",
         "resolution_recommendation",

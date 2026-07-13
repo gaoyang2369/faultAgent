@@ -322,7 +322,7 @@ def test_workorder_dispatch_and_device_action_are_blocked() -> None:
         assert result.node_results[0].output["allowed_next_step"] == "deny"
 
 
-def test_approval_node_blocks_with_draft_only_or_deny_interrupt() -> None:
+def test_approval_node_returns_pending_for_draft_only_and_blocks_dangerous_action() -> None:
     workorder_result = _runtime().execute(
         _plan(
             [{"node_id": "approval_1", "node_type": "approval"}],
@@ -336,7 +336,9 @@ def test_approval_node_blocks_with_draft_only_or_deny_interrupt() -> None:
         )
     )
 
-    assert workorder_result.status == "blocked"
+    assert workorder_result.status == "completed"
+    assert workorder_result.node_results[0].output["status"] == "pending_manual_confirmation"
+    assert workorder_result.node_results[0].output["dispatch_performed"] is False
     assert workorder_result.node_results[0].output["interrupts"][0]["allowed_next_step"] == "draft_only"
     assert device_result.status == "blocked"
     assert device_result.node_results[0].output["interrupts"][0]["allowed_next_step"] == "deny"
@@ -357,8 +359,9 @@ def test_approval_requirement_not_lost_when_node_input_is_empty_list() -> None:
         )
     )
 
-    assert result.status == "blocked"
+    assert result.status == "completed"
     output = result.node_results[0].output
+    assert output["status"] == "pending_manual_confirmation"
     assert output["required"] is True
     assert output["approval_requirements"][0]["requirement_id"] == "approval_workorder_draft"
     assert output["approval_requirements"][0]["required"] is True

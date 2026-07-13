@@ -23,7 +23,8 @@ from fault_diagnosis import config
 from fault_diagnosis.server.http.routers.auth import router as auth_router
 from fault_diagnosis.server.http.routers.chat import router as chat_router
 from fault_diagnosis.server.auth.session_scope import SessionScopeManager
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import clear_all_artifacts, save_thread_artifact
+from fault_diagnosis.agent.contracts import ArtifactEnvelope, ArtifactLineage, ArtifactManifest
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import clear_all_artifacts, commit_artifact, save_thread_artifact
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
 from fault_diagnosis.server.devtools.dev_mode import init_dev_state
 from evaluators import case_assertion_strength_failures, evaluate_plan_case, hard_gate_failures, summarize_results
@@ -69,7 +70,61 @@ def install_artifact_fixture(thread_id: str, fixture_name: str | None) -> None:
     for item in items:
         item = dict(item)
         item["thread_id"] = thread_id
-        save_thread_artifact(DiagnosisArtifactEnvelope.model_validate(item))
+        envelope = DiagnosisArtifactEnvelope.model_validate(item)
+        legacy_payload = dict(envelope.payload)
+        raw_manifests = legacy_payload.get("artifact_manifests", []) or []
+        ids_by_type = {
+            str(raw.get("artifact_type") or ""): str(raw.get("artifact_id") or "")
+            for raw in raw_manifests
+            if isinstance(raw, dict)
+        }
+        committed_manifests = []
+        for raw in raw_manifests:
+            manifest = ArtifactManifest.model_validate({**raw, "thread_id": thread_id})
+            sources = []
+            if manifest.artifact_type == "analysis_artifact":
+                sources = [ids_by_type[key] for key in ("sql_artifact", "knowledge_artifact") if ids_by_type.get(key)]
+            elif manifest.artifact_type == "report_artifact" and ids_by_type.get("analysis_artifact"):
+                sources = [ids_by_type["analysis_artifact"]]
+            lineage = ArtifactLineage(
+                lineage_status="complete",
+                artifact_id=manifest.artifact_id,
+                artifact_type=manifest.artifact_type,
+                subject_device_refs=list(manifest.device_refs),
+                fault_code_refs=list(manifest.fault_code_refs),
+                source_artifact_ids=sources,
+                source_evidence_bundle_ids=[manifest.evidence_bundle_id] if manifest.evidence_bundle_id else [],
+                source_tables=[manifest.source_table] if manifest.source_table else [],
+                created_from_goal_ids=["eval_fixture_goal"],
+            )
+            manifest = manifest.model_copy(
+                update={
+                    "artifact_status": "complete",
+                    "evidence_refs": list(manifest.evidence_refs or [f"eval:{manifest.artifact_id}"]),
+                    "lineage": lineage,
+                },
+                deep=True,
+            )
+            payload_key = {
+                "sql_artifact": "sql_artifact",
+                "knowledge_artifact": "knowledge_artifact",
+                "analysis_artifact": "analysis_artifact",
+                "report_artifact": "report_artifact",
+                "workorder_artifact": "workorder_draft",
+            }.get(manifest.artifact_type, manifest.artifact_type)
+            canonical = commit_artifact(
+                ArtifactEnvelope(
+                    artifact_id=manifest.artifact_id,
+                    artifact_type=manifest.artifact_type,
+                    thread_id=thread_id,
+                    payload={payload_key: legacy_payload.get(payload_key) or {"fixture": True}},
+                    manifest=manifest,
+                    lineage=lineage,
+                )
+            )
+            committed_manifests.append(canonical.manifest.model_dump(mode="json"))
+        legacy_payload["artifact_manifests"] = committed_manifests
+        save_thread_artifact(envelope.model_copy(update={"payload": legacy_payload}, deep=True))
 
 
 def login_identity(client: TestClient, fixture_name: str | None, role: str | None) -> None:

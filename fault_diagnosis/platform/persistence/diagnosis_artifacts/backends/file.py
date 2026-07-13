@@ -33,6 +33,9 @@ class FileArtifactStoreBackend(ArtifactStoreBackend):
         digest = hashlib.sha256(str(thread_id).encode("utf-8")).hexdigest()[:32]
         return self.root_dir / f"{digest}.jsonl"
 
+    def _artifact_file(self, thread_id: str) -> Path:
+        return self._thread_file(thread_id).with_suffix(".artifacts.jsonl")
+
     def _read_thread_unlocked(self, thread_id: str) -> list[DiagnosisArtifactEnvelope]:
         self._ensure_ready()
         target = self._thread_file(thread_id)
@@ -83,13 +86,55 @@ class FileArtifactStoreBackend(ArtifactStoreBackend):
             envelopes = self._read_thread_unlocked(thread_id)
         return list(reversed(envelopes))[:normalized_limit]
 
+    def save_artifact(self, envelope):  # noqa: ANN001, ANN201
+        from fault_diagnosis.domain.artifacts import ArtifactEnvelope
+        with self._lock:
+            self._ensure_ready()
+            target = self._artifact_file(envelope.thread_id)
+            records: dict[str, ArtifactEnvelope] = {}
+            if target.exists():
+                for line in target.read_text(encoding="utf-8").splitlines():
+                    try:
+                        item = ArtifactEnvelope.model_validate_json(line)
+                    except Exception:
+                        continue
+                    records[item.artifact_id] = item
+            saved = ArtifactEnvelope.model_validate_json(envelope.model_dump_json())
+            records[saved.artifact_id] = saved
+            temp_path = target.with_suffix(".jsonl.tmp")
+            temp_path.write_text(
+                "".join(f"{item.model_dump_json()}\n" for item in records.values()),
+                encoding="utf-8",
+            )
+            os.replace(temp_path, target)
+            return ArtifactEnvelope.model_validate_json(saved.model_dump_json())
+
+    def get_artifact(self, thread_id: str, artifact_id: str):  # noqa: ANN201
+        from fault_diagnosis.domain.artifacts import ArtifactEnvelope
+        with self._lock:
+            target = self._artifact_file(thread_id)
+            if not target.exists():
+                return None
+            for line in target.read_text(encoding="utf-8").splitlines():
+                try:
+                    item = ArtifactEnvelope.model_validate_json(line)
+                except Exception:
+                    continue
+                if item.thread_id == thread_id and item.artifact_id == artifact_id:
+                    return item
+        return None
+
     def clear_thread(self, thread_id: str) -> None:
         with self._lock:
             target = self._thread_file(thread_id)
             try:
                 target.unlink()
             except FileNotFoundError:
-                return
+                pass
+            try:
+                self._artifact_file(thread_id).unlink()
+            except FileNotFoundError:
+                pass
 
     def clear_all(self) -> None:
         with self._lock:

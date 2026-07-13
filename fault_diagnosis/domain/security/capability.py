@@ -29,7 +29,7 @@ _PERMISSION_BY_CAPABILITY = {
     "generate_report_from_previous": WORKFLOW_REPORT_GENERATION,
     "decide_workorder": WORKFLOW_ACTION_REQUEST,
     "create_workorder_draft": WORKFLOW_ACTION_REQUEST,
-    "refresh_then_decide_workorder": WORKFLOW_ACTION_REQUEST,
+    "confirm_workorder_draft": WORKFLOW_ACTION_REQUEST,
 }
 
 
@@ -45,7 +45,7 @@ def authorize_capability_preflight(auth: AuthContext, capability: str) -> Author
             denied_reason_code="report_permission_denied",
             user_message="当前身份不能生成正式报告，已降级为运行状态摘要。",
         )
-    if capability in {"decide_workorder", "create_workorder_draft", "refresh_then_decide_workorder"}:
+    if capability in {"decide_workorder", "create_workorder_draft", "confirm_workorder_draft"}:
         code = "workorder_permission_denied"
         message = "当前身份无维修工单判断或草稿生成权限。"
     elif capability == "root_cause_analysis":

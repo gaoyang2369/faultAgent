@@ -25,12 +25,20 @@ class ApprovalNode:
             "approval_requirements": normalized,
             "allowed_next_step": "deny" if deny else normalized[0].get("allowed_next_step", "ask_confirmation"),
         }
+        if deny:
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"required": True, "approval_requirements": normalized, "interrupts": [interrupt]},
+                error={"code": "approval_denied_boundary", "message": "This action is forbidden."},
+            )
         return NodeExecutionOutput(
-            status="blocked",
-            output={"required": True, "approval_requirements": normalized, "interrupts": [interrupt]},
-            error={
-                "code": "approval_denied_boundary" if deny else "approval_required",
-                "message": "Human approval is required before continuing.",
+            status="completed",
+            output={
+                "required": True,
+                "status": "pending_manual_confirmation",
+                "approval_requirements": normalized,
+                "interrupts": [interrupt],
+                "dispatch_performed": False,
             },
         )
 

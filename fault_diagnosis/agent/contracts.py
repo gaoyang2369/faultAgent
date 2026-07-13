@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from fault_diagnosis.domain.artifacts import ArtifactEnvelope, ArtifactLineage, ArtifactManifest, ArtifactType
 
 
 ENGINE_VERSION = "v2"
@@ -13,16 +14,6 @@ PLAN_SNAPSHOT_V2_SCHEMA_VERSION = "agent_engine_plan_snapshot.v2"
 NodeStatus = Literal["pending", "running", "completed", "skipped", "blocked", "failed", "cancelled"]
 PlanSnapshotStatus = Literal["not_implemented", "planned", "validated", "validated_degraded", "blocked", "failed"]
 RiskLevel = Literal["low", "medium", "high", "critical"]
-ArtifactType = Literal[
-    "knowledge_artifact",
-    "sql_artifact",
-    "analysis_artifact",
-    "structured_analysis_artifact",
-    "report_artifact",
-    "workorder_artifact",
-    "comparison_artifact",
-]
-
 FailurePolicy = Literal[
     "continue_independent_goals",
     "continue_degraded",
@@ -104,10 +95,35 @@ class EffectiveGoal(AgentEngineContract):
     depends_on_goal_ids: list[str] = Field(default_factory=list)
 
 
-class EffectiveGoalSet(AgentEngineContract):
-    schema_version: str = "effective_goal_set.v1"
+class RequestedGoalSet(AgentEngineContract):
+    """User-requested goals derived only from the current message and IntentFrame."""
+
+    schema_version: str = "requested_goal_set.v1"
     goals: list[EffectiveGoal] = Field(default_factory=list)
     primary_goal_id: str = ""
+
+
+class SourceBinding(AgentEngineContract):
+    """An exact, verified binding to a committed historical artifact."""
+
+    schema_version: str = "source_binding.v1"
+    goal_id: str = ""
+    artifact_id: str
+    artifact_type: str
+    thread_id: str
+    lineage_status: Literal["complete", "legacy_partial", "invalid"] = "legacy_partial"
+    persistence_status: Literal["staged", "committed", "failed", "not_persisted"] = "not_persisted"
+    readback_verified: bool = False
+
+
+class InternalPrerequisite(AgentEngineContract):
+    """Runtime work needed to serve requested goals without becoming a user goal."""
+
+    schema_version: str = "internal_prerequisite.v1"
+    prerequisite_id: str
+    node_type: str
+    serves_goal_ids: list[str] = Field(default_factory=list)
+    reason: str = ""
 
 
 class TargetScope(AgentEngineContract):
@@ -131,85 +147,6 @@ class GoalQuerySpec(AgentEngineContract):
     analysis_request: dict[str, Any] | None = None
     target_devices: list[str] = Field(default_factory=list)
     fault_codes: list[str] = Field(default_factory=list)
-
-
-class ArtifactLineage(AgentEngineContract):
-    schema_version: str = "artifact_lineage.v1"
-    lineage_status: Literal["complete", "legacy_partial", "invalid"] = "legacy_partial"
-    artifact_id: str = ""
-    artifact_type: str = ""
-    subject_device_refs: list[str] = Field(default_factory=list)
-    fault_code_refs: list[str] = Field(default_factory=list)
-    source_artifact_ids: list[str] = Field(default_factory=list)
-    source_evidence_bundle_ids: list[str] = Field(default_factory=list)
-    data_basis: list[dict[str, Any]] = Field(default_factory=list)
-    source_tables: list[str] = Field(default_factory=list)
-    time_windows: list[dict[str, Any]] = Field(default_factory=list)
-    created_from_goal_ids: list[str] = Field(default_factory=list)
-
-
-class ArtifactManifest(AgentEngineContract):
-    """Stable follow-up contract for runtime artifacts.
-
-    The persisted DiagnosisArtifactEnvelope remains the compatibility container;
-    manifests are the per-artifact facts used by context resolution.
-    """
-
-    schema_version: str = "artifact_manifest.v1"
-    artifact_id: str = ""
-    artifact_type: ArtifactType
-    thread_id: str = ""
-    turn_id: str = ""
-    request_id: str = ""
-    trace_id: str = ""
-    produced_by_skill: str = ""
-    produced_by_nodes: list[str] = Field(default_factory=list)
-    status: Literal["completed", "failed", "partial"] = "completed"
-    followupable: bool = False
-    reportable: bool = False
-    actionable: bool = False
-    device_refs: list[str] = Field(default_factory=list)
-    fault_code_refs: list[str] = Field(default_factory=list)
-    time_window: dict[str, Any] = Field(default_factory=dict)
-    source_table: str = ""
-    data_window: dict[str, Any] = Field(default_factory=dict)
-    requested_window: dict[str, Any] = Field(default_factory=dict)
-    resolved_window: dict[str, Any] = Field(default_factory=dict)
-    data_basis: dict[str, Any] = Field(default_factory=dict)
-    latest_sample_time: str = ""
-    sample_count: int = 0
-    runtime_status: str = "unknown"
-    key_findings: list[str] = Field(default_factory=list)
-    supporting_evidence_ids: list[str] = Field(default_factory=list)
-    freshness: str = "unknown"
-    currentness: str = ""
-    severity: str = ""
-    risk_level: str = ""
-    status_level: str = ""
-    diagnosis_summary: str = ""
-    findings: list[str] = Field(default_factory=list)
-    probable_causes: list[str] = Field(default_factory=list)
-    recommendations: list[str] = Field(default_factory=list)
-    evidence_refs: list[str] = Field(default_factory=list)
-    evidence_bundle_id: str = ""
-    report_url: str = ""
-    report_filename: str = ""
-    linked_analysis_artifact_id: str = ""
-    linked_sql_artifact_id: str = ""
-    linked_evidence_bundle_id: str = ""
-    source_file: str = ""
-    source_page: str = ""
-    parsed_manual_fields: dict[str, Any] = Field(default_factory=dict)
-    available_followups: list[str] = Field(default_factory=list)
-    supported_followup_capabilities: list[str] = Field(default_factory=list)
-    available_actions: list[str] = Field(default_factory=list)
-    authorization_scope_summary: dict[str, Any] = Field(default_factory=dict)
-    draft_only: bool = False
-    manual_confirmation_required: bool = False
-    dispatch_forbidden: bool = False
-    owner_user_id: str = ""
-    owner_session_id: str = ""
-    lineage: ArtifactLineage = Field(default_factory=ArtifactLineage)
 
 
 class EffectiveRequestFrame(AgentEngineContract):
@@ -248,7 +185,7 @@ class EffectiveRequestFrame(AgentEngineContract):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     resolution_trace: list[dict[str, Any]] = Field(default_factory=list)
     safety_flags: list[str] = Field(default_factory=list)
-    effective_goal_set: EffectiveGoalSet = Field(default_factory=EffectiveGoalSet)
+    requested_goal_set: RequestedGoalSet = Field(default_factory=RequestedGoalSet)
     target_scope: TargetScope = Field(default_factory=TargetScope)
     goal_query_specs: list[GoalQuerySpec] = Field(default_factory=list)
     requested_goals: list[str] = Field(default_factory=list)
@@ -256,6 +193,14 @@ class EffectiveRequestFrame(AgentEngineContract):
     dropped_goals: list[dict[str, Any]] = Field(default_factory=list)
     clarification_reasons: list[dict[str, Any]] = Field(default_factory=list)
     discarded_artifact_ids: list[str] = Field(default_factory=list)
+    source_bindings: list[SourceBinding] = Field(default_factory=list)
+    internal_prerequisites: list[InternalPrerequisite] = Field(default_factory=list)
+
+    @property
+    def effective_goal_set(self) -> RequestedGoalSet:
+        """Read-only compatibility alias; requested_goal_set is authoritative."""
+
+        return self.requested_goal_set
 
 
 class SkillRoute(AgentEngineContract):
@@ -502,6 +447,7 @@ class NodeResult(AgentEngineContract):
     goal_ids: list[str] = Field(default_factory=list)
     query_spec_id: str = ""
     target_scope_id: str = ""
+    artifact_id: str = ""
 
 
 class EvidenceLedger(AgentEngineContract):
@@ -543,7 +489,16 @@ class CompositeOutputFrame(AgentEngineContract):
     schema_version: str = "composite_output_frame.v1"
     deliverables: list[DeliverableResult] = Field(default_factory=list)
     overall_status: str = "not_implemented"
+    content: str = ""
+    answer_variant: str = "not_implemented"
     legacy_answer_variant: str = "not_implemented"
+
+    @model_validator(mode="after")
+    def validate_one_deliverable_per_goal(self) -> "CompositeOutputFrame":
+        goal_ids = [item.goal_id for item in self.deliverables if item.goal_id]
+        if len(goal_ids) != len(set(goal_ids)):
+            raise ValueError("each requested goal must produce exactly one deliverable")
+        return self
 
 
 class OutputFrame(AgentEngineContract):

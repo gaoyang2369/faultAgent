@@ -109,7 +109,7 @@ def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: s
                 thread_id=thread_id,
                 artifact_id=snapshot.effective_request_frame.target_artifact_id,
                 auth=auth,
-                expected_types={"sql_artifact", "analysis_artifact", "structured_analysis_artifact"},
+                expected_types={"sql_artifact", "analysis_artifact"},
                 expected_devices=_effective_devices(snapshot),
                 require_complete_lineage=True,
             )
@@ -120,7 +120,10 @@ def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: s
             else:
                 inputs["artifact_access_error"] = access.code
         if node_type == "workorder":
-            inputs.setdefault("create_draft", True)
+            confirming = snapshot.effective_request_frame.semantic_intent == "confirm_workorder_draft"
+            inputs.setdefault("create_draft", not confirming)
+            if confirming:
+                inputs["action_type"] = "confirm_workorder_draft"
             inputs.setdefault("manual_confirmation_required", True)
             inputs.setdefault("draft_only", True)
             inputs.update(_workorder_manifest_inputs(thread_id, snapshot=snapshot, inputs=inputs, auth_context=auth))
@@ -233,11 +236,12 @@ def _workorder_manifest_inputs(
     )
     selected: dict[str, Any] = {}
     if target_id:
+        confirming = snapshot.effective_request_frame.semantic_intent == "confirm_workorder_draft"
         access = resolve_target_artifact(
             thread_id=thread_id,
             artifact_id=target_id,
             auth=auth_context,
-            expected_types={"report_artifact", "analysis_artifact", "structured_analysis_artifact"},
+            expected_types={"workorder_artifact"} if confirming else {"report_artifact", "analysis_artifact"},
             expected_devices=_effective_devices(snapshot),
             require_complete_lineage=True,
         )
@@ -255,10 +259,8 @@ def _workorder_manifest_inputs(
         result["evidence_freshness"] = str(selected.get("freshness") or "")
         result["report_url"] = str(selected.get("report_url") or selected.get("report_filename") or "")
         if str(selected.get("freshness") or "") == "stale":
-            result["stale_refresh_required"] = True
             result["stale_evidence_disclosure_required"] = True
     if snapshot.effective_request_frame.stale_evidence_disclosure_required:
-        result["stale_refresh_required"] = True
         result["stale_evidence_disclosure_required"] = True
     return result
 
@@ -301,7 +303,7 @@ def _reportable_payload(
             thread_id=thread_id,
             artifact_id=target_id,
             auth=auth_context or build_auth_context(role="guest"),
-            expected_types={"sql_artifact", "analysis_artifact", "structured_analysis_artifact", "comparison_artifact", "report_artifact"},
+            expected_types={"sql_artifact", "analysis_artifact", "comparison_artifact", "report_artifact"},
             expected_devices=list(expected_devices or []),
             require_complete_lineage=True,
         )

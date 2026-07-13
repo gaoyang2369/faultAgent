@@ -70,9 +70,9 @@ class PlanCompiler:
             expected_outputs.extend(metadata.output_variants)
             risk_levels.append(metadata.risk_level)
 
-        if effective_request_frame is not None and effective_request_frame.effective_goal_set.goals:
+        if effective_request_frame is not None and effective_request_frame.requested_goal_set.goals:
             authorized = set(effective_request_frame.authorized_goal_ids)
-            effective_goals = list(effective_request_frame.effective_goal_set.goals)
+            effective_goals = list(effective_request_frame.requested_goal_set.goals)
             goals = [
                 {
                     "goal_id": goal.goal_id,
@@ -188,7 +188,7 @@ def _normalized_nodes(
     context_frame: ContextFrame,
     effective_request_frame: EffectiveRequestFrame | None = None,
 ) -> list[dict[str, Any]]:
-    if effective_request_frame is not None and effective_request_frame.effective_goal_set.goals:
+    if effective_request_frame is not None and effective_request_frame.requested_goal_set.goals:
         return _goal_scoped_nodes(
             effective_request_frame=effective_request_frame,
             context_frame=context_frame,
@@ -246,7 +246,7 @@ def _goal_scoped_nodes(
     authorized = set(effective_request_frame.authorized_goal_ids)
     goals = [
         goal
-        for goal in effective_request_frame.effective_goal_set.goals
+        for goal in effective_request_frame.requested_goal_set.goals
         if not authorized or goal.goal_id in authorized
     ]
     by_capability = {goal.capability: goal for goal in goals}
@@ -338,6 +338,7 @@ def _goal_scoped_nodes(
     compare = by_capability.get("compare_runtime_status")
     report = by_capability.get("generate_report")
     workorder = by_capability.get("create_workorder_draft")
+    confirm_workorder = by_capability.get("confirm_workorder_draft")
 
     if explain or (fault_codes and (diagnose or recommend)):
         rag_goals = [goal.goal_id for goal in (explain, diagnose, recommend) if goal is not None]
@@ -354,7 +355,7 @@ def _goal_scoped_nodes(
         diagnose
         or recommend
         or (explain and status)
-        or (report and effective_request_frame.target_artifact_type not in {"analysis_artifact", "structured_analysis_artifact", "report_artifact", "report_generation"})
+        or (report and effective_request_frame.target_artifact_type not in {"analysis_artifact", "report_artifact", "report_generation"})
         or (workorder and not effective_request_frame.target_artifact_id)
     )
     if needs_analysis and not target_is_runtime and not any(node.get("node_type") == "sql" for node in nodes) and devices:
@@ -377,6 +378,9 @@ def _goal_scoped_nodes(
     if workorder:
         append_node("workorder", [workorder.goal_id], failure_policy="block_all")
         append_node("approval", [workorder.goal_id], failure_policy="block_all")
+    if confirm_workorder:
+        append_node("workorder", [confirm_workorder.goal_id], failure_policy="block_all")
+        append_node("approval", [confirm_workorder.goal_id], failure_policy="block_all")
     return nodes
 
 
@@ -389,7 +393,7 @@ def _skill_for_capability(capability: str) -> str:
         return "alarm_triage"
     if capability == "generate_report":
         return "report_generation"
-    if capability == "create_workorder_draft":
+    if capability in {"create_workorder_draft", "confirm_workorder_draft"}:
         return "workorder_decision"
     return ""
 
@@ -453,7 +457,6 @@ def compile_node_inputs(
             "create_draft": True,
             "action_type": action,
             "workorder_action": action,
-            "stale_refresh_required": effective_request_frame.stale_evidence_disclosure_required,
             "source_artifact_refs": _source_artifact_refs(effective_request_frame),
             "manual_confirmation_required": True,
             "draft_only": True,
@@ -506,7 +509,7 @@ def _wanted_node_types(
         "workorder_decision" in selected
         and effective_request_frame is not None
         and effective_request_frame.target_artifact_id
-        and effective_request_frame.target_artifact_type in {"report_artifact", "analysis_artifact", "structured_analysis_artifact"}
+        and effective_request_frame.target_artifact_type in {"report_artifact", "analysis_artifact"}
     ):
         return ["workorder", "approval"]
     if "report_generation" in selected and (

@@ -15,7 +15,6 @@ from fault_diagnosis.domain.diagnosis.contracts import (
     WorkOrderSuggestion,
 )
 from fault_diagnosis.domain.diagnosis.runtime_status import RuntimeStatusAssessment
-from fault_diagnosis.domain.diagnosis.steps.knowledge_lookup import extract_fault_codes_from_text
 from ..contracts import CompositeOutputFrame, DeliverableResult, NodeResult, OutputFrame, PlanGoal
 
 
@@ -134,14 +133,15 @@ def build_output_frame(
     composite = CompositeOutputFrame(
         deliverables=deliverables,
         overall_status=_composite_status(deliverables, status),
+        content="",
+        answer_variant=variant,
         legacy_answer_variant=variant,
     )
     composite_answer = _render_composite(deliverables)
-    if composite_answer:
-        final_answer = composite_answer
+    composite.content = composite_answer or final_answer
     return OutputFrame(
-        answer_variant=variant,
-        final_answer=final_answer,
+        answer_variant=composite.answer_variant,
+        final_answer=composite.content,
         status_brief=status_brief,
         diagnosis_report_payload=diagnosis_payload,
         workorder_draft_payload=workorder_payload,
@@ -240,7 +240,7 @@ def _build_deliverables(
                 )
             )
             continue
-        for deliverable_type in deliverable_types:
+        for deliverable_type in deliverable_types[:1]:
             if deliverable_type not in {
                 "fault_code_explanation", "runtime_status", "runtime_comparison", "diagnosis",
                 "recommendations", "report", "workorder_draft", "clarification", "permission_denied",
@@ -248,12 +248,23 @@ def _build_deliverables(
                 continue
             if deliverable_type == "fault_code_explanation":
                 success = bool(knowledge_artifact and knowledge_artifact.success)
+                explanation = {
+                    "fault_codes": list(getattr(knowledge_artifact, "fault_codes", []) or []),
+                    "fault_code_entries": [
+                        {
+                            key: value
+                            for key, value in _dump(entry).items()
+                            if key in {"code", "title", "meaning", "cause", "remedy"}
+                        }
+                        for entry in list(getattr(knowledge_artifact, "fault_code_entries", []) or [])
+                    ],
+                }
                 results.append(
                     DeliverableResult(
                         goal_id=goal_id,
                         deliverable_type=deliverable_type,
                         status="completed" if success else "failed",
-                        payload=_dump(knowledge_artifact) or {},
+                        payload=explanation,
                         error_code=None if success else str(getattr(knowledge_artifact, "error_code", "") or "knowledge_unavailable"),
                         error_message=None if success else str(getattr(knowledge_artifact, "error", "") or "知识库未返回可靠释义。"),
                     )
@@ -311,7 +322,11 @@ def _build_deliverables(
                     )
                 )
             elif deliverable_type == "workorder_draft":
-                success = bool(workorder_payload.get("draft") or workorder_payload.get("draft_id"))
+                success = bool(
+                    workorder_payload.get("workorder_draft")
+                    or workorder_payload.get("draft")
+                    or workorder_payload.get("draft_id")
+                )
                 results.append(
                     DeliverableResult(
                         goal_id=goal_id,
@@ -389,7 +404,7 @@ def _deliverable_body(item: DeliverableResult) -> str:
         if entries and isinstance(entries[0], dict):
             entry = entries[0]
             return "；".join(str(value) for value in (entry.get("code"), entry.get("meaning"), entry.get("cause"), entry.get("remedy")) if value)
-        return str(payload.get("raw_output") or payload.get("query") or "已获得知识库解释。")
+        return "未获得可验证的结构化故障码解释。"
     if item.deliverable_type == "runtime_status":
         lines = []
         for assessment in payload.get("assessments", []):
@@ -402,7 +417,13 @@ def _deliverable_body(item: DeliverableResult) -> str:
                 lines.append(f"{assessment.get('device', '设备')}：{assessment.get('runtime_status', 'unknown')}。{suffix}{limitation_suffix}".strip())
         return "\n".join(lines) or "已完成运行状态评估。"
     if item.deliverable_type == "runtime_comparison":
-        return str(payload.get("conclusion") or "已完成设备运行比较。")
+        lines = [str(payload.get("conclusion") or "已完成设备运行比较。")]
+        for finding in payload.get("comparison_dimensions", []) or []:
+            if not isinstance(finding, dict):
+                continue
+            values = "，".join(f"{device}={value}" for device, value in (finding.get("values_by_device") or {}).items())
+            lines.append(f"{finding.get('dimension')}：{values}。{finding.get('conclusion') or ''}".strip())
+        return "\n".join(lines)
     if item.deliverable_type == "diagnosis":
         return str(payload.get("conclusion") or "已完成综合诊断。")
     if item.deliverable_type == "recommendations":
@@ -604,7 +625,9 @@ def _render_workorder_answer(payload: dict[str, Any]) -> str:
 
     stale_hint = _first_text(
         draft.get("stale_warning"),
-        "上一轮证据存在时效性风险，派发前应刷新当前状态。" if payload.get("stale_evidence_disclosure_required") else "",
+        "当前判断复用了非实时历史证据；草稿结论不代表设备实时状态。"
+        if payload.get("stale_evidence_disclosure_required")
+        else "",
     )
     if stale_hint:
         lines.append(_line("数据时效性提示", stale_hint))
@@ -764,28 +787,14 @@ def _render_knowledge_answer(
     if entries:
         return _render_fault_code_entries(knowledge_artifact, entries)
 
-    snippets = _dedupe(list(knowledge_artifact.snippets if knowledge_artifact else []))
-    if not snippets and evidence_bundle:
-        snippets = _dedupe(
-            [
-                item.summary
-                for item in evidence_bundle.evidence_items
-                if item.evidence_type in {"fault_code_reference", "manual_reference"} and item.summary
-            ]
-        )
     codes = _dedupe(list(knowledge_artifact.fault_codes if knowledge_artifact else []))
-    parts: list[str] = []
     if codes:
-        parts.append(_line("故障码", "、".join(codes)))
-    parts.extend(_numbered("知识库结果", [_clean_knowledge_snippet(item) for item in snippets[:3]]))
-    stale_lines = _stale_disclosure_lines(evidence_bundle)
-    if parts:
-        return "\n".join([*parts, *stale_lines]).strip()
+        return f"未获得 {'、'.join(codes)} 的结构化手册解析结果。"
     return "未检索到当前权限范围内可用的故障码说明。"
 
 
 def _render_fault_code_entries(knowledge_artifact: KnowledgeStepArtifact | None, entries: list[FaultCodeEntry]) -> str:
-    requested_codes = extract_fault_codes_from_text(knowledge_artifact.query if knowledge_artifact else "")
+    requested_codes = [str(item).upper() for item in (knowledge_artifact.fault_codes if knowledge_artifact else [])]
     exact_entries = [
         entry
         for entry in entries
@@ -797,45 +806,16 @@ def _render_fault_code_entries(knowledge_artifact: KnowledgeStepArtifact | None,
         lines.extend(_numbered("候选", [_candidate_line(entry) for entry in entries]))
         return "\n".join(lines).strip()
 
-    entry = exact_entries[0]
-    detailed = _wants_fault_code_detail(knowledge_artifact.query if knowledge_artifact else "")
-    return _render_fault_code_entry_detail(entry) if detailed else _render_fault_code_entry_concise(entry)
+    return _render_fault_code_entry_concise(exact_entries[0])
 
 
 def _render_fault_code_entry_concise(entry: FaultCodeEntry) -> str:
     parts = [
         _line("一句话解释", f"{entry.code}：{_entry_meaning(entry)}"),
         _line("可能原因", _manual_or_missing(entry.cause)),
-        _line("建议处理", _manual_or_missing(entry.remedy)),
-        _line("相关参数", _references_text(entry.references)),
-        _line("来源", _source_text(entry)),
-        "详细信息：如需查看信息类别、驱动对象、传播、反应、应答等手册字段，请继续追问“详细点”或“手册字段”。",
+        _line("手册处理", _manual_or_missing(entry.remedy)),
     ]
     return "\n".join(item for item in parts if item).strip()
-
-
-def _render_fault_code_entry_detail(entry: FaultCodeEntry) -> str:
-    parts = [
-        _render_fault_code_entry_concise(entry),
-        "",
-        "详细手册信息：",
-        f"- 故障码：{entry.code}",
-        f"- 标题：{_manual_or_missing(entry.title)}",
-        f"- 含义：{_manual_or_missing(entry.meaning)}",
-        f"- 信息类别：{_manual_or_missing(entry.category)}",
-        f"- 驱动对象：{_manual_or_missing(entry.drive_object)}",
-        f"- 组件：{_manual_or_missing(entry.component)}",
-        f"- 传播：{_manual_or_missing(entry.propagation)}",
-        f"- 反应：{_manual_or_missing(entry.reaction)}",
-        f"- 应答：{_manual_or_missing(entry.acknowledgement)}",
-        f"- 原因：{_manual_or_missing(entry.cause)}",
-        f"- 处理：{_manual_or_missing(entry.remedy)}",
-        f"- 参见：{_references_text(entry.references)}",
-        f"- 匹配方式：{entry.match_type}",
-        f"- 来源文件：{_manual_or_missing(entry.source_file)}",
-        f"- 页码：{_manual_or_missing(entry.page)}",
-    ]
-    return "\n".join(parts).strip()
 
 
 def _entry_meaning(entry: FaultCodeEntry) -> str:
@@ -847,37 +827,9 @@ def _manual_or_missing(value: Any) -> str:
     return text or "手册未明确给出"
 
 
-def _references_text(references: list[str]) -> str:
-    return "、".join(_dedupe(references)) if references else "手册未明确给出"
-
-
-def _source_text(entry: FaultCodeEntry) -> str:
-    source = entry.source_file or "知识库"
-    page = f"，第 {entry.page} 页" if entry.page else ""
-    return f"{source}{page}"
-
-
 def _candidate_line(entry: FaultCodeEntry) -> str:
-    source = _source_text(entry)
     title = entry.title or entry.meaning or "手册未明确给出"
-    return f"{entry.code}：{title}（来源：{source}，匹配方式：{entry.match_type}）"
-
-
-def _wants_fault_code_detail(query: str) -> bool:
-    return any(keyword in str(query or "") for keyword in ("详细", "原文", "手册字段", "完整字段", "展开"))
-
-
-def _clean_knowledge_snippet(value: str) -> str:
-    lines = []
-    for raw_line in str(value or "").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith(("来源：", "来源文件：", "file_id：", "source_type：", "extract_backend：", "来源页码：", "检索方式：")):
-            continue
-        lines.append(line.removeprefix("文档片段：").strip())
-    text = "；".join(lines).strip()
-    return text[:600] if text else str(value or "").strip()[:600]
+    return f"{entry.code}：{title}"
 
 
 def _missing_evidence(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..contracts import EffectiveGoal, EffectiveGoalSet, GoalQuerySpec, IntentFrame, TargetScope
+from ..contracts import EffectiveGoal, GoalQuerySpec, IntentFrame, RequestedGoalSet, TargetScope
 
 
 _CAPABILITY = {
@@ -19,7 +19,8 @@ _CAPABILITY = {
     "generate_report": "generate_report",
     "decide_workorder": "create_workorder_draft",
     "create_workorder_draft": "create_workorder_draft",
-    "dispatch_workorder": "create_workorder_draft",
+    "confirm_workorder_draft": "confirm_workorder_draft",
+    "dispatch_workorder": "dispatch_workorder",
 }
 
 _DELIVERABLE = {
@@ -30,6 +31,8 @@ _DELIVERABLE = {
     "resolution_recommendation": "recommendations",
     "generate_report": "report",
     "create_workorder_draft": "workorder_draft",
+    "confirm_workorder_draft": "workorder_draft",
+    "dispatch_workorder": "permission_denied",
 }
 
 _REQUIRED = {
@@ -40,6 +43,8 @@ _REQUIRED = {
     "resolution_recommendation": ["diagnosis_or_runtime_artifact"],
     "generate_report": ["reportable_source_or_upstream"],
     "create_workorder_draft": ["exactly_one_device", "complete_analysis_or_report_lineage"],
+    "confirm_workorder_draft": ["exactly_one_device", "complete_workorder_lineage"],
+    "dispatch_workorder": [],
 }
 
 _OPTIONAL = {
@@ -49,6 +54,8 @@ _OPTIONAL = {
     "resolution_recommendation": ["knowledge_artifact"],
     "generate_report": ["device", "fault_code", "evidence_bundle"],
     "create_workorder_draft": ["fault_code"],
+    "confirm_workorder_draft": ["fault_code"],
+    "dispatch_workorder": [],
 }
 
 _EVIDENCE = {
@@ -59,6 +66,8 @@ _EVIDENCE = {
     "resolution_recommendation": ["diagnosis_or_runtime_evidence"],
     "generate_report": ["reportable_artifact"],
     "create_workorder_draft": ["complete_artifact_lineage"],
+    "confirm_workorder_draft": ["complete_artifact_lineage"],
+    "dispatch_workorder": [],
 }
 
 _PRIORITY = {
@@ -69,6 +78,8 @@ _PRIORITY = {
     "resolution_recommendation": 40,
     "generate_report": 50,
     "create_workorder_draft": 60,
+    "confirm_workorder_draft": 60,
+    "dispatch_workorder": 0,
 }
 
 
@@ -114,7 +125,7 @@ def build_target_scope(
     )
 
 
-def canonicalize_goals(intent: IntentFrame, *, target_scope: TargetScope, source_policy: str) -> EffectiveGoalSet:
+def canonicalize_requested_goals(intent: IntentFrame, *, target_scope: TargetScope, source_policy: str) -> RequestedGoalSet:
     ordered: list[str] = []
     for raw in intent.sub_intents or ([intent.primary_intent] if intent.primary_intent else []):
         capability = _CAPABILITY.get(raw)
@@ -151,12 +162,12 @@ def canonicalize_goals(intent: IntentFrame, *, target_scope: TargetScope, source
         if goal.capability == primary_capability:
             primary = goal.goal_id
             break
-    return EffectiveGoalSet(goals=goals, primary_goal_id=primary)
+    return RequestedGoalSet(goals=goals, primary_goal_id=primary)
 
 
 def build_goal_query_specs(
     *,
-    goals: EffectiveGoalSet,
+    goals: RequestedGoalSet,
     target_scope: TargetScope,
     fault_codes: list[str],
     time_window: dict[str, Any],
@@ -197,27 +208,27 @@ def build_goal_query_specs(
     return specs
 
 
-def missing_goal_slots(
+def evaluate_goal_slots(
     *,
-    goals: EffectiveGoalSet,
+    goals: RequestedGoalSet,
     devices: list[str],
     fault_codes: list[str],
     target_artifact_type: str | None,
     target_lineage_status: str = "",
 ) -> list[dict[str, Any]]:
     reasons: list[dict[str, Any]] = []
-    capabilities = {goal.capability for goal in goals.goals}
-    reportable = target_artifact_type in {"sql_artifact", "analysis_artifact", "structured_analysis_artifact", "report_artifact"}
-    analysis_source = target_artifact_type in {"analysis_artifact", "structured_analysis_artifact", "report_artifact"}
+    reportable = target_artifact_type in {"sql_artifact", "analysis_artifact", "report_artifact"}
     for goal in goals.goals:
         missing = ""
         if goal.capability == "explain_fault_code" and not fault_codes:
             missing = "fault_code"
         elif goal.capability in {"check_runtime_status", "diagnose_fault"} and not devices and not reportable:
             missing = "device"
+        elif goal.capability == "resolution_recommendation" and not devices and not reportable:
+            missing = "diagnosis_or_runtime_source"
         elif goal.capability == "compare_runtime_status" and len(devices) < 2:
             missing = "at_least_two_devices"
-        elif goal.capability == "create_workorder_draft":
+        elif goal.capability in {"create_workorder_draft", "confirm_workorder_draft"}:
             if len(devices) != 1:
                 missing = "exactly_one_device"
         if missing:

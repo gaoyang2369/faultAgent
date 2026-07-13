@@ -186,7 +186,8 @@ def test_build_output_frame_variants_are_stable() -> None:
     assert "SQL 查询完成" in status_frame.final_answer
     assert knowledge_frame.answer_variant == "knowledge_answer"
     assert "A07089" in knowledge_frame.final_answer
-    assert "速度偏差" in knowledge_frame.final_answer
+    assert "未获得 A07089 的结构化手册解析结果" in knowledge_frame.final_answer
+    assert "速度偏差" not in knowledge_frame.final_answer
     assert diagnosis_frame.answer_variant == "diagnosis_answer"
     assert "诊断结论" in diagnosis_frame.final_answer
     assert report_frame.answer_variant == "report_ready"
@@ -333,14 +334,14 @@ def test_fault_code_answer_uses_concise_structured_template_by_default() -> None
     assert frame.answer_variant == "knowledge_answer"
     assert "一句话解释：A07089：转换单位后不能激活功能块" in frame.final_answer
     assert "可能原因：尝试激活功能块。转换单位后不允许此操作。" in frame.final_answer
-    assert "建议处理：将单位恢复到出厂设置。" in frame.final_answer
-    assert "p0100" in frame.final_answer
-    assert "来源：S120_故障手册.pdf，第 232 页" in frame.final_answer
+    assert "手册处理：将单位恢复到出厂设置。" in frame.final_answer
+    assert "p0100" not in frame.final_answer
+    assert "S120_故障手册.pdf" not in frame.final_answer
     assert "- 传播：LOCAL" not in frame.final_answer
     assert "- 反应：无" not in frame.final_answer
 
 
-def test_fault_code_answer_expands_manual_fields_when_requested() -> None:
+def test_fault_code_presenter_does_not_read_query_to_expand_chunk_metadata() -> None:
     artifact = KnowledgeStepArtifact(
         success=True,
         query="A07089 详细点，给出手册字段",
@@ -350,11 +351,10 @@ def test_fault_code_answer_expands_manual_fields_when_requested() -> None:
 
     frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact})
 
-    assert "详细手册信息：" in frame.final_answer
-    assert "- 信息类别：参数设置 / 配置 / 调试过程出错 (18)" in frame.final_answer
-    assert "- 传播：LOCAL" in frame.final_answer
-    assert "- 反应：无" in frame.final_answer
-    assert "- 应答：无" in frame.final_answer
+    assert "一句话解释：A07089" in frame.final_answer
+    assert "详细手册信息：" not in frame.final_answer
+    assert "LOCAL" not in frame.final_answer
+    assert "S120_故障手册.pdf" not in frame.final_answer
 
 
 def test_fault_code_answer_does_not_invent_missing_cause_or_remedy() -> None:
@@ -368,14 +368,14 @@ def test_fault_code_answer_does_not_invent_missing_cause_or_remedy() -> None:
     frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact})
 
     assert "可能原因：手册未明确给出" in frame.final_answer
-    assert "建议处理：手册未明确给出" in frame.final_answer
+    assert "手册处理：手册未明确给出" in frame.final_answer
 
 
 def test_fault_code_answer_warns_when_no_exact_match() -> None:
     artifact = KnowledgeStepArtifact(
         success=True,
         query="A07088 是什么意思",
-        fault_codes=["A07089"],
+        fault_codes=["A07088"],
         fault_code_entries=[_fault_code_entry(match_type="candidate_match")],
     )
 
@@ -470,7 +470,7 @@ def test_v2_artifact_projection_saves_existing_envelope_contract() -> None:
     assert "findings" in contract
 
 
-def test_v2_artifact_projection_persists_manifests_and_case_snapshot() -> None:
+def test_legacy_projection_does_not_recompute_ids_or_create_structured_analysis_manifest() -> None:
     frame = build_output_frame(
         status="completed",
         artifacts={"analysis_artifact": _analysis(), "report_artifact": ReportStepArtifact(success=True, report_filename="demo.html", report_url="/reports/demo.html")},
@@ -497,17 +497,14 @@ def test_v2_artifact_projection_persists_manifests_and_case_snapshot() -> None:
     )
 
     manifests = envelope.payload["artifact_manifests"]
-    assert any(item["artifact_type"] == "analysis_artifact" for item in manifests)
-    assert any(item["artifact_type"] == "report_artifact" and item["report_url"] == "/reports/demo.html" for item in manifests)
-    assert envelope.payload["latest_focus"]["artifact_type"] == "report_artifact"
+    assert manifests == []
+    assert not any(item.get("artifact_type") == "structured_analysis_artifact" for item in manifests)
+    assert envelope.payload["latest_focus"] == {}
     snapshot = envelope.payload["case_state_snapshot"]
-    assert snapshot["schema_version"] == "case_state_snapshot.v1"
-    assert snapshot["active_asset"] == "J1号机"
-    assert snapshot["active_fault_codes"] == ["A07089"]
-    assert snapshot["latest_artifact_type"] == "report_artifact"
+    assert snapshot == {"schema_version": "case_state_snapshot.v1"}
 
 
-def test_manifest_projection_extracts_fault_code_from_analysis_and_evidence_without_structured_payload() -> None:
+def test_manifest_projection_never_infers_identity_or_lineage_from_analysis_prose() -> None:
     bundle = EvidenceBundle(
         bundle_id="bundle.analysis.codes",
         trace_id="trace.analysis.codes",
@@ -544,11 +541,8 @@ def test_manifest_projection_extracts_fault_code_from_analysis_and_evidence_with
     )
 
     manifests = envelope.payload["artifact_manifests"]
-    analysis_manifest = next(item for item in manifests if item["artifact_type"] == "analysis_artifact")
-    report_manifest = next(item for item in manifests if item["artifact_type"] == "report_artifact")
-    assert analysis_manifest["fault_code_refs"] == ["A07089"]
-    assert report_manifest["fault_code_refs"] == ["A07089"]
-    assert envelope.payload["case_state_snapshot"]["active_fault_codes"] == ["A07089"]
+    assert manifests == []
+    assert envelope.payload["case_state_snapshot"] == {"schema_version": "case_state_snapshot.v1"}
 
 
 def test_artifact_type_mapping_for_status_report_and_clarification() -> None:

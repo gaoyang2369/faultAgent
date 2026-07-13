@@ -22,7 +22,7 @@ from fault_diagnosis.platform.persistence.repositories.conversation_store import
     get_conversation_repository,
     messages_to_history_payload,
 )
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact, list_thread_artifacts
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_artifact_manifest_exact, get_thread_artifact, list_thread_artifacts
 from fault_diagnosis.platform.persistence.repositories.history_index import get_history_index_repository
 from fault_diagnosis.server.use_cases.history_service import load_artifact_history_messages
 from fault_diagnosis.server.auth.session_scope import resolve_request_scope
@@ -216,7 +216,11 @@ def _v2_plan_compat_payload(*, snapshot: Any, plan: Any) -> dict[str, Any]:
         "skip_reasons": dict(skipped_nodes),
         "planned_tools": planned_tools,
         "forbidden_tools": forbidden_tools,
-        "missing_slots": list(snapshot.context_frame.missing_context),
+        "missing_slots": [
+            str(item.get("missing_slot"))
+            for item in snapshot.effective_request_frame.clarification_reasons
+            if item.get("missing_slot")
+        ],
         "evidence_gaps": {"required_evidence": list(plan.required_evidence), "missing_or_stale_evidence": []},
         "readiness": {"diagnosis": {}, "workorder_action": {}},
         "manual_confirmation": {},
@@ -313,6 +317,7 @@ class ChatService:
                     artifact_lister=lambda thread_id, limit: list_thread_artifacts(thread_id, limit=limit)
                 ),
                 artifact_getter=get_thread_artifact,
+                artifact_manifest_getter=get_artifact_manifest_exact,
             ).build(
                 thread_id=context.thread_id,
                 current_user_message=context.message,

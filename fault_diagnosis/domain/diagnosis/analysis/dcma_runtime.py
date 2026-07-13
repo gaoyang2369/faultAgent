@@ -429,14 +429,11 @@ def _build_risk_notice(features: list[RuntimeMetricFeature], event_codes: list[s
 def _knowledge_action_summaries(knowledge_artifact: KnowledgeStepArtifact, event_codes: list[str]) -> list[str]:
     if not knowledge_artifact.success:
         return []
-    blocks = knowledge_artifact.snippets or [
-        item.strip() for item in knowledge_artifact.raw_output.split("\n\n") if item.strip()
-    ]
     summaries = []
-    for block in blocks:
-        if event_codes and not any(code in block for code in event_codes):
+    for entry in knowledge_artifact.fault_code_entries:
+        if event_codes and entry.code not in event_codes:
             continue
-        clean = re.sub(r"\s+", " ", block).strip()
+        clean = re.sub(r"\s+", " ", entry.remedy or entry.cause or entry.meaning or "").strip()
         if clean:
             summaries.append(clean[:220])
     return dedupe_items(summaries)

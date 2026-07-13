@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fault_diagnosis.agent.contracts import (
+    ArtifactEnvelope,
     ArtifactLineage,
     ArtifactManifest,
     EffectiveRequestFrame,
@@ -46,12 +47,17 @@ def _complete_manifest(artifact_id: str, artifact_type: str, device: str) -> dic
         artifact_type=artifact_type,
         thread_id="thread.v2.contract",
         status="completed",
+        artifact_status="complete",
+        persistence_status="committed",
+        readback_verified=True,
         followupable=True,
         reportable=True,
         actionable=artifact_type in {"analysis_artifact", "report_artifact"},
         device_refs=[device],
         owner_user_id="admin-v2",
         owner_session_id="session-v2",
+        source_table="real_data_02",
+        evidence_refs=[f"evidence:{artifact_id}"],
         lineage=ArtifactLineage(
             lineage_status="complete",
             artifact_id=artifact_id,
@@ -286,53 +292,35 @@ def test_legacy_partial_target_is_rejected_without_latest_fallback() -> None:
 
 
 def test_report_manifest_inherits_device_table_and_source_lineage() -> None:
-    assessment = RuntimeStatusAssessment(
-        device="G120电机2",
-        query_status="success",
-        runtime_status="attention",
-        data_basis=DataBasis(
-            resolution_mode="realtime_window",
-            latest_sample_time=datetime.now(),
-            usable_for_status=True,
-            usable_for_diagnosis=True,
-            usable_for_report=True,
-        ),
-        sample_count=5,
-    )
-    sql = SqlStepArtifact(
-        artifact_id="sql:lineage:2",
-        success=True,
-        summary="status",
-        source_table="real_data_02",
-        data_basis=assessment.data_basis.model_dump(mode="json"),
-        resolved_window={"start": "2026-07-13T00:00:00", "end": "2026-07-13T01:00:00"},
-    )
-    analysis = AnalysisStepArtifact(
-        artifact_id="analysis:lineage:2",
-        success=True,
-        conclusion="G120电机2 存在异常迹象",
-        recommendations=["复核设备"],
-    )
-    report = ReportStepArtifact(
+    lineage = ArtifactLineage(
+        lineage_status="complete",
         artifact_id="report:lineage:2",
-        success=True,
+        artifact_type="report_artifact",
+        subject_device_refs=["G120电机2"],
+        source_artifact_ids=["analysis:lineage:2"],
+        source_tables=["real_data_02"],
+        created_from_goal_ids=["g_report"],
+    )
+    manifest = ArtifactManifest(
+        artifact_id="report:lineage:2",
+        artifact_type="report_artifact",
+        thread_id="thread.v2.contract",
+        artifact_status="complete",
+        device_refs=["G120电机2"],
         report_url="/reports/g120_2.html",
+        lineage=lineage,
+    )
+    envelope = ArtifactEnvelope(
+        artifact_id=manifest.artifact_id,
+        artifact_type=manifest.artifact_type,
+        thread_id="thread.v2.contract",
+        payload={"report_artifact": {"success": True, "report_url": "/reports/g120_2.html"}},
+        manifest=manifest,
+        lineage=lineage,
     )
     manifests = build_artifact_manifests(
         thread_id="thread.v2.contract",
-        artifacts={
-            "sql_artifact": sql,
-            "runtime_status_assessment": assessment,
-            "analysis_artifact": analysis,
-            "structured_analysis_artifact": {"asset": "G120电机2", "diagnosis_summary": analysis.conclusion},
-            "report_artifact": report,
-        },
-        node_results=[
-            {"node_id": "sql_1", "node_type": "sql", "goal_ids": ["g_status"]},
-            {"node_id": "analysis_1", "node_type": "analysis", "goal_ids": ["g_diagnosis"]},
-            {"node_id": "report_1", "node_type": "report", "goal_ids": ["g_report"]},
-        ],
-        auth_summary=_admin().audit_summary(),
+        artifacts={"artifact_envelopes": {envelope.artifact_id: envelope}},
     )
     report_manifest = next(item for item in manifests if item.artifact_type == "report_artifact")
     assert report_manifest.artifact_id == "report:lineage:2"

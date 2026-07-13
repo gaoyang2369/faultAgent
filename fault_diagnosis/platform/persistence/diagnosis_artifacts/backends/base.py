@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
+from fault_diagnosis.domain.artifacts import ArtifactEnvelope
 
 
 class ArtifactStoreBackend(ABC):
@@ -22,6 +23,14 @@ class ArtifactStoreBackend(ABC):
     @abstractmethod
     def list_thread_artifacts(self, thread_id: str, limit: int = 20) -> list[DiagnosisArtifactEnvelope]:
         """读取指定线程最近若干条结构化产物。"""
+
+    @abstractmethod
+    def save_artifact(self, envelope: "ArtifactEnvelope") -> "ArtifactEnvelope":
+        """Upsert one canonical artifact by (thread_id, artifact_id)."""
+
+    @abstractmethod
+    def get_artifact(self, thread_id: str, artifact_id: str) -> "ArtifactEnvelope | None":
+        """Read one canonical artifact by exact composite key."""
 
     @abstractmethod
     def clear_thread(self, thread_id: str) -> None:

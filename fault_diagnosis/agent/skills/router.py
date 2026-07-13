@@ -79,7 +79,7 @@ def _select_skills(
         semantic = effective_request_frame.effective_semantic_intent or effective_request_frame.semantic_intent
         capabilities = {
             goal.capability
-            for goal in effective_request_frame.effective_goal_set.goals
+            for goal in effective_request_frame.requested_goal_set.goals
             if not effective_request_frame.authorized_goal_ids or goal.goal_id in effective_request_frame.authorized_goal_ids
         }
         text = f"{intent_frame.normalized_message} {rewrite_frame.user_rewrite}"
@@ -88,7 +88,7 @@ def _select_skills(
             selected.append("root_cause")
         if capabilities.intersection({"explain_fault_code"}) or semantic in {"explain_fault_code", "expand_previous_answer", "show_manual_fields"}:
             selected.append("fault_code_explain")
-        if capabilities.intersection({"check_runtime_status", "compare_runtime_status"}) or semantic in {"check_runtime_status", "refresh_then_decide_workorder"}:
+        if capabilities.intersection({"check_runtime_status", "compare_runtime_status"}) or semantic == "check_runtime_status":
             selected.append("runtime_status")
         if capabilities.intersection({"diagnose_fault", "resolution_recommendation"}) or semantic in {"diagnose_fault", "health_assessment", "diagnose_from_runtime"}:
             selected.append("alarm_triage")
@@ -100,15 +100,15 @@ def _select_skills(
             and semantic in {"check_runtime_status", "explain_fault_code", "diagnose_from_runtime"}
         ):
             selected.append("alarm_triage")
-        if semantic in {"diagnose_from_runtime", "refresh_then_decide_workorder"}:
+        if semantic == "diagnose_from_runtime":
             selected.extend(["alarm_triage", "root_cause"])
         if "generate_report" in capabilities or semantic in {"generate_report", "generate_report_from_previous"}:
             selected.append("report_generation")
         if "generate_report" in set(intent_frame.sub_intents) or "report" in intent_frame.requested_outputs:
             selected.append("report_generation")
-        if "create_workorder_draft" in capabilities or semantic in {"decide_workorder", "create_workorder_draft", "refresh_then_decide_workorder"}:
+        if capabilities.intersection({"create_workorder_draft", "confirm_workorder_draft"}) or semantic in {"decide_workorder", "create_workorder_draft", "confirm_workorder_draft"}:
             selected.append("workorder_decision")
-        if set(intent_frame.sub_intents).intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"}):
+        if set(intent_frame.sub_intents).intersection({"decide_workorder", "create_workorder_draft", "confirm_workorder_draft", "dispatch_workorder"}):
             selected.append("workorder_decision")
         if selected:
             return _dedupe(selected)
@@ -127,7 +127,7 @@ def _select_skills(
         selected.append("root_cause")
     if "generate_report" in sub_intents or "report" in intent_frame.requested_outputs:
         selected.append("report_generation")
-    if sub_intents.intersection({"decide_workorder", "create_workorder_draft", "dispatch_workorder"}):
+    if sub_intents.intersection({"decide_workorder", "create_workorder_draft", "confirm_workorder_draft", "dispatch_workorder"}):
         selected.append("workorder_decision")
     return _dedupe(selected) or ["clarification"]
 
@@ -233,7 +233,7 @@ def _skill_inputs(
     if effective_request_frame is not None:
         if effective_request_frame.requested_output_mode == "report" and "report" not in requested_outputs:
             requested_outputs.append("report")
-        if effective_request_frame.requested_action in {"decide_workorder", "create_workorder_draft"}:
+        if effective_request_frame.requested_action in {"decide_workorder", "create_workorder_draft", "confirm_workorder_draft"}:
             requested_outputs.append("workorder_draft")
     return {
         "device_refs": device_refs,
@@ -281,7 +281,7 @@ def _effective_request_has_executable_target(frame: EffectiveRequestFrame) -> bo
     semantic = frame.effective_semantic_intent or frame.semantic_intent
     if semantic in {"explain_fault_code", "expand_previous_answer", "show_manual_fields"}:
         return bool(frame.effective_fault_code_refs)
-    if semantic in {"create_workorder_draft", "decide_workorder", "refresh_then_decide_workorder"}:
+    if semantic in {"create_workorder_draft", "confirm_workorder_draft", "decide_workorder"}:
         return bool(frame.effective_device_refs)
     if semantic in {"generate_report", "generate_report_from_previous", "check_runtime_status", "diagnose_from_runtime"}:
         return bool(frame.effective_device_refs or frame.effective_fault_code_refs)

@@ -74,7 +74,11 @@ class ComparisonFinding(_Contract):
 class RuntimeComparisonArtifact(_Contract):
     devices: list[str]
     assessments: list[RuntimeStatusAssessment]
+    device_summaries: list[dict[str, Any]] = Field(default_factory=list)
     comparison_dimensions: list[ComparisonFinding] = Field(default_factory=list)
+    similarities: list[str] = Field(default_factory=list)
+    differences: list[str] = Field(default_factory=list)
+    ranking: list[dict[str, Any]] = Field(default_factory=list)
     conclusion: str
     source_artifact_ids: list[str] = Field(default_factory=list)
 

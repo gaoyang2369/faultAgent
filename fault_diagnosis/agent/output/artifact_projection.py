@@ -7,7 +7,7 @@ from typing import Any
 
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType, EvidenceBundle
 from fault_diagnosis.domain.context.case_store import build_case_state_snapshot
-from ..contracts import NodeResult, OutputFrame
+from ..contracts import ArtifactEnvelope, NodeResult, OutputFrame
 from .artifact_manifest import build_artifact_manifests, latest_focus_from_manifests
 
 
@@ -42,16 +42,20 @@ def project_artifact_envelope(
         "node_results": [_dump(item) for item in node_results or []],
         "trace": dict(trace or {}),
         "artifact_manifests": [item.model_dump(mode="json", exclude_none=True) for item in manifests],
+        "artifact_envelopes": [
+            _dump(value)
+            for value in (artifact_map.get("artifact_envelopes") or {}).values()
+        ] if isinstance(artifact_map.get("artifact_envelopes"), dict) else [],
         "latest_focus": latest_focus_from_manifests(manifests),
         "artifacts_by_id": _artifacts_by_id(manifests, artifact_map),
-        **{key: _dump(value) for key, value in artifact_map.items()},
+        **{key: _dump(value) for key, value in artifact_map.items() if key != "artifact_envelopes"},
     }
     envelope = DiagnosisArtifactEnvelope(
         workflow_type=_artifact_type(output_frame.answer_variant),
         thread_id=thread_id,
         created_at=datetime.now().isoformat(),
         request_summary=request_summary or output_frame.status_brief or output_frame.answer_variant,
-        final_answer=output_frame.final_answer,
+        final_answer=output_frame.composite_output.content,
         report_filename=report_artifact.get("report_filename") or report_artifact.get("report_url"),
         payload=payload,
         evidence=_evidence_items(evidence_bundle),
@@ -92,10 +96,20 @@ def _dump(value: Any) -> Any:
 
 
 def _artifacts_by_id(manifests: list[Any], artifacts: dict[str, Any]) -> dict[str, Any]:
+    canonical = artifacts.get("artifact_envelopes")
+    if isinstance(canonical, dict):
+        result: dict[str, Any] = {}
+        for artifact_id, raw in canonical.items():
+            try:
+                envelope = raw if isinstance(raw, ArtifactEnvelope) else ArtifactEnvelope.model_validate(raw)
+            except Exception:
+                continue
+            result[str(artifact_id)] = _dump(envelope.payload)
+        if result:
+            return result
     key_by_type = {
         "knowledge_artifact": "knowledge_artifact",
         "analysis_artifact": "analysis_artifact",
-        "structured_analysis_artifact": "structured_analysis_artifact",
         "comparison_artifact": "comparison_artifact",
         "report_artifact": "report_artifact",
         "workorder_artifact": "workorder_draft",

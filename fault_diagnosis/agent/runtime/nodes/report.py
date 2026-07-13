@@ -23,7 +23,7 @@ class ReportNode:
         self.tool_runtime = tool_runtime
 
     def run(self, *, node: dict[str, Any], state: RuntimeState) -> NodeExecutionOutput:
-        artifact_id = f"report:{state.trace_id or state.request_id or state.plan.plan_id}:{str(node.get('node_id') or 'report')}"
+        artifact_id = str(input_value(node, "artifact_id", "") or node.get("artifact_id") or "")
         report_filename = str(
             input_value(node, "report_filename", "")
             or f"v2_runtime_report_{state.thread_id or state.trace_id or timestamp_for_filename()}"

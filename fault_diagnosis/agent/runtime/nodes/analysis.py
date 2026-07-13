@@ -28,11 +28,9 @@ class AnalysisNode:
         knowledge_artifact = _knowledge_artifact(state.artifacts.get("knowledge_artifact"))
         request = build_request(state, node, goal="DCMA 运行诊断分析")
         structured = diagnose_dcma_runtime(sql_artifact, knowledge_artifact, request)
-        structured.analysis_artifact.artifact_id = (
-            f"analysis:{state.trace_id or state.request_id or state.plan.plan_id}:{str(node.get('node_id') or 'analysis')}"
-        )
+        structured.analysis_artifact.artifact_id = str(inputs.get("artifact_id") or node.get("artifact_id") or "")
         state.artifacts["analysis_artifact"] = structured.analysis_artifact
-        state.artifacts["structured_analysis_artifact"] = structured
+        state.artifacts["structured_analysis"] = structured
         return NodeExecutionOutput(
             output={
                 "success": structured.analysis_artifact.success,
@@ -43,7 +41,7 @@ class AnalysisNode:
             proposed_claims=models_to_dicts(structured.claims),
             artifacts={
                 "analysis_artifact": structured.analysis_artifact,
-                "structured_analysis_artifact": structured,
+                "structured_analysis": structured,
             },
         )
 
@@ -52,6 +50,8 @@ def _sql_artifact(value: Any) -> SqlStepArtifact:
     if isinstance(value, SqlStepArtifact):
         return value
     if isinstance(value, dict):
+        if isinstance(value.get("sql_artifact"), dict):
+            return SqlStepArtifact.model_validate(value["sql_artifact"])
         return SqlStepArtifact.model_validate(value)
     return SqlStepArtifact(
         success=False,

@@ -66,7 +66,7 @@ class AgentEngineV2:
         effective_auth = auth_context or build_auth_context(role="guest")
         goal_authorizations: list[dict[str, Any]] = []
         authorized_goal_ids: list[str] = []
-        for goal in effective_request_frame.effective_goal_set.goals:
+        for goal in effective_request_frame.requested_goal_set.goals:
             decision = authorize_capability_preflight(effective_auth, goal.capability)
             dumped = {"goal_id": goal.goal_id, "capability": goal.capability, **decision.model_dump(mode="json")}
             goal_authorizations.append(dumped)
@@ -92,7 +92,7 @@ class AgentEngineV2:
             if primary_authorization.allowed
             else ""
         )
-        if effective_request_frame.effective_goal_set.goals and not authorized_goal_ids:
+        if effective_request_frame.requested_goal_set.goals and not authorized_goal_ids:
             return _capability_blocked_snapshot(
                 intent_frame=intent_frame,
                 context_frame=context_frame,
@@ -158,7 +158,7 @@ class AgentEngineV2:
                 "mode": "build_plan_snapshot",
                 "status": snapshot_status,
                 "requested_goals": list(effective_request_frame.requested_goals),
-                "effective_goals": [goal.model_dump(mode="json") for goal in effective_request_frame.effective_goal_set.goals],
+                "effective_goals": [goal.model_dump(mode="json") for goal in effective_request_frame.requested_goal_set.goals],
                 "authorized_goals": list(effective_request_frame.authorized_goal_ids),
                 "dropped_goals": list(effective_request_frame.dropped_goals),
                 "target_operation": effective_request_frame.target_scope.operation,
@@ -169,7 +169,7 @@ class AgentEngineV2:
                 "goal_query_specs": [item.model_dump(mode="json") for item in effective_request_frame.goal_query_specs],
                 "goal_node_mapping": {
                     goal.goal_id: [node.node_id for node in validation.validated_plan.nodes if goal.goal_id in node.goal_ids]
-                    for goal in effective_request_frame.effective_goal_set.goals
+                    for goal in effective_request_frame.requested_goal_set.goals
                 },
                 "request_understanding": {
                     "raw_message": raw_message,
@@ -300,7 +300,7 @@ def _capability_blocked_snapshot(
 def _skill_for_capability(capability: str) -> str:
     if capability in {"generate_report", "generate_report_from_previous"}:
         return "report_generation"
-    if capability in {"decide_workorder", "create_workorder_draft", "refresh_then_decide_workorder"}:
+    if capability in {"decide_workorder", "create_workorder_draft", "confirm_workorder_draft"}:
         return "workorder_decision"
     if capability == "root_cause_analysis":
         return "root_cause"
