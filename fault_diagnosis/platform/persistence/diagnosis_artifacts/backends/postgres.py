@@ -128,7 +128,7 @@ class PostgresArtifactStoreBackend(ArtifactStoreBackend):
         return ArtifactEnvelope.model_validate_json(envelope.model_dump_json())
 
     def get_artifact(self, thread_id: str, artifact_id: str):  # noqa: ANN201
-        from fault_diagnosis.domain.artifacts import ArtifactEnvelope
+        from fault_diagnosis.domain.artifacts import load_artifact_envelope
         self._ensure_schema()
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -141,7 +141,7 @@ class PostgresArtifactStoreBackend(ArtifactStoreBackend):
                     (thread_id, artifact_id),
                 )
                 row = cur.fetchone()
-        return ArtifactEnvelope.model_validate(json.loads(row[0])) if row else None
+        return load_artifact_envelope(json.loads(row[0])) if row else None
 
     def clear_thread(self, thread_id: str) -> None:
         self._ensure_schema()

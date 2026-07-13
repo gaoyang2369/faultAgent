@@ -26,6 +26,8 @@ from fault_diagnosis.domain.diagnosis.contracts import (
     SqlStepArtifact,
 )
 from fault_diagnosis.domain.diagnosis.runtime_status import DataBasis, RuntimeStatusAssessment
+from fault_diagnosis.domain.artifacts import AnalysisArtifactPayload, ReportArtifactPayload, SqlArtifactPayload
+from fault_diagnosis.domain.diagnosis.analysis.contracts import DiagnosticAssessment, StructuredAnalysisArtifact
 from fault_diagnosis.domain.context import ArtifactBackedCaseStore, ContextManager
 from fault_diagnosis.domain.security.permissions import build_auth_context
 from fault_diagnosis.domain.diagnosis.report_mapper import _historical_data_quality
@@ -42,6 +44,7 @@ def _admin():
 
 
 def _complete_manifest(artifact_id: str, artifact_type: str, device: str) -> dict:
+    source_table = "real_data_02" if "电机2" in device else "real_data_01"
     return ArtifactManifest(
         artifact_id=artifact_id,
         artifact_type=artifact_type,
@@ -56,7 +59,7 @@ def _complete_manifest(artifact_id: str, artifact_type: str, device: str) -> dic
         device_refs=[device],
         owner_user_id="admin-v2",
         owner_session_id="session-v2",
-        source_table="real_data_02",
+        source_table=source_table,
         evidence_refs=[f"evidence:{artifact_id}"],
         lineage=ArtifactLineage(
             lineage_status="complete",
@@ -64,11 +67,52 @@ def _complete_manifest(artifact_id: str, artifact_type: str, device: str) -> dic
             artifact_type=artifact_type,
             subject_device_refs=[device],
             source_artifact_ids=[] if artifact_type == "sql_artifact" else ["sql:g120:2"],
-            source_tables=["real_data_02"],
+            source_tables=[source_table],
             time_windows=[{"start": "2026-07-12T00:00:00", "end": "2026-07-12T01:00:00"}],
             created_from_goal_ids=["goal_previous"],
         ),
     ).model_dump(mode="json")
+
+
+def _typed_payload(artifact_id: str, artifact_type: str, device: str):
+    source_table = "real_data_02" if "电机2" in device else "real_data_01"
+    if artifact_type == "sql_artifact":
+        return SqlArtifactPayload(
+            sql_artifact=SqlStepArtifact(
+                artifact_id=artifact_id,
+                success=True,
+                summary="运行状态数据",
+                source_table=source_table,
+            ),
+            runtime_status_assessment=RuntimeStatusAssessment(
+                device=device,
+                query_status="success",
+                runtime_status="attention",
+                data_basis=DataBasis(resolution_mode="no_data"),
+            ),
+        )
+    if artifact_type == "analysis_artifact":
+        analysis = AnalysisStepArtifact(success=True, conclusion=artifact_id)
+        return AnalysisArtifactPayload(
+            structured_analysis=StructuredAnalysisArtifact(
+                assessment=DiagnosticAssessment(
+                    success=True,
+                    asset=device,
+                    source_table=source_table,
+                    conclusion=artifact_id,
+                ),
+                analysis_artifact=analysis,
+            )
+        )
+    if artifact_type == "report_artifact":
+        return ReportArtifactPayload(
+            report_artifact=ReportStepArtifact(
+                artifact_id=artifact_id,
+                success=True,
+                report_url=f"/reports/{artifact_id.replace(':', '_')}.html",
+            )
+        )
+    raise AssertionError(artifact_type)
 
 
 def test_e03_preserves_four_explicit_goals_and_goal_scoped_nodes() -> None:
@@ -103,7 +147,7 @@ def test_e01_continuation_uses_runtime_artifact_without_fault_code_clarification
             final_answer="G120电机1 状态已查询",
             payload={
                 "artifact_manifests": [manifest],
-                "sql_artifact": {"artifact_id": "sql:g120:1", "success": True, "summary": "运行状态数据", "source_table": "real_data_01"},
+                "artifacts_by_id": {"sql:g120:1": _typed_payload("sql:g120:1", "sql_artifact", "G120电机1").model_dump(mode="json")},
             },
         )
     )
@@ -201,7 +245,14 @@ def test_artifact_lookup_is_exact_and_never_falls_back_to_latest() -> None:
                 created_at=f"2026-07-13T00:00:0{index}",
                 request_summary="artifact",
                 final_answer="ok",
-                payload={"artifact_manifests": [manifest], "analysis_artifact": {"success": True, "conclusion": manifest["artifact_id"]}},
+                payload={
+                    "artifact_manifests": [manifest],
+                    "artifacts_by_id": {
+                        manifest["artifact_id"]: _typed_payload(
+                            manifest["artifact_id"], "analysis_artifact", manifest["device_refs"][0]
+                        ).model_dump(mode="json")
+                    },
+                },
             )
         )
     selected = get_artifact_by_id("thread.v2.contract", "analysis:old")
@@ -314,7 +365,13 @@ def test_report_manifest_inherits_device_table_and_source_lineage() -> None:
         artifact_id=manifest.artifact_id,
         artifact_type=manifest.artifact_type,
         thread_id="thread.v2.contract",
-        payload={"report_artifact": {"success": True, "report_url": "/reports/g120_2.html"}},
+        payload=ReportArtifactPayload(
+            report_artifact=ReportStepArtifact(
+                artifact_id="report:lineage:2",
+                success=True,
+                report_url="/reports/g120_2.html",
+            )
+        ),
         manifest=manifest,
         lineage=lineage,
     )

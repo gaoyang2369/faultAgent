@@ -66,6 +66,7 @@ def test_workorder_suggestion_triggers_for_persistent_a07089() -> None:
     sql_artifact = SqlStepArtifact(
         success=True,
         summary="查询最近 50 条运行数据",
+        source_table="real_data_01",
         sql_used=["SELECT ... LIMIT 50"],
         raw_output=str([_a07089_row(index) for index in range(50)]),
     )

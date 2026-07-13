@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fault_diagnosis.agent.context.source_selector import GoalScopedSourceSelector, allowed_source_types
 from fault_diagnosis.agent.contracts import ArtifactLineage, ArtifactManifest, EffectiveGoal
-from fault_diagnosis.agent.runtime.plan_preparer import _reportable_payload
+from fault_diagnosis.agent.runtime import plan_preparer
 from fault_diagnosis.domain.context.conversation_context import _latest_artifact_manifests
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.backends.memory import MemoryArtifactStoreBackend
@@ -141,4 +141,4 @@ def test_report_preparation_has_no_latest_artifact_fallback() -> None:
             payload={"operation_report_payload": {"asset": "G120电机2"}},
         )
     )
-    assert _reportable_payload("thread.phase2.no-latest", target_id="") == {}
+    assert not hasattr(plan_preparer, "_reportable_payload")

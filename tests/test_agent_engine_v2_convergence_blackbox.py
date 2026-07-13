@@ -213,7 +213,9 @@ def test_staged_commit_readback_failure_does_not_publish_conversation_ref(monkey
         _, complete = _turn(client, "查询 G120电机1 当前运行状态")
         assert complete["produced_artifacts"] == []
         assert complete["artifact"]["payload"]["artifact_manifests"] == []
-        assert complete["artifact"]["payload"]["artifact_commit_failures"]
+        sql_result = next(item for item in complete["node_results"] if item["node_type"] == "sql")
+        assert sql_result["status"] == "failed"
+        assert sql_result["error"]["code"] == "artifact_commit_failed"
     finally:
         client.close()
         reset_artifact_store_backend()

@@ -14,7 +14,12 @@ from .backends import (
     PostgresArtifactStoreBackend,
 )
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
-from fault_diagnosis.domain.artifacts import ArtifactEnvelope, ArtifactManifest
+from fault_diagnosis.domain.artifacts import (
+    ArtifactEnvelope,
+    ArtifactManifest,
+    legacy_payload_is_reusable,
+    upgrade_legacy_payload,
+)
 
 _BACKEND: ArtifactStoreBackend | None = None
 _BACKEND_LOCK = RLock()
@@ -173,6 +178,24 @@ def get_artifact_by_id(thread_id: str, artifact_id: str) -> ArtifactLookupResult
             if not isinstance(manifest, dict) or str(manifest.get("artifact_id") or "") != wanted:
                 continue
             upgraded = _upgrade_legacy_artifact(envelope, manifest, _payload_for_manifest(payload, manifest))
+            if upgraded is None:
+                partial = ArtifactManifest.model_validate(manifest)
+                partial_lineage = partial.lineage.model_copy(update={"lineage_status": "legacy_partial"})
+                partial = partial.model_copy(
+                    update={
+                        "artifact_status": "legacy_partial",
+                        "followupable": False,
+                        "reportable": False,
+                        "actionable": False,
+                        "lineage": partial_lineage,
+                    }
+                )
+                return ArtifactLookupResult(
+                    envelope=envelope,
+                    manifest=partial.model_dump(mode="json", exclude_none=True),
+                    payload=_payload_for_manifest(payload, manifest),
+                    artifact_envelope=None,
+                )
             if upgraded.status == "complete":
                 try:
                     upgraded = commit_artifact(upgraded)
@@ -205,33 +228,30 @@ def _upgrade_legacy_artifact(
     envelope: DiagnosisArtifactEnvelope,
     raw_manifest: dict[str, Any],
     raw_payload: Any,
-) -> "ArtifactEnvelope":
+) -> "ArtifactEnvelope | None":
     """Upgrade only from structured proof; never infer lineage from prose."""
 
     manifest = ArtifactManifest.model_validate(raw_manifest)
-    payload = raw_payload if isinstance(raw_payload, dict) else {"legacy_payload": raw_payload}
+    payload = upgrade_legacy_payload(str(manifest.artifact_type), raw_payload)
+    if payload is None:
+        return None
+    canonical_type = "analysis_artifact" if manifest.artifact_type == "structured_analysis_artifact" else manifest.artifact_type
     lineage = manifest.lineage.model_copy(
         update={
             "artifact_id": manifest.artifact_id,
-            "artifact_type": manifest.artifact_type,
+            "artifact_type": canonical_type,
         }
     )
-    proof = _legacy_structured_proof(manifest, payload)
-    status = "complete" if proof else "legacy_partial"
-    if proof:
-        manifest = manifest.model_copy(update={"artifact_status": "complete", "lineage": lineage})
-    else:
-        lineage = lineage.model_copy(update={"lineage_status": "legacy_partial"})
-        manifest = manifest.model_copy(update={
-            "artifact_status": "legacy_partial",
-            "followupable": False,
-            "reportable": False,
-            "actionable": False,
-            "lineage": lineage,
-        })
+    if manifest.lineage.lineage_status != "complete":
+        return None
+    if not legacy_payload_is_reusable(manifest, lineage, payload):
+        return None
+    manifest = manifest.model_copy(
+        update={"artifact_type": canonical_type, "artifact_status": "complete", "lineage": lineage}
+    )
     return ArtifactEnvelope(
         artifact_id=manifest.artifact_id,
-        artifact_type=manifest.artifact_type,
+        artifact_type=canonical_type,
         owner_user_id=manifest.owner_user_id,
         owner_session_id=manifest.owner_session_id,
         thread_id=envelope.thread_id,
@@ -242,25 +262,8 @@ def _upgrade_legacy_artifact(
         payload=payload,
         manifest=manifest,
         lineage=lineage,
-        status=status,
+        status="complete",
     )
-
-
-def _legacy_structured_proof(manifest: "ArtifactManifest", payload: dict[str, Any]) -> bool:
-    if manifest.lineage.lineage_status != "complete" or not manifest.artifact_id:
-        return False
-    artifact_type = manifest.artifact_type
-    if artifact_type == "sql_artifact":
-        sql = payload.get("sql_artifact") if isinstance(payload.get("sql_artifact"), dict) else payload
-        return bool(manifest.device_refs and sql.get("source_table") and manifest.evidence_refs)
-    if artifact_type == "knowledge_artifact":
-        knowledge = payload.get("knowledge_artifact") if isinstance(payload.get("knowledge_artifact"), dict) else payload
-        return bool(knowledge.get("fault_code_entries") and manifest.evidence_refs)
-    if artifact_type in {"analysis_artifact", "structured_analysis_artifact"}:
-        return bool(manifest.device_refs and manifest.lineage.source_artifact_ids and manifest.evidence_refs)
-    if artifact_type in {"comparison_artifact", "report_artifact", "workorder_artifact"}:
-        return bool(manifest.lineage.source_artifact_ids and manifest.device_refs)
-    return False
 
 
 def _validate_for_commit(envelope: ArtifactEnvelope) -> None:
@@ -289,7 +292,13 @@ def _compat_envelope_for_canonical(canonical: "ArtifactEnvelope") -> DiagnosisAr
         report_filename=canonical.manifest.report_filename or canonical.manifest.report_url or None,
         payload={
             "artifact_manifests": [canonical.manifest.model_dump(mode="json", exclude_none=True)],
-            "artifacts_by_id": {canonical.artifact_id: canonical.payload},
+            "artifacts_by_id": {
+                canonical.artifact_id: canonical.payload.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude={"payload_type"},
+                )
+            },
         },
     )
 

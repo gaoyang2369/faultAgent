@@ -526,6 +526,16 @@ def _validate_node_inputs(
             )
             continue
         inputs = dict(node.get("inputs") or {})
+        if node_type == "sql" and inputs.get("source_table_error"):
+            issues.append(
+                PlanValidationIssue(
+                    code=str(inputs["source_table_error"]),
+                    severity="error",
+                    message="SQL source table cannot be resolved from an explicit table or asset registry mapping.",
+                    node_id=node_id,
+                )
+            )
+            continue
         try:
             _coerce_node_inputs(node_type, inputs)
         except ValidationError as exc:
@@ -656,7 +666,10 @@ def _missing_runtime_inputs(node_type: str, inputs: dict[str, Any]) -> list[str]
         return ["sql_query"]
     if node_type == "rag" and not str(inputs.get("query") or inputs.get("kb_query") or "").strip():
         return ["query"]
-    if node_type == "report" and not str(inputs.get("operation_report_payload") or "").strip():
+    if node_type == "report" and not any(
+        str(inputs.get(key) or "").strip()
+        for key in ("operation_report_payload", "source_artifact_id", "target_artifact_id")
+    ):
         return ["operation_report_payload"]
     return []
 

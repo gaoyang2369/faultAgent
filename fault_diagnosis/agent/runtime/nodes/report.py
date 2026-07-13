@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 import re
+import json
 from typing import Any
 
+from fault_diagnosis.domain.artifacts import (
+    AnalysisArtifactPayload,
+    ComparisonArtifactPayload,
+    KnowledgeArtifactPayload,
+    ReportArtifactPayload,
+    SqlArtifactPayload,
+)
 from fault_diagnosis.domain.diagnosis.contracts import AnalysisStepArtifact, KnowledgeStepArtifact, ReportStepArtifact, SqlStepArtifact
 from ...output.report import build_reportable_payload
 from fault_diagnosis.domain.security.runtime_context import reset_current_auth_context, set_current_auth_context
@@ -12,6 +20,7 @@ from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
 from ..tool_runtime import ToolRuntime
 from .base import auth_context, build_request, input_value, model_to_dict, timestamp_for_filename
+from ...artifacts import ArtifactPayloadError, hydrate_artifact_lineage, require_payload, source_envelopes
 
 _REPORT_URL_RE = re.compile(r"(/reports/[A-Za-z0-9_.-]+)")
 
@@ -33,24 +42,31 @@ class ReportNode:
         if operation_report_payload == "__runtime_artifacts__":
             operation_report_payload = ""
         if not operation_report_payload:
-            if not _has_reportable_material(state):
+            target_id = str(input_value(node, "target_artifact_id", "") or input_value(node, "source_artifact_id", "") or "")
+            if target_id and not hydrate_artifact_lineage(state, target_id):
+                return _missing_report_source(artifact_id, node, "artifact_payload_invalid")
+            sources = source_envelopes("report", node=node, state=state)
+            if not sources:
                 artifact = ReportStepArtifact(
                     artifact_id=artifact_id,
                     success=False,
                     report_title=str(input_value(node, "title", "") or "DCMA 运行诊断报告"),
                     error="missing_reportable_artifact",
                 )
-                state.artifacts["report_artifact"] = artifact
                 return NodeExecutionOutput(
                     status="failed",
                     output={"success": False, "artifact": model_to_dict(artifact), "error": artifact.error},
-                    artifacts={"report_artifact": artifact},
                     error={
                         "code": "missing_reportable_artifact",
                         "message": "Report generation requires a referenced artifact or current structured diagnosis payload.",
                     },
                 )
-            operation_report_payload = _build_operation_payload(state, node)
+            try:
+                operation_report_payload = _build_operation_payload(state, node, sources)
+            except ArtifactPayloadError as exc:
+                return _missing_report_source(artifact_id, node, exc.code)
+            except ValueError as exc:
+                return _missing_report_source(artifact_id, node, str(exc) or "artifact_payload_invalid")
 
         auth = auth_context(state)
         token = set_current_auth_context(auth)
@@ -75,61 +91,73 @@ class ReportNode:
             save_result=text,
             error=None if success else text or "report_save_failed",
         )
-        state.artifacts["report_artifact"] = artifact
         return NodeExecutionOutput(
             status="completed" if success else "failed",
             output={"success": success, "artifact": model_to_dict(artifact), "report_url": report_url},
             tool_call_refs=["save_report"],
-            artifacts={"report_artifact": artifact},
+            artifact_payload=ReportArtifactPayload(report_artifact=artifact),
             error=None if success else {"code": "report_save_failed", "message": artifact.error or "Report save failed."},
         )
 
 
-def _build_operation_payload(state: RuntimeState, node: dict[str, Any]) -> str:
+def _build_operation_payload(state: RuntimeState, node: dict[str, Any], sources: list[Any]) -> str:
     request = build_request(state, node, goal="DCMA 运行诊断报告")
-    sql_artifact = _model(state.artifacts.get("sql_artifact"), SqlStepArtifact, SqlStepArtifact(success=False, summary="无 SQL 数据"))
-    knowledge_artifact = _model(
-        state.artifacts.get("knowledge_artifact"),
-        KnowledgeStepArtifact,
-        KnowledgeStepArtifact(success=False, query="", error="missing_knowledge_artifact"),
+    comparison_sources = [item for item in sources if item.artifact_type == "comparison_artifact"]
+    if comparison_sources:
+        if len(comparison_sources) != 1:
+            raise ValueError("artifact_source_ambiguous")
+        comparison = require_payload(comparison_sources[0], ComparisonArtifactPayload).comparison_artifact
+        return json.dumps(
+            {
+                "title": str(input_value(node, "title", "") or "DCMA 运行比较报告"),
+                "diagnosis_type": "运行比较",
+                "conclusion": comparison.conclusion,
+                "devices": comparison.devices,
+                "comparison_dimensions": [item.model_dump(mode="json") for item in comparison.comparison_dimensions],
+            },
+            ensure_ascii=False,
+        )
+    sql_sources = [item for item in sources if item.artifact_type == "sql_artifact"]
+    if len(sql_sources) != 1:
+        raise ValueError("artifact_payload_invalid" if not sql_sources else "artifact_source_ambiguous")
+    sql_payload = require_payload(sql_sources[0], SqlArtifactPayload)
+    knowledge_sources = [item for item in sources if item.artifact_type == "knowledge_artifact"]
+    knowledge_artifact = (
+        require_payload(knowledge_sources[0], KnowledgeArtifactPayload).knowledge_artifact
+        if len(knowledge_sources) == 1
+        else KnowledgeStepArtifact(success=False, query="", error="missing_knowledge_artifact")
     )
-    analysis_artifact = _model(
-        state.artifacts.get("analysis_artifact"),
-        AnalysisStepArtifact,
-        AnalysisStepArtifact(success=False, conclusion="缺少分析产物", error="missing_analysis_artifact"),
+    analysis_sources = [item for item in sources if item.artifact_type == "analysis_artifact"]
+    analysis_artifact = (
+        require_payload(analysis_sources[0], AnalysisArtifactPayload).structured_analysis.analysis_artifact
+        if len(analysis_sources) == 1
+        else AnalysisStepArtifact(success=False, conclusion="缺少分析产物", error="missing_analysis_artifact")
     )
     payload = build_reportable_payload(
         request=request,
-        sql_artifact=sql_artifact,
+        sql_artifact=sql_payload.sql_artifact,
         knowledge_artifact=knowledge_artifact,
         analysis_artifact=analysis_artifact,
-        normalized_rows=state.artifacts.get("sql_rows") if isinstance(state.artifacts.get("sql_rows"), list) else None,
+        normalized_rows=sql_payload.normalized_rows,
         title=str(input_value(node, "title", "") or "DCMA 运行诊断报告"),
         diagnosis_type=str(input_value(node, "diagnosis_type", "") or "运行诊断"),
-        workorder_suggestion=state.artifacts.get("workorder_suggestion"),
+        workorder_suggestion=None,
     )
     return str(payload["operation_report_payload"])
 
 
-def _has_reportable_material(state: RuntimeState) -> bool:
-    sql_artifact = state.artifacts.get("sql_artifact")
-    analysis_artifact = state.artifacts.get("analysis_artifact")
-    knowledge_artifact = state.artifacts.get("knowledge_artifact")
-    if isinstance(state.artifacts.get("sql_rows"), list) and state.artifacts["sql_rows"]:
-        return True
-    return any(
-        bool(getattr(item, "success", False) if not isinstance(item, dict) else item.get("success"))
-        for item in (sql_artifact, analysis_artifact, knowledge_artifact)
-        if item is not None
+def _missing_report_source(artifact_id: str, node: dict[str, Any], code: str) -> NodeExecutionOutput:
+    artifact = ReportStepArtifact(
+        artifact_id=artifact_id,
+        success=False,
+        report_title=str(input_value(node, "title", "") or "DCMA 运行诊断报告"),
+        error=code,
     )
-
-
-def _model(value: Any, model_type: Any, default: Any) -> Any:
-    if isinstance(value, model_type):
-        return value
-    if isinstance(value, dict):
-        return model_type.model_validate(value)
-    return default
+    return NodeExecutionOutput(
+        status="blocked",
+        output={"success": False, "artifact": model_to_dict(artifact), "error": code},
+        error={"code": code, "message": "Report requires a complete typed source artifact."},
+    )
 
 
 def _report_url(text: str) -> str | None:

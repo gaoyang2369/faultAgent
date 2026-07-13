@@ -41,41 +41,32 @@ def build_output_observation(
     }
 
 
-def summarize_runtime_artifacts(artifacts: dict[str, Any], envelopes: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def summarize_runtime_artifacts(artifact_registry: dict[str, Any]) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
-    for artifact_id, envelope in (envelopes or {}).items():
+    for artifact_id, envelope in artifact_registry.items():
         manifest = _mapping(_value(envelope, "manifest"))
         lineage = _mapping(_value(envelope, "lineage"))
+        payload_type = _value(_value(envelope, "payload"), "payload_type")
         summaries.append(
             {
                 "artifact_id": str(artifact_id),
                 "artifact_type": _value(envelope, "artifact_type"),
+                "payload_type": payload_type,
                 "devices": list(lineage.get("subject_device_refs") or manifest.get("device_refs") or []),
                 "source_tables": list(lineage.get("source_tables") or []),
                 "source_table_origins": [
-                    {"value": table, "source_field": "payload.sql_artifact.source_table"}
+                    {
+                        "value": table,
+                        "source_field": (
+                            "payload.sql_artifact.source_table"
+                            if payload_type == "sql_artifact"
+                            else "lineage.source_tables"
+                        ),
+                    }
                     for table in lineage.get("source_tables") or []
                 ],
                 "source_artifact_ids": list(lineage.get("source_artifact_ids") or []),
                 "lineage_status": lineage.get("lineage_status"),
-            }
-        )
-    if summaries:
-        return summaries
-    for key, value in artifacts.items():
-        if not key.endswith("_artifact") or value is None:
-            continue
-        dumped = _mapping(value)
-        summaries.append(
-            {
-                "artifact_id": dumped.get("artifact_id"),
-                "artifact_type": key,
-                "source_tables": [dumped["source_table"]] if dumped.get("source_table") else [],
-                "source_table_origins": (
-                    [{"value": dumped["source_table"], "source_field": f"RuntimeState.artifacts.{key}.source_table"}]
-                    if dumped.get("source_table")
-                    else []
-                ),
             }
         )
     return summaries

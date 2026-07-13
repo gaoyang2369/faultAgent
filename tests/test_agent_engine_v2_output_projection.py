@@ -13,6 +13,8 @@ from fault_diagnosis.agent.output import (
     project_artifact_envelope,
 )
 from fault_diagnosis.domain.security.permissions import build_auth_context
+from fault_diagnosis.domain.artifacts import WorkorderArtifactPayload
+from fault_diagnosis.domain.context.contracts import PendingAction
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.backends.memory import MemoryArtifactStoreBackend
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import configure_artifact_store_backend, save_thread_artifact
 from fault_diagnosis.domain.diagnosis.contracts import (
@@ -290,11 +292,11 @@ def test_report_to_workorder_final_answer() -> None:
                     "stale_evidence_disclosure_required": True,
                     "source_artifact_refs": [{"artifact_id": "/reports/g120.html", "artifact_type": "report_artifact"}],
                 },
-                artifacts={
-                    "workorder_suggestion": suggestion,
-                    "workorder_pending_action": pending,
-                    "workorder_draft": draft,
-                },
+                artifact_payload=WorkorderArtifactPayload(
+                    workorder_suggestion=suggestion,
+                    pending_action=PendingAction.model_validate(pending),
+                    workorder_draft=draft,
+                ),
             )
 
     plan = ExecutionPlan(
@@ -340,7 +342,7 @@ def test_report_to_workorder_final_answer() -> None:
     assert result.node_results[0].node_id == "workorder_1"
     assert result.node_results[0].status == "completed"
     artifact_types = {item["artifact_type"] for item in result.evidence_ledger.artifact_refs}
-    assert {"workorder_suggestion", "workorder_pending_action", "workorder_draft"} <= artifact_types
+    assert artifact_types == {"workorder_artifact"}
     assert result.output_frame.answer_variant == "workorder_draft_ready"
     assert "需要补充设备、故障码或时间窗口" not in result.output_frame.final_answer
     for text in ["G120电机1", "A07089", "草稿", "人工确认", "未派发"]:
@@ -658,6 +660,7 @@ def test_reportable_payload_uses_structured_inputs_only() -> None:
             success=True,
             summary="SQL 查询完成",
             sql_used=["SELECT * FROM real_data_01"],
+            source_table="real_data_01",
             raw_output=str([row]),
             data_state="ok",
         ),

@@ -49,7 +49,6 @@ from .utils import (
     unique_non_empty as _unique_non_empty,
 )
 from ..steps.sql_result_parser import parse_sql_rows
-from fault_diagnosis.domain.security.sql_safety import REAL_DATA_LATEST_TABLE
 
 _REPORT_URL_RE = re.compile(r"(/reports/[A-Za-z0-9._\-]+\.(?:md|html))", re.IGNORECASE)
 _STATUS_REPORT_HINTS = ("运行状态", "状态报告", "当前状态", "运行情况", "运行报告", "巡检", "当前运行")
@@ -364,11 +363,15 @@ def _next_action(
     return "保持观察，继续跟踪状态字、速度、电流、温度和负载率。"
 
 
-def _build_status_summary(rows: list[dict[str, object]], data_quality: dict[str, object] | None = None) -> dict[str, object]:
+def _build_status_summary(
+    rows: list[dict[str, object]],
+    source_table: str,
+    data_quality: dict[str, object] | None = None,
+) -> dict[str, object]:
     if not rows:
         return {
             "status_level": "未知",
-            "source_table": REAL_DATA_LATEST_TABLE,
+            "source_table": source_table,
             "latest_sample_time": "-",
             "device": "未识别",
             "sample_window": "无可解析样本",
@@ -376,7 +379,7 @@ def _build_status_summary(rows: list[dict[str, object]], data_quality: dict[str,
             "key_phenomenon": "SQL 未返回可解析运行数据",
             "initial_assessment": "无法基于数据库行数据确认当前采样窗口状态。",
             "priority": "未知",
-            "next_action": f"先确认 {REAL_DATA_LATEST_TABLE} 最新数据是否可查询。",
+            "next_action": f"先确认 {source_table} 最新数据是否可查询。",
         }
     fault_codes = _unique_codes(rows, "fault_code")
     alarm_codes = _unique_codes(rows, "alarm_code")
@@ -388,7 +391,7 @@ def _build_status_summary(rows: list[dict[str, object]], data_quality: dict[str,
     quality = data_quality or _build_data_quality(rows)
     return {
         "status_level": status_level,
-        "source_table": REAL_DATA_LATEST_TABLE,
+        "source_table": source_table,
         "latest_sample_time": latest_time,
         "device": ", ".join(devices) or "未识别",
         "device_mapping": f"DCMA -> {', '.join(devices)}" if devices else "DCMA -> 未识别数据来源设备",
@@ -587,7 +590,12 @@ def _build_health_overview_group(trend_metrics: list[dict[str, object]]) -> dict
     }
 
 
-def _build_chart_payload(rows: list[dict[str, object]], *, data_quality: dict[str, object] | None = None) -> str:
+def _build_chart_payload(
+    rows: list[dict[str, object]],
+    *,
+    source_table: str,
+    data_quality: dict[str, object] | None = None,
+) -> str:
     chronological_rows = list(reversed(rows))
     timestamps = [_row_time(row) for row in chronological_rows]
     trend_metrics = []
@@ -655,7 +663,7 @@ def _build_chart_payload(rows: list[dict[str, object]], *, data_quality: dict[st
         if metric.key in _PRIMARY_LATEST_METRIC_KEYS and (value := _to_float(latest.get(metric.key))) is not None
     ]
     payload = {
-        "source_table": REAL_DATA_LATEST_TABLE,
+        "source_table": source_table,
         "timestamps": timestamps,
         "trend_metrics": trend_metrics,
         "trend_groups": trend_groups,
@@ -665,7 +673,7 @@ def _build_chart_payload(rows: list[dict[str, object]], *, data_quality: dict[st
         "latest_metrics": latest_metrics,
         "latest_metric_groups": _build_latest_metric_groups(latest_metrics),
         "data_quality": quality,
-        "status_summary": _build_status_summary(rows, quality),
+        "status_summary": _build_status_summary(rows, source_table, quality),
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -902,6 +910,7 @@ def _build_recommendation_items(
     alarm_codes: list[str],
     *,
     knowledge_artifact: KnowledgeStepArtifact,
+    source_table: str,
 ) -> list[str]:
     items: list[str] = []
     code_summaries = _knowledge_action_summaries(knowledge_artifact, fault_codes + alarm_codes)
@@ -910,7 +919,7 @@ def _build_recommendation_items(
         if severity == "fault":
             items.append("立即确认：确认当前设备运行/停机状态、现场安全条件和故障保持状态；在复位条件未确认前避免反复复位、强启或继续带载试运行。")
         else:
-            items.append(f"立即确认：确认 {REAL_DATA_LATEST_TABLE} 最新记录是否对应当前设备采样、DCMA 与设备映射关系，以及设备是否处于自动运行、调试、限速、点动或停机保持状态。")
+            items.append(f"立即确认：确认 {source_table} 最新记录是否对应当前设备采样、DCMA 与设备映射关系，以及设备是否处于自动运行、调试、限速、点动或停机保持状态。")
         if code_summaries:
             for summary in code_summaries:
                 label = "故障码处置" if severity == "fault" else "参数/配置检查"
@@ -944,11 +953,14 @@ def _build_sql_report_summary(
     report_time: str | None = None,
     knowledge_artifact: KnowledgeStepArtifact | None = None,  # noqa: ARG001 - kept for caller compatibility
 ) -> SqlReportSummary:
+    source_table = str(sql_artifact.source_table or "").strip()
+    if not source_table:
+        return SqlReportSummary(rows=[], summary="SQL Artifact 缺少明确数据表。")
     rows = _parse_sql_rows(sql_artifact.raw_output or sql_artifact.result_preview)
     if not rows:
         return SqlReportSummary(
             rows=[],
-            summary=f"SQL 查询未返回可解析的 {REAL_DATA_LATEST_TABLE} 行数据。",
+            summary=f"SQL 查询未返回可解析的 {source_table} 行数据。",
         )
 
     latest = rows[0]
@@ -962,13 +974,13 @@ def _build_sql_report_summary(
     health_level = _derive_health_level(rows, fault_codes, alarm_codes)
     data_quality = _build_data_quality(rows, report_time=report_time)
     summary = (
-        f"已从 {REAL_DATA_LATEST_TABLE} 获取 {len(rows)} 条 DCMA 运行数据，最新设备 {devices[0] if devices else '未知'} "
+        f"已从 {source_table} 获取 {len(rows)} 条 DCMA 运行数据，最新设备 {devices[0] if devices else '未知'} "
         f"在 {latest_time} 的状态为 {_format_value(latest.get('status'))}，综合判定：{health_level}；{abnormal_text}。"
     )
     return SqlReportSummary(
         rows=rows,
         summary=summary,
-        chart_payload=_build_chart_payload(rows, data_quality=data_quality),
+        chart_payload=_build_chart_payload(rows, source_table=source_table, data_quality=data_quality),
         health_level=health_level,
         data_quality=data_quality,
     )
@@ -1008,7 +1020,7 @@ def build_structured_analysis_artifact(
     latest_time = _format_value(latest.get("create_time"))
     status = _format_value(latest.get("status"))
     conclusion = (
-        f"DCMA 最近运行数据已从 {REAL_DATA_LATEST_TABLE} 获取，{device_text} 最新记录状态为 {status}，"
+        f"DCMA 最近运行数据已从 {sql_artifact.source_table} 获取，{device_text} 最新记录状态为 {status}，"
         f"综合判定：{sql_report.health_level}；{code_label}为 {code_text}，告警码为 {alarm_text}。"
     )
     if knowledge_artifact.success:
@@ -1017,7 +1029,7 @@ def build_structured_analysis_artifact(
         conclusion += " 已自动查询知识库，但当前知识库未命中该事件码/故障码的明确释义。"
 
     basis = [
-        f"SQL 返回 {len(sql_report.rows)} 条 {REAL_DATA_LATEST_TABLE} 最近运行记录。",
+        f"SQL 返回 {len(sql_report.rows)} 条 {sql_artifact.source_table} 最近运行记录。",
         f"最新记录时间 {latest_time}，设备 {device_text}，状态 {status}。",
         f"{code_label}统计：{code_text}；告警码统计：{alarm_text}。",
         f"运行健康判定：{sql_report.health_level}。",
@@ -1034,6 +1046,7 @@ def build_structured_analysis_artifact(
         fault_codes,
         alarm_codes,
         knowledge_artifact=knowledge_artifact,
+        source_table=sql_artifact.source_table,
     )
     probable_causes = _build_probable_cause_items(
         sql_report.rows,
@@ -1127,12 +1140,17 @@ def build_report_payload(
         diagnosis_type=diagnosis_type,
         rows=sql_report.rows,
         data_quality=sql_report.data_quality or {},
-        status_summary=_build_status_summary(sql_report.rows, sql_report.data_quality),
+        status_summary=_build_status_summary(
+            sql_report.rows,
+            sql_artifact.source_table,
+            sql_report.data_quality,
+        ),
         sql_summary=sql_artifact.summary or "无",
         sql_statement=sql_statement_text,
         knowledge_artifact=knowledge_artifact,
         analysis_artifact=analysis_artifact,
         workorder_suggestion=workorder_suggestion,
+        source_table=sql_artifact.source_table,
     )
 
     return {

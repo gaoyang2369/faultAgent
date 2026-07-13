@@ -8,6 +8,8 @@ from typing import Any
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType, EvidenceBundle
 from fault_diagnosis.domain.context.case_store import build_case_state_snapshot
 from ..contracts import ArtifactEnvelope, NodeResult, OutputFrame
+from fault_diagnosis.domain.artifacts import ArtifactEnvelope as CanonicalArtifactEnvelope
+from .artifact_view import project_runtime_artifact_view
 from .artifact_manifest import build_artifact_manifests, latest_focus_from_manifests
 
 
@@ -17,6 +19,7 @@ def project_artifact_envelope(
     output_frame: OutputFrame,
     evidence_bundle: EvidenceBundle | dict[str, Any] | None = None,
     artifacts: dict[str, Any] | None = None,
+    artifact_registry: dict[str, CanonicalArtifactEnvelope] | None = None,
     node_results: list[NodeResult] | list[dict[str, Any]] | None = None,
     trace: dict[str, Any] | None = None,
     request_summary: str = "",
@@ -24,7 +27,11 @@ def project_artifact_envelope(
 ) -> DiagnosisArtifactEnvelope:
     """Build the legacy persisted artifact envelope from V2 output."""
 
-    artifact_map = dict(artifacts or {})
+    artifact_map = (
+        project_runtime_artifact_view(artifact_registry, list(node_results or []))
+        if artifact_registry is not None
+        else dict(artifacts or {})
+    )
     bundle = _dump(evidence_bundle)
     report_artifact = _dump(artifact_map.get("report_artifact")) or {}
     manifests = build_artifact_manifests(
@@ -104,7 +111,7 @@ def _artifacts_by_id(manifests: list[Any], artifacts: dict[str, Any]) -> dict[st
                 envelope = raw if isinstance(raw, ArtifactEnvelope) else ArtifactEnvelope.model_validate(raw)
             except Exception:
                 continue
-            result[str(artifact_id)] = _dump(envelope.payload)
+            result[str(artifact_id)] = _dump_compat_payload(envelope.payload)
         if result:
             return result
     key_by_type = {
@@ -124,3 +131,9 @@ def _artifacts_by_id(manifests: list[Any], artifacts: dict[str, Any]) -> dict[st
         if key and artifacts.get(key) is not None:
             result[manifest.artifact_id] = _dump(artifacts[key])
     return result
+
+
+def _dump_compat_payload(payload: Any) -> Any:
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump(mode="json", exclude_none=True, exclude={"payload_type"})
+    return _dump(payload)

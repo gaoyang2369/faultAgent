@@ -153,6 +153,7 @@ def _operation_payload(
         knowledge_artifact=knowledge_artifact,
         analysis_artifact=analysis_artifact,
         workorder_suggestion=workorder_suggestion,
+        source_table=sql_artifact.source_table,
     )
     return json.dumps(report.model_dump(mode="json", exclude_none=True), ensure_ascii=False)
 

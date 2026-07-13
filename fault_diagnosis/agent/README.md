@@ -404,7 +404,7 @@ alarm.close
 | `workorder` | 生成建议、待确认动作和草稿，不派发 | suggestion、pending action、draft artifact |
 | `approval` | 形成审批中断或危险动作拒绝边界 | interrupts / blocked result |
 
-节点之间通过 `RuntimeState.artifacts` 传递结构化产物，而不是互相读取自然语言日志。例如 analysis node 读取 SQL 与 knowledge artifact，report node 再读取 analysis artifact 和运行数据构建报告 payload。
+节点之间仅通过 `RuntimeState.artifact_registry`、精确 Artifact ID/lineage 与 `require_payload()` 传递 typed payload，不读取阶段别名或自然语言日志。例如 analysis node 读取绑定的 SQL/knowledge Envelope，report node 再读取绑定来源及其 lineage 组装报告 payload。
 
 ## 9. 证据链：结论为什么可信
 

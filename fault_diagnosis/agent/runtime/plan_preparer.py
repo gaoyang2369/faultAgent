@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisRequest
-from fault_diagnosis.domain.diagnosis.report_mapper import map_artifact_to_report_payload
-from fault_diagnosis.domain.security.sql_safety import build_fallback_sql_query
+from fault_diagnosis.domain.security.sql_safety import SourceTableResolutionError, build_fallback_sql_query
 from fault_diagnosis.domain.security.permissions import build_auth_context
 from ..context.artifact_access import resolve_target_artifact
 
@@ -80,27 +79,20 @@ def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: s
         elif node_type == "sql":
             node_devices = [str(item) for item in inputs.get("device_refs", []) if str(item)]
             request = _diagnosis_request(snapshot, devices=node_devices)
-            query = build_fallback_sql_query(request, asset_filters=node_devices)
-            inputs.setdefault("sql_query", query)
+            try:
+                query = build_fallback_sql_query(request, asset_filters=node_devices)
+            except SourceTableResolutionError as exc:
+                query = ""
+                inputs["source_table_error"] = exc.code
+            if query:
+                inputs.setdefault("sql_query", query)
             inputs.setdefault("use_checker", False)
             inputs.setdefault("equipment_hint", request.equipment_hint or "")
             inputs.setdefault("fault_code_hint", request.fault_code_hint or "")
         elif node_type == "report":
-            reportable = _reportable_payload(
-                thread_id,
-                target_id=str(inputs.get("target_artifact_id") or snapshot.effective_request_frame.target_artifact_id or ""),
-                auth_context=auth,
-                expected_devices=_effective_devices(snapshot),
-            )
-            if reportable:
-                inputs.update(
-                    {
-                        "title": reportable.get("title") or "DCMA 运行诊断报告",
-                        "chart_payload": reportable.get("chart_payload") or "",
-                        "operation_report_payload": reportable.get("operation_report_payload") or "",
-                        "report_filename": reportable.get("report_filename") or "",
-                    }
-                )
+            target_id = str(inputs.get("target_artifact_id") or snapshot.effective_request_frame.target_artifact_id or "")
+            if target_id:
+                inputs["target_artifact_id"] = target_id
             elif not inputs.get("operation_report_payload") and "analysis" in planned_node_types:
                 inputs.setdefault("operation_report_payload", "__runtime_artifacts__")
         elif node_type == "analysis" and snapshot.effective_request_frame.target_artifact_id:
@@ -115,7 +107,6 @@ def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: s
             if access.allowed and access.record is not None:
                 inputs["source_artifact_id"] = snapshot.effective_request_frame.target_artifact_id
                 inputs["source_artifact_type"] = str(access.record.manifest.get("artifact_type") or "")
-                inputs["source_artifact_payload"] = access.record.payload
             else:
                 inputs["artifact_access_error"] = access.code
         if node_type == "workorder":
@@ -143,12 +134,15 @@ def _readiness_blocker(skill_name: str, plan: ExecutionPlan, *, snapshot: PlanSn
             return "runtime_status_missing_device"
         return "" if "sql" in node_types and has_sql else "runtime_status_missing_sql_query"
     if skill_name == "report_generation":
-        has_report_payload = any(
-            str((node.get("inputs") or {}).get("operation_report_payload") or "").strip()
+        has_report_source = any(
+            any(
+                str((node.get("inputs") or {}).get(key) or "").strip()
+                for key in ("operation_report_payload", "source_artifact_id", "target_artifact_id")
+            )
             for node in plan.nodes
             if node.get("node_type") == "report"
         )
-        return "" if has_report_payload else "report_generation_missing_reportable_artifact"
+        return "" if has_report_source else "report_generation_missing_reportable_artifact"
     if skill_name in {"alarm_triage", "root_cause"}:
         has_device = bool(_effective_devices(snapshot))
         has_sql = any(str((node.get("inputs") or {}).get("sql_query") or "").strip() for node in plan.nodes if node.get("node_type") == "sql")
@@ -304,34 +298,3 @@ def _as_text_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value if str(item).strip()]
     return [str(value)] if str(value).strip() else []
-
-
-def _reportable_payload(
-    thread_id: str,
-    *,
-    target_id: str = "",
-    auth_context: Any | None = None,
-    expected_devices: list[str] | None = None,
-) -> dict[str, Any]:
-    if not thread_id:
-        return {}
-    if target_id:
-        access = resolve_target_artifact(
-            thread_id=thread_id,
-            artifact_id=target_id,
-            auth=auth_context or build_auth_context(role="guest"),
-            expected_types={"sql_artifact", "analysis_artifact", "comparison_artifact", "report_artifact"},
-            expected_devices=list(expected_devices or []),
-            require_complete_lineage=True,
-        )
-        if not access.allowed or access.record is None:
-            return {}
-        artifact = access.record.envelope
-    else:
-        return {}
-    if artifact is None:
-        return {}
-    try:
-        return map_artifact_to_report_payload(artifact)
-    except Exception:
-        return {}

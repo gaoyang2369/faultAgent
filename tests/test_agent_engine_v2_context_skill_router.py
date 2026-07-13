@@ -14,9 +14,18 @@ from fault_diagnosis.agent import (
 )
 from fault_diagnosis.agent.contracts import ArtifactEnvelope, ArtifactLineage, ArtifactManifest
 from fault_diagnosis.domain.context import ArtifactBackedCaseStore, ContextManager
+from fault_diagnosis.domain.artifacts import AnalysisArtifactPayload, KnowledgeArtifactPayload, ReportArtifactPayload
+from fault_diagnosis.domain.diagnosis.analysis.contracts import DiagnosticAssessment, StructuredAnalysisArtifact
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.backends.memory import MemoryArtifactStoreBackend
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import commit_artifact, configure_artifact_store_backend, save_thread_artifact
-from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
+from fault_diagnosis.domain.diagnosis.contracts import (
+    AnalysisStepArtifact,
+    DiagnosisArtifactEnvelope,
+    DiagnosisArtifactType,
+    FaultCodeEntry,
+    KnowledgeStepArtifact,
+    ReportStepArtifact,
+)
 from fault_diagnosis.domain.security.permissions import build_auth_context
 
 
@@ -165,7 +174,7 @@ def _manager_with_artifacts(*artifacts: DiagnosisArtifactEnvelope) -> ContextMan
                     artifact_id=manifest.artifact_id,
                     artifact_type=manifest.artifact_type,
                     thread_id=artifact.thread_id,
-                    payload={"fixture": True},
+                    payload=_typed_payload(manifest),
                     manifest=manifest,
                     lineage=lineage,
                 )
@@ -177,6 +186,45 @@ def _manager_with_artifacts(*artifacts: DiagnosisArtifactEnvelope) -> ContextMan
             artifact = artifact.model_copy(update={"payload": payload}, deep=True)
         save_thread_artifact(artifact)
     return ContextManager(case_store=ArtifactBackedCaseStore())
+
+
+def _typed_payload(manifest: ArtifactManifest):
+    artifact_id = manifest.artifact_id
+    if manifest.artifact_type == "report_artifact":
+        return ReportArtifactPayload(
+            report_artifact=ReportStepArtifact(
+                artifact_id=artifact_id,
+                success=True,
+                report_filename=manifest.report_filename or "fixture.html",
+                report_url=manifest.report_url or "/reports/fixture.html",
+            )
+        )
+    if manifest.artifact_type == "knowledge_artifact":
+        code = (manifest.fault_code_refs or ["A07089"])[0]
+        return KnowledgeArtifactPayload(
+            knowledge_artifact=KnowledgeStepArtifact(
+                artifact_id=artifact_id,
+                success=True,
+                query=code,
+                fault_codes=list(manifest.fault_code_refs),
+                fault_code_entries=[FaultCodeEntry(code=code, meaning=manifest.diagnosis_summary)],
+            )
+        )
+    return AnalysisArtifactPayload(
+        structured_analysis=StructuredAnalysisArtifact(
+            assessment=DiagnosticAssessment(
+                success=True,
+                asset=(manifest.device_refs or ["fixture"])[0],
+                source_table=manifest.source_table or "real_data_01",
+                conclusion=manifest.diagnosis_summary or "fixture analysis",
+            ),
+            analysis_artifact=AnalysisStepArtifact(
+                artifact_id=artifact_id,
+                success=True,
+                conclusion=manifest.diagnosis_summary or "fixture analysis",
+            ),
+        )
+    )
 
 
 def _engineer(asset_scope: list[str] | None = None):

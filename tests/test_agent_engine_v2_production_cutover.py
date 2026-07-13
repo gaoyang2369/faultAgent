@@ -262,6 +262,14 @@ def test_motor2_report_and_repeated_workorder_keep_typed_source_lineage(producti
         item for item in turns[3].complete["node_results"] if item["node_type"] == "workorder"
     )
     assert fourth_workorder_result["output"]["idempotency_result"] == "reused"
+    fourth_workorder_trace = next(
+        item
+        for item in turns[3].complete["trace"]["events"]
+        if item.get("event_type") == "node_status"
+        and item.get("node_type") == "workorder"
+        and item.get("status") == "completed"
+    )
+    assert fourth_workorder_trace["metadata"]["idempotency_result"] == "reused"
 
 
 def _turn(client: TestClient, db_path: Path, message: str, thread_id: str | None = None) -> FrontendTurn:

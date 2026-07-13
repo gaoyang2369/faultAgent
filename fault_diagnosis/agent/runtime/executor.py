@@ -20,6 +20,8 @@ from ..output.answer import build_output_frame
 from ..evidence import project_ledger_to_evidence_bundle
 from ..artifacts import allocate_node_artifact_id, build_node_artifact_envelope
 from ..observability.cutover_observation import summarize_runtime_artifacts
+from fault_diagnosis.domain.artifacts import ArtifactEnvelope, ArtifactPayload
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import commit_artifact
 
 
 class NodeExecutionOutput:
@@ -33,16 +35,18 @@ class NodeExecutionOutput:
         tool_call_refs: list[str] | None = None,
         proposed_evidence: list[dict[str, Any]] | None = None,
         proposed_claims: list[dict[str, Any]] | None = None,
-        artifacts: dict[str, Any] | None = None,
+        artifact_payload: ArtifactPayload | None = None,
         error: dict[str, Any] | None = None,
-        reused_artifact_envelope: Any | None = None,
+        reused_artifact_envelope: ArtifactEnvelope | None = None,
     ) -> None:
+        if artifact_payload is not None and reused_artifact_envelope is not None:
+            raise ValueError("node output cannot emit a payload and reuse an envelope simultaneously")
         self.status = status
         self.output = output or {}
         self.tool_call_refs = list(tool_call_refs or [])
         self.proposed_evidence = list(proposed_evidence or [])
         self.proposed_claims = list(proposed_claims or [])
-        self.artifacts = dict(artifacts or {})
+        self.artifact_payload = artifact_payload
         self.error = error
         self.reused_artifact_envelope = reused_artifact_envelope
 
@@ -247,7 +251,7 @@ class WorkflowRuntimeExecutor:
         attempts = 0
         last_error: dict[str, Any] | None = None
         started = time.monotonic()
-        input_artifact_summaries = summarize_runtime_artifacts(state.artifacts, state.artifact_envelopes)
+        input_artifact_summaries = summarize_runtime_artifacts(state.artifact_registry)
         while attempts <= retry_limit:
             state.add_trace(
                 "node_status",
@@ -281,8 +285,6 @@ class WorkflowRuntimeExecutor:
                     )
                     return result
 
-                if output.artifacts:
-                    state.artifacts.update(output.artifacts)
                 evidence_refs: list[str] = []
                 if output.status == "completed":
                     evidence_refs = state.commit_evidence(node, output.proposed_evidence)
@@ -292,10 +294,37 @@ class WorkflowRuntimeExecutor:
                     state=state,
                     node_status=output.status,
                     evidence_refs=evidence_refs,
+                    payload=output.artifact_payload,
                 )
+                if (
+                    envelope is not None
+                    and output.reused_artifact_envelope is None
+                    and envelope.status == "complete"
+                    and state.thread_id
+                ):
+                    try:
+                        envelope = commit_artifact(envelope)
+                    except Exception as exc:  # noqa: BLE001 - persistence failure is a terminal node result.
+                        failed_manifest = envelope.manifest.model_copy(
+                            update={"persistence_status": "failed", "readback_verified": False}
+                        )
+                        envelope = envelope.model_copy(
+                            update={
+                                "status": "failed",
+                                "persistence_status": "failed",
+                                "readback_verified": False,
+                                "manifest": failed_manifest,
+                            },
+                            deep=True,
+                        )
+                        output.status = "failed"
+                        output.output.update({"success": False, "artifact_persistence_error": str(exc)})
+                        output.error = {
+                            "code": "artifact_commit_failed",
+                            "message": "Artifact commit/readback verification failed.",
+                        }
                 if envelope is not None:
-                    state.artifact_envelopes[envelope.artifact_id] = envelope
-                    state.artifacts.setdefault("artifact_envelopes", {})[envelope.artifact_id] = envelope
+                    state.artifact_registry[envelope.artifact_id] = envelope
                     output.output["artifact_id"] = envelope.artifact_id
                 duration_ms = round((time.monotonic() - started) * 1000, 1)
                 result = node_result(
@@ -331,8 +360,9 @@ class WorkflowRuntimeExecutor:
                         "query_spec_id": str(node.get("query_spec_id") or ""),
                         "target_scope_id": str(node.get("target_scope_id") or ""),
                         "failure_policy": str(node.get("failure_policy") or "block_all"),
+                        "idempotency_result": str(result.output.get("idempotency_result") or ""),
                         "input_artifacts": input_artifact_summaries,
-                        "output_artifacts": summarize_runtime_artifacts(state.artifacts, state.artifact_envelopes),
+                        "output_artifacts": summarize_runtime_artifacts(state.artifact_registry),
                     },
                 )
                 return result
@@ -470,7 +500,8 @@ def _runtime_result(state: RuntimeState, *, status: str) -> RuntimeResult:
         for item in output_frame.composite_output.deliverables
     ]
     effective_status = status
-    if status == "completed" and not state.artifacts.get("clarification") and output_frame.composite_output.deliverables:
+    has_clarification = any(result.node_type == "clarification" and result.status == "completed" for result in state.node_results)
+    if status == "completed" and not has_clarification and output_frame.composite_output.deliverables:
         if output_frame.composite_output.overall_status == "failed":
             effective_status = "failed"
         elif output_frame.composite_output.overall_status == "blocked":
@@ -500,7 +531,7 @@ def _runtime_output_frame(state: RuntimeState, *, status: str, cancelled: bool =
     )
     return build_output_frame(
         status=status,
-        artifacts=state.artifacts,
+        artifact_registry=state.artifact_registry,
         evidence_bundle=bundle,
         node_results=state.node_results,
         error=state.errors[-1] if state.errors else None,

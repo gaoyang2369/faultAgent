@@ -1,11 +1,25 @@
-"""Canonical Agent Engine V2 artifact creation and validation."""
+"""Canonical Agent Engine V2 artifact creation and typed access."""
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, TypeVar, cast
 from uuid import uuid4
 
-from .contracts import ArtifactEnvelope, ArtifactLineage, ArtifactManifest
+from pydantic import ValidationError
+
+from fault_diagnosis.domain.artifacts import (
+    AnalysisArtifactPayload,
+    ArtifactEnvelope,
+    ArtifactLineage,
+    ArtifactManifest,
+    ArtifactPayload,
+    ComparisonArtifactPayload,
+    KnowledgeArtifactPayload,
+    ReportArtifactPayload,
+    SqlArtifactPayload,
+    WorkorderArtifactPayload,
+)
 
 
 _NODE_ARTIFACT_TYPES = {
@@ -17,16 +31,44 @@ _NODE_ARTIFACT_TYPES = {
     "workorder": "workorder_artifact",
 }
 
+_PAYLOAD = TypeVar("_PAYLOAD", bound=ArtifactPayload)
+
+
+@dataclass(frozen=True)
+class ArtifactPayloadError(ValueError):
+    code: str
+    message: str
+
+    def __str__(self) -> str:
+        return self.message
+
+
+def require_payload(envelope: ArtifactEnvelope, expected: type[_PAYLOAD]) -> _PAYLOAD:
+    """The only internal entrypoint allowed to expose an envelope payload."""
+
+    payload = envelope.payload
+    if not isinstance(payload, expected):
+        raise ArtifactPayloadError(
+            "artifact_payload_type_mismatch",
+            f"Artifact {envelope.artifact_id} payload is {type(payload).__name__}, expected {expected.__name__}.",
+        )
+    try:
+        expected.model_validate(payload.model_dump(mode="python"))
+    except (AttributeError, TypeError, ValueError, ValidationError) as exc:
+        raise ArtifactPayloadError(
+            "artifact_payload_invalid",
+            f"Artifact {envelope.artifact_id} payload is incomplete or invalid.",
+        ) from exc
+    return cast(_PAYLOAD, payload)
+
 
 def artifact_id_factory(artifact_type: str) -> str:
-    """Allocate one opaque ID. This function is called only by the node entry."""
-
     prefix = str(artifact_type or "artifact").removesuffix("_artifact")
     return f"art_{prefix}_{uuid4().hex}"
 
 
 def allocate_node_artifact_id(node: dict[str, Any]) -> str:
-    """Single Node Artifact creation entry; downstream code only propagates its ID."""
+    """Single Node Artifact ID allocation entrypoint."""
 
     artifact_type = _NODE_ARTIFACT_TYPES.get(str(node.get("node_type") or ""))
     if not artifact_type:
@@ -36,12 +78,7 @@ def allocate_node_artifact_id(node: dict[str, Any]) -> str:
         return existing
     inputs = dict(node.get("inputs") or {})
     reused = str(inputs.get("reuse_existing_artifact_id") or inputs.get("artifact_id") or "")
-    if reused:
-        node["artifact_id"] = reused
-        inputs["artifact_id"] = reused
-        node["inputs"] = inputs
-        return reused
-    artifact_id = artifact_id_factory(artifact_type)
+    artifact_id = reused or artifact_id_factory(artifact_type)
     node["artifact_id"] = artifact_id
     inputs["artifact_id"] = artifact_id
     node["inputs"] = inputs
@@ -54,25 +91,34 @@ def build_node_artifact_envelope(
     state: Any,
     node_status: str,
     evidence_refs: list[str],
+    payload: ArtifactPayload | None,
 ) -> ArtifactEnvelope | None:
     artifact_id = str(node.get("artifact_id") or "")
     node_type = str(node.get("node_type") or "")
     artifact_type = _NODE_ARTIFACT_TYPES.get(node_type)
-    if not artifact_id or not artifact_type:
+    if not artifact_id or not artifact_type or payload is None:
         return None
-    payload = _canonical_payload(node_type, state)
-    if not payload:
-        return None
-    source_ids = _source_artifact_ids(node_type, node=node, state=state)
+    if payload.payload_type != artifact_type:
+        raise ArtifactPayloadError(
+            "artifact_payload_type_mismatch",
+            f"Node {node_type} cannot emit {payload.payload_type}.",
+        )
+
+    source_ids = source_artifact_ids(node_type, node=node, state=state)
     devices = _devices(node, payload)
     fault_codes = _fault_codes(node, payload)
-    lineage_status = "complete" if node_status == "completed" and _lineage_is_complete(
-        node_type,
-        payload=payload,
-        devices=devices,
-        source_ids=source_ids,
-        evidence_refs=evidence_refs,
-    ) else "invalid"
+    source_tables = _source_tables(payload, source_ids=source_ids, state=state)
+    lineage_status = (
+        "complete"
+        if node_status == "completed"
+        and _lineage_is_complete(
+            payload,
+            devices=devices,
+            source_ids=source_ids,
+            evidence_refs=evidence_refs,
+        )
+        else "invalid"
+    )
     lineage = ArtifactLineage(
         lineage_status=lineage_status,
         artifact_id=artifact_id,
@@ -82,10 +128,14 @@ def build_node_artifact_envelope(
         source_artifact_ids=source_ids,
         source_evidence_bundle_ids=[],
         data_basis=_data_basis(payload),
-        source_tables=_source_tables(payload),
+        source_tables=source_tables,
         time_windows=_time_windows(payload),
         created_from_goal_ids=list(node.get("goal_ids") or []),
     )
+    report = payload.report_artifact if isinstance(payload, ReportArtifactPayload) else None
+    analysis = payload.structured_analysis.analysis_artifact if isinstance(payload, AnalysisArtifactPayload) else None
+    assessment = payload.runtime_status_assessment if isinstance(payload, SqlArtifactPayload) else None
+    knowledge = payload.knowledge_artifact if isinstance(payload, KnowledgeArtifactPayload) else None
     manifest = ArtifactManifest(
         artifact_id=artifact_id,
         artifact_type=artifact_type,
@@ -101,31 +151,34 @@ def build_node_artifact_envelope(
         reportable=lineage_status == "complete" and artifact_type in {
             "sql_artifact", "analysis_artifact", "comparison_artifact", "report_artifact"
         },
-        actionable=lineage_status == "complete" and artifact_type in {"analysis_artifact", "report_artifact", "workorder_artifact"},
+        actionable=lineage_status == "complete" and artifact_type in {
+            "analysis_artifact", "report_artifact", "workorder_artifact"
+        },
         device_refs=devices,
         fault_code_refs=fault_codes,
-        source_table=(_source_tables(payload) or [""])[0],
+        source_table=(source_tables or [""])[0],
         time_window=(_time_windows(payload) or [{}])[0],
         data_basis=(_data_basis(payload) or [{}])[0],
-        requested_window=_nested_dict(payload, "sql_artifact", "requested_window"),
-        resolved_window=_nested_dict(payload, "sql_artifact", "resolved_window"),
-        data_window=_nested_dict(payload, "sql_artifact", "resolved_window"),
+        requested_window=_sql_window(payload, "requested_window"),
+        resolved_window=_sql_window(payload, "resolved_window"),
+        data_window=_sql_window(payload, "resolved_window"),
         latest_sample_time=_latest_sample_time(payload),
         sample_count=_sample_count(payload),
-        runtime_status=_runtime_status(payload),
-        freshness=str(((_data_basis(payload) or [{}])[0]).get("freshness") or "unknown"),
-        currentness=str(((_data_basis(payload) or [{}])[0]).get("resolution_mode") or ""),
+        runtime_status=assessment.runtime_status if assessment is not None else "unknown",
+        freshness=_freshness(payload),
+        currentness=_currentness(payload),
         key_findings=_key_findings(payload),
         supporting_evidence_ids=list(evidence_refs),
         evidence_refs=list(evidence_refs),
-        diagnosis_summary=_diagnosis_summary(payload),
+        diagnosis_summary=analysis.conclusion if analysis is not None else "",
         findings=_key_findings(payload),
-        recommendations=_recommendations(payload),
-        report_url=_nested_text(payload, "report_artifact", "report_url"),
-        report_filename=_nested_text(payload, "report_artifact", "report_filename"),
-        linked_analysis_artifact_id=_latest_source_id(state, "analysis_artifact"),
-        linked_sql_artifact_id=_latest_source_id(state, "sql_artifact"),
-        parsed_manual_fields=_fault_code_explanation(payload),
+        probable_causes=list(analysis.probable_causes) if analysis is not None else [],
+        recommendations=list(analysis.recommendations) if analysis is not None else [],
+        report_url=str(report.report_url or "") if report is not None else "",
+        report_filename=str(report.report_filename or "") if report is not None else "",
+        linked_analysis_artifact_id=_linked_source_id(state, source_ids, "analysis_artifact"),
+        linked_sql_artifact_id=_linked_source_id(state, source_ids, "sql_artifact"),
+        parsed_manual_fields=_knowledge_projection(knowledge),
         supported_followup_capabilities=_followups(artifact_type),
         available_followups=_followups(artifact_type),
         available_actions=["create_workorder_draft"] if artifact_type in {"analysis_artifact", "report_artifact"} else [],
@@ -151,185 +204,218 @@ def build_node_artifact_envelope(
     )
 
 
-def _canonical_payload(node_type: str, state: Any) -> dict[str, Any]:
-    artifacts = state.artifacts
-    if node_type == "sql":
-        return {
-            "sql_artifact": _dump(artifacts.get("sql_artifact")),
-            "runtime_status_assessment": _dump(artifacts.get("runtime_status_assessment")),
-        }
-    if node_type == "rag":
-        knowledge = _dump(artifacts.get("knowledge_artifact"))
-        return {
-            "knowledge_artifact": knowledge,
-            "fault_code_explanation": _structured_fault_code_explanation(knowledge),
-        }
-    if node_type == "analysis":
-        return {
-            "analysis_artifact": _dump(artifacts.get("analysis_artifact")),
-            "structured_analysis": _dump(artifacts.get("structured_analysis")),
-        }
-    if node_type == "comparison":
-        return {"comparison_artifact": _dump(artifacts.get("comparison_artifact"))}
-    if node_type == "report":
-        return {"report_artifact": _dump(artifacts.get("report_artifact"))}
-    if node_type == "workorder":
-        return {
-            "workorder_draft": _dump(artifacts.get("workorder_draft")),
-            "pending_action": _dump(artifacts.get("workorder_pending_action")),
-        }
-    return {}
-
-
-def _structured_fault_code_explanation(knowledge: Any) -> dict[str, Any]:
-    if not isinstance(knowledge, dict):
-        return {}
-    entries = knowledge.get("fault_code_entries") if isinstance(knowledge.get("fault_code_entries"), list) else []
-    result = []
-    for item in entries:
-        if not isinstance(item, dict):
-            continue
-        result.append({
-            key: item.get(key)
-            for key in ("code", "title", "meaning", "cause", "remedy", "references", "source_file", "page", "match_type")
-            if item.get(key) not in (None, "", [])
-        })
-    return {"fault_codes": list(knowledge.get("fault_codes") or []), "entries": result}
-
-
-def _source_artifact_ids(node_type: str, *, node: dict[str, Any], state: Any) -> list[str]:
-    refs = []
-    for item in (node.get("inputs") or {}).get("source_artifact_refs", []) or []:
-        if isinstance(item, dict) and item.get("artifact_id"):
-            refs.append(str(item["artifact_id"]))
-    target = str((node.get("inputs") or {}).get("target_artifact_id") or "")
-    if target:
-        refs.append(target)
-    prepared_source = str((node.get("inputs") or {}).get("source_artifact_id") or "")
-    if prepared_source:
-        refs.append(prepared_source)
-    wanted = {
+def source_artifact_ids(node_type: str, *, node: dict[str, Any], state: Any) -> list[str]:
+    refs: list[str] = []
+    inputs = dict(node.get("inputs") or {})
+    for key in ("target_artifact_id", "source_artifact_id"):
+        value = str(inputs.get(key) or "")
+        if value:
+            refs.append(value)
+    if not refs:
+        for item in inputs.get("source_artifact_refs", []) or []:
+            if isinstance(item, dict) and item.get("artifact_id"):
+                refs.append(str(item["artifact_id"]))
+    allowed = {
         "analysis": {"sql_artifact", "knowledge_artifact"},
         "comparison": {"sql_artifact"},
         "report": {"analysis_artifact", "comparison_artifact", "sql_artifact"},
-        "workorder": {"analysis_artifact", "report_artifact"},
+        "workorder": {"analysis_artifact", "report_artifact", "sql_artifact"},
     }.get(node_type, set())
-    for envelope in getattr(state, "artifact_envelopes", {}).values():
-        if envelope.artifact_type in wanted and envelope.status == "complete":
+    ancestor_nodes = _ancestor_node_ids(state.plan, str(node.get("node_id") or ""))
+    for result in state.node_results:
+        if result.node_id not in ancestor_nodes or not result.artifact_id:
+            continue
+        envelope = state.artifact_registry.get(result.artifact_id)
+        if envelope is not None and envelope.artifact_type in allowed and envelope.status == "complete":
             refs.append(envelope.artifact_id)
     return list(dict.fromkeys(item for item in refs if item))
 
 
+def source_envelopes(node_type: str, *, node: dict[str, Any], state: Any) -> list[ArtifactEnvelope]:
+    result: list[ArtifactEnvelope] = []
+    pending = list(source_artifact_ids(node_type, node=node, state=state))
+    seen: set[str] = set()
+    while pending:
+        artifact_id = pending.pop(0)
+        if artifact_id in seen:
+            continue
+        seen.add(artifact_id)
+        envelope = state.artifact_registry.get(artifact_id)
+        if envelope is None:
+            continue
+        result.append(envelope)
+        pending.extend(envelope.lineage.source_artifact_ids)
+    return result
+
+
+def hydrate_artifact_lineage(state: Any, artifact_id: str, _visiting: set[str] | None = None) -> bool:
+    """Load one exact persisted artifact and its declared ancestors into the registry."""
+
+    wanted = str(artifact_id or "")
+    if not wanted:
+        return False
+    visiting = set(_visiting or set())
+    if wanted in visiting:
+        return False
+    visiting.add(wanted)
+    envelope = state.artifact_registry.get(wanted)
+    if envelope is None:
+        from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_artifact_by_id
+
+        record = get_artifact_by_id(str(state.thread_id or ""), wanted)
+        if record is None or record.artifact_envelope is None:
+            return False
+        envelope = record.artifact_envelope
+    if envelope.status != "complete" or envelope.lineage.lineage_status != "complete":
+        return False
+    state.artifact_registry[envelope.artifact_id] = envelope
+    for source_id in envelope.lineage.source_artifact_ids:
+        if not hydrate_artifact_lineage(state, source_id, visiting):
+            return False
+    return True
+
+
+def _ancestor_node_ids(plan: Any, node_id: str) -> set[str]:
+    parents: dict[str, set[str]] = {}
+    for edge in plan.edges:
+        source = str(edge.get("from") or edge.get("source") or "")
+        target = str(edge.get("to") or edge.get("target") or "")
+        if source and target:
+            parents.setdefault(target, set()).add(source)
+    result: set[str] = set()
+    pending = list(parents.get(node_id, set()))
+    while pending:
+        current = pending.pop()
+        if current in result:
+            continue
+        result.add(current)
+        pending.extend(parents.get(current, set()))
+    return result
+
+
 def _lineage_is_complete(
-    node_type: str,
+    payload: ArtifactPayload,
     *,
-    payload: dict[str, Any],
     devices: list[str],
     source_ids: list[str],
     evidence_refs: list[str],
 ) -> bool:
-    if node_type == "sql":
-        return bool(devices and _source_tables(payload) and evidence_refs)
-    if node_type == "rag":
-        return bool(_fault_code_explanation(payload).get("entries") and evidence_refs)
-    if node_type == "analysis":
-        return bool(devices and source_ids and evidence_refs and payload.get("structured_analysis"))
-    if node_type == "comparison":
-        comparison = payload.get("comparison_artifact") or {}
-        return bool(len(devices) >= 2 and len(source_ids) >= 2 and comparison.get("comparison_dimensions"))
-    if node_type == "report":
-        report = payload.get("report_artifact") or {}
-        return bool(source_ids and report.get("success") and (report.get("report_url") or report.get("report_filename")))
-    if node_type == "workorder":
-        return bool(len(devices) == 1 and source_ids and payload.get("workorder_draft"))
+    if isinstance(payload, SqlArtifactPayload):
+        return bool(devices and payload.sql_artifact.source_table and evidence_refs)
+    if isinstance(payload, KnowledgeArtifactPayload):
+        return bool(payload.knowledge_artifact.fault_code_entries and evidence_refs)
+    if isinstance(payload, AnalysisArtifactPayload):
+        return bool(devices and source_ids and evidence_refs)
+    if isinstance(payload, ComparisonArtifactPayload):
+        return bool(len(devices) >= 2 and len(source_ids) >= 2 and payload.comparison_artifact.comparison_dimensions)
+    if isinstance(payload, ReportArtifactPayload):
+        report = payload.report_artifact
+        return bool(source_ids and report.success and (report.report_url or report.report_filename))
+    if isinstance(payload, WorkorderArtifactPayload):
+        return bool(len(devices) == 1 and source_ids and payload.workorder_draft)
     return False
 
 
-def _devices(node: dict[str, Any], payload: dict[str, Any]) -> list[str]:
+def _devices(node: dict[str, Any], payload: ArtifactPayload) -> list[str]:
     values = [str(item) for item in (node.get("inputs") or {}).get("device_refs", []) if str(item)]
-    assessment = payload.get("runtime_status_assessment") if isinstance(payload.get("runtime_status_assessment"), dict) else {}
-    if assessment.get("device"):
-        values.append(str(assessment["device"]))
-    comparison = payload.get("comparison_artifact") if isinstance(payload.get("comparison_artifact"), dict) else {}
-    values.extend(str(item) for item in comparison.get("devices", []) if str(item))
-    return list(dict.fromkeys(values))
+    if isinstance(payload, SqlArtifactPayload) and payload.runtime_status_assessment.device:
+        values.append(payload.runtime_status_assessment.device)
+    if isinstance(payload, ComparisonArtifactPayload):
+        values.extend(payload.comparison_artifact.devices)
+    return list(dict.fromkeys(item for item in values if item))
 
 
-def _fault_codes(node: dict[str, Any], payload: dict[str, Any]) -> list[str]:
+def _fault_codes(node: dict[str, Any], payload: ArtifactPayload) -> list[str]:
     values = [str(item) for item in (node.get("inputs") or {}).get("fault_code_refs", []) if str(item)]
-    values.extend(str(item) for item in _fault_code_explanation(payload).get("fault_codes", []) if str(item))
-    return list(dict.fromkeys(values))
+    if isinstance(payload, KnowledgeArtifactPayload):
+        values.extend(payload.knowledge_artifact.fault_codes)
+    if isinstance(payload, WorkorderArtifactPayload) and payload.workorder_draft.fault_code:
+        values.append(payload.workorder_draft.fault_code)
+    return list(dict.fromkeys(item for item in values if item))
 
 
-def _source_tables(payload: dict[str, Any]) -> list[str]:
-    table = _nested_text(payload, "sql_artifact", "source_table")
-    return [table] if table else []
+def _source_tables(payload: ArtifactPayload, *, source_ids: list[str], state: Any) -> list[str]:
+    if isinstance(payload, SqlArtifactPayload):
+        return [payload.sql_artifact.source_table] if payload.sql_artifact.source_table else []
+    values: list[str] = []
+    for artifact_id in source_ids:
+        envelope = state.artifact_registry.get(artifact_id)
+        if envelope is not None:
+            values.extend(envelope.lineage.source_tables)
+    return list(dict.fromkeys(item for item in values if item))
 
 
-def _data_basis(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    assessment = payload.get("runtime_status_assessment") if isinstance(payload.get("runtime_status_assessment"), dict) else {}
-    basis = assessment.get("data_basis") if isinstance(assessment.get("data_basis"), dict) else {}
-    if not basis:
-        sql = payload.get("sql_artifact") if isinstance(payload.get("sql_artifact"), dict) else {}
-        basis = sql.get("data_basis") if isinstance(sql.get("data_basis"), dict) else {}
-    return [basis] if basis else []
+def _data_basis(payload: ArtifactPayload) -> list[dict[str, Any]]:
+    if not isinstance(payload, SqlArtifactPayload):
+        return []
+    return [payload.runtime_status_assessment.data_basis.model_dump(mode="json", exclude_none=True)]
 
 
-def _time_windows(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    basis = (_data_basis(payload) or [{}])[0]
-    window = basis.get("resolved_window") if isinstance(basis.get("resolved_window"), dict) else {}
-    return [window] if window else []
+def _time_windows(payload: ArtifactPayload) -> list[dict[str, Any]]:
+    if not isinstance(payload, SqlArtifactPayload) or payload.runtime_status_assessment.data_basis.resolved_window is None:
+        return []
+    return [payload.runtime_status_assessment.data_basis.resolved_window.model_dump(mode="json")]
 
 
-def _runtime_status(payload: dict[str, Any]) -> str:
-    return _nested_text(payload, "runtime_status_assessment", "runtime_status") or "unknown"
-
-
-def _latest_sample_time(payload: dict[str, Any]) -> str:
-    basis = (_data_basis(payload) or [{}])[0]
-    return str(_nested_text(payload, "sql_artifact", "latest_sample_time") or basis.get("latest_sample_time") or "")
-
-
-def _sample_count(payload: dict[str, Any]) -> int:
-    assessment = payload.get("runtime_status_assessment") if isinstance(payload.get("runtime_status_assessment"), dict) else {}
-    sql = payload.get("sql_artifact") if isinstance(payload.get("sql_artifact"), dict) else {}
-    try:
-        return int(assessment.get("sample_count") or sql.get("sample_count") or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _key_findings(payload: dict[str, Any]) -> list[str]:
-    for key in ("runtime_status_assessment", "analysis_artifact"):
-        item = payload.get(key) if isinstance(payload.get(key), dict) else {}
-        values = item.get("key_findings") or item.get("findings") or []
-        if values:
-            return [str(value) for value in values if str(value)]
-    return []
-
-
-def _recommendations(payload: dict[str, Any]) -> list[str]:
-    item = payload.get("analysis_artifact") if isinstance(payload.get("analysis_artifact"), dict) else {}
-    return [str(value) for value in item.get("recommendations", []) if str(value)]
-
-
-def _diagnosis_summary(payload: dict[str, Any]) -> str:
-    item = payload.get("analysis_artifact") if isinstance(payload.get("analysis_artifact"), dict) else {}
-    return str(item.get("conclusion") or "")
-
-
-def _fault_code_explanation(payload: dict[str, Any]) -> dict[str, Any]:
-    value = payload.get("fault_code_explanation")
+def _sql_window(payload: ArtifactPayload, field: str) -> dict[str, Any]:
+    if not isinstance(payload, SqlArtifactPayload):
+        return {}
+    value = getattr(payload.sql_artifact, field)
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _latest_source_id(state: Any, artifact_type: str) -> str:
-    values = [
-        item.artifact_id
-        for item in getattr(state, "artifact_envelopes", {}).values()
-        if item.artifact_type == artifact_type and item.status == "complete"
+def _latest_sample_time(payload: ArtifactPayload) -> str:
+    if not isinstance(payload, SqlArtifactPayload):
+        return ""
+    value = payload.runtime_status_assessment.data_basis.latest_sample_time
+    return value.isoformat(sep=" ") if value is not None else payload.sql_artifact.latest_sample_time
+
+
+def _sample_count(payload: ArtifactPayload) -> int:
+    if isinstance(payload, SqlArtifactPayload):
+        return payload.runtime_status_assessment.sample_count
+    return 0
+
+
+def _key_findings(payload: ArtifactPayload) -> list[str]:
+    if isinstance(payload, SqlArtifactPayload):
+        return list(payload.runtime_status_assessment.key_findings)
+    if isinstance(payload, AnalysisArtifactPayload):
+        return [item.summary for item in payload.structured_analysis.assessment.findings]
+    return []
+
+
+def _freshness(payload: ArtifactPayload) -> str:
+    if isinstance(payload, SqlArtifactPayload):
+        return payload.runtime_status_assessment.data_basis.freshness
+    return "unknown"
+
+
+def _currentness(payload: ArtifactPayload) -> str:
+    if isinstance(payload, SqlArtifactPayload):
+        return payload.runtime_status_assessment.data_basis.resolution_mode
+    if isinstance(payload, AnalysisArtifactPayload):
+        return payload.structured_analysis.assessment.currentness_level
+    return ""
+
+
+def _knowledge_projection(knowledge: Any) -> dict[str, Any]:
+    if knowledge is None:
+        return {}
+    return {
+        "fault_codes": list(knowledge.fault_codes),
+        "entries": [item.model_dump(mode="json", exclude_none=True) for item in knowledge.fault_code_entries],
+    }
+
+
+def _linked_source_id(state: Any, source_ids: list[str], artifact_type: str) -> str:
+    matches = [
+        artifact_id
+        for artifact_id in source_ids
+        if (envelope := state.artifact_registry.get(artifact_id)) is not None
+        and envelope.artifact_type == artifact_type
     ]
-    return values[-1] if values else ""
+    return matches[0] if len(matches) == 1 else ""
 
 
 def _followups(artifact_type: str) -> list[str]:
@@ -341,26 +427,3 @@ def _followups(artifact_type: str) -> list[str]:
         "report_artifact": ["create_workorder_draft"],
         "workorder_artifact": ["confirm_workorder_draft"],
     }.get(artifact_type, [])
-
-
-def _nested_text(payload: dict[str, Any], key: str, field: str) -> str:
-    item = payload.get(key) if isinstance(payload.get(key), dict) else {}
-    return str(item.get(field) or "")
-
-
-def _nested_dict(payload: dict[str, Any], key: str, field: str) -> dict[str, Any]:
-    item = payload.get(key) if isinstance(payload.get(key), dict) else {}
-    value = item.get(field)
-    return dict(value) if isinstance(value, dict) else {}
-
-
-def _dump(value: Any) -> Any:
-    if value is None:
-        return None
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json", exclude_none=True)
-    if isinstance(value, dict):
-        return {str(key): _dump(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_dump(item) for item in value]
-    return value

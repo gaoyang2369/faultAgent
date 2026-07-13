@@ -18,7 +18,6 @@ from ..reporting.utils import (
     unique_non_empty,
 )
 from ..steps.sql_result_parser import parse_sql_rows
-from fault_diagnosis.domain.security.sql_safety import REAL_DATA_LATEST_TABLE
 from .contracts import DiagnosticAssessment, RuleFinding, RuntimeMetricFeature, StructuredAnalysisArtifact
 from .evidence_mapper import map_assessment_to_claims, map_assessment_to_evidence_items
 from .thresholds import (
@@ -42,6 +41,26 @@ def diagnose_dcma_runtime(
     """Build a deterministic diagnosis for DCMA runtime data."""
 
     del decision
+    source_table = str(sql_artifact.source_table or "").strip()
+    if not source_table:
+        analysis = AnalysisStepArtifact(
+            success=False,
+            conclusion="SQL Artifact 缺少明确数据表，无法执行确定性运行诊断。",
+            basis=[],
+            missing_information=["source_table"],
+            confidence="low",
+            error="source_table_unresolved",
+        )
+        assessment = DiagnosticAssessment(
+            success=False,
+            source_table="unresolved",
+            sample_count=0,
+            conclusion=analysis.conclusion,
+            missing_evidence=analysis.missing_information,
+            confidence="low",
+            metadata={"error": analysis.error},
+        )
+        return StructuredAnalysisArtifact(assessment=assessment, analysis_artifact=analysis)
     rows = parse_sql_rows(sql_artifact.raw_output or sql_artifact.result_preview)
     if not sql_artifact.success or not rows:
         analysis = AnalysisStepArtifact(
@@ -54,6 +73,7 @@ def diagnose_dcma_runtime(
         )
         assessment = DiagnosticAssessment(
             success=False,
+            source_table=source_table,
             sample_count=0,
             conclusion=analysis.conclusion,
             missing_evidence=analysis.missing_information,
@@ -83,6 +103,7 @@ def diagnose_dcma_runtime(
     knowledge_summaries = _knowledge_action_summaries(knowledge_artifact, event_codes)
     conclusion = _build_conclusion(
         asset=asset,
+        source_table=source_table,
         rows=rows,
         latest=latest,
         event_codes=event_codes,
@@ -98,7 +119,7 @@ def diagnose_dcma_runtime(
         confidence = "low"
 
     basis = [
-        f"SQL 返回 {len(rows)} 条 {REAL_DATA_LATEST_TABLE} 最近运行记录。",
+        f"SQL 返回 {len(rows)} 条 {source_table} 最近运行记录。",
         f"最新记录时间 {latest_time}，设备 {asset}，状态 {format_value(latest.get('status'))}。",
         f"事件码/告警码统计：{', '.join(event_codes) if event_codes else '未见有效事件码/告警码'}。",
         *[feature.summary for feature in features],
@@ -110,7 +131,7 @@ def diagnose_dcma_runtime(
     assessment = DiagnosticAssessment(
         success=True,
         asset=asset,
-        source_table=REAL_DATA_LATEST_TABLE,
+        source_table=source_table,
         sample_count=len(rows),
         latest_sample_time=None if latest_time == "-" else latest_time,
         oldest_sample_time=None if oldest_time == "-" else oldest_time,
@@ -316,6 +337,7 @@ def _build_findings(
 def _build_conclusion(
     *,
     asset: str,
+    source_table: str,
     rows: list[dict[str, Any]],
     latest: dict[str, Any],
     event_codes: list[str],
@@ -323,7 +345,7 @@ def _build_conclusion(
 ) -> str:
     code_text = ", ".join(event_codes) if event_codes else "未见有效事件码/告警码"
     conclusion = (
-        f"DCMA 确定性运行分析已处理 {len(rows)} 条 {REAL_DATA_LATEST_TABLE} 样本，"
+        f"DCMA 确定性运行分析已处理 {len(rows)} 条 {source_table} 样本，"
         f"{asset} 最新记录状态为 {format_value(latest.get('status'))}，事件码/告警码为 {code_text}。"
     )
     if currentness_warning:

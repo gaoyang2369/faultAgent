@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisRequest
 from fault_diagnosis.domain.security.assets import load_asset_registry
 from fault_diagnosis.domain.security.sql_safety import (
     ALLOWED_SQL_TABLES,
     REAL_DATA_LATEST_TABLE,
     SQL_SCHEMA_CONTEXT,
+    SourceTableResolutionError,
     build_fast_sql_plan,
     build_fallback_sql_query,
     has_unknown_sql_table,
@@ -65,10 +68,8 @@ def test_fallback_sql_resolves_asset_alias_to_real_data_source() -> None:
 
 
 def test_fallback_sql_queries_latest_rows_without_default_device_filter() -> None:
-    sql = build_fallback_sql_query(_request())
-
-    assert "WHERE 1=1" in sql
-    assert "SPINDLE-01" not in sql
+    with pytest.raises(SourceTableResolutionError, match="source_table_unresolved"):
+        build_fallback_sql_query(_request())
 
 
 def test_report_sql_can_inherit_decision_asset_filters() -> None:
@@ -80,10 +81,8 @@ def test_report_sql_can_inherit_decision_asset_filters() -> None:
 
 
 def test_fallback_sql_treats_dcma_as_system_scope() -> None:
-    sql = build_fallback_sql_query(_request(equipment_hint="dcma"))
-
-    assert "WHERE 1=1" in sql
-    assert "device_name = 'dcma'" not in sql
+    with pytest.raises(SourceTableResolutionError, match="source_table_unresolved"):
+        build_fallback_sql_query(_request(equipment_hint="dcma"))
 
 
 def test_explicit_real_data_shard_can_be_selected() -> None:
@@ -98,12 +97,7 @@ def test_explicit_real_data_shard_can_be_selected() -> None:
 def test_fast_sql_plan_handles_status_report_requests() -> None:
     plan = build_fast_sql_plan(_request(user_message="最近dcma运行情况如何？有异常码？可以生成具体报告展示"))
 
-    assert plan is not None
-    sql, summary = plan
-    assert f"FROM {REAL_DATA_LATEST_TABLE}" in sql
-    assert f"ORDER BY {REAL_DATA_LATEST_TABLE}.create_time DESC, id DESC LIMIT 50" in sql
-    assert "device_name = 'dcma'" not in sql
-    assert f"{REAL_DATA_LATEST_TABLE} 最近 50 条" in summary
+    assert plan is None
 
 
 def test_fast_sql_plan_handles_device_fault_diagnosis_requests() -> None:
@@ -163,3 +157,33 @@ def test_configured_real_data_row_filter_is_used_when_present(tmp_path, monkeypa
 
     assert "device_name IN ('DB-G120-1')" in sql
     assert "J1号机" not in sql
+
+
+def test_multiple_registered_tables_are_rejected_as_ambiguous(tmp_path, monkeypatch) -> None:
+    registry_path = tmp_path / "asset_registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "assets": [
+                    {
+                        "asset_id": "ambiguous_motor",
+                        "display_name": "多源电机",
+                        "data_sources": [
+                            {"table": "real_data_01"},
+                            {"table": "real_data_02"},
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ASSET_REGISTRY_PATH", str(registry_path))
+    load_asset_registry.cache_clear()
+
+    try:
+        with pytest.raises(SourceTableResolutionError, match="source_table_ambiguous"):
+            build_fallback_sql_query(_request(equipment_hint="多源电机"))
+    finally:
+        load_asset_registry.cache_clear()

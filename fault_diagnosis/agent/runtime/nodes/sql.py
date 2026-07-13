@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fault_diagnosis.domain.diagnosis.contracts import SqlStepArtifact
+from fault_diagnosis.domain.artifacts import SqlArtifactPayload
 from fault_diagnosis.domain.diagnosis.runtime_status import (
     DataResolutionPolicy,
     TimeWindow,
@@ -31,12 +32,28 @@ class SqlNode:
 
     def run(self, *, node: dict[str, Any], state: RuntimeState) -> NodeExecutionOutput:
         sql_query = str(input_value(node, "sql_query", "") or "").strip()
+        source_table_error = str(input_value(node, "source_table_error", "") or "")
+        if source_table_error:
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"success": False, "error": source_table_error},
+                error={"code": source_table_error, "message": "SQL source table is unresolved."},
+            )
         if not sql_query:
             return NodeExecutionOutput(
                 status="failed",
                 output={"success": False, "error": "missing_sql_query"},
                 error={"code": "missing_sql_query", "message": "SQL node requires inputs.sql_query."},
             )
+        tables = sorted(extract_sql_table_names(sql_query))
+        if len(tables) != 1:
+            code = "source_table_unresolved" if not tables else "source_table_ambiguous"
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"success": False, "error": code, "tables": tables},
+                error={"code": code, "message": "SQL must resolve exactly one source table before execution."},
+            )
+        table = tables[0]
 
         request = build_request(state, node, goal="SQL 运行数据查询")
         decision = build_decision_stub(node)
@@ -93,8 +110,6 @@ class SqlNode:
             realtime_count = len(rows)
             latest_sample_time = _latest_row_time(rows)
 
-        tables = sorted(extract_sql_table_names(sql_query))
-        table = tables[0] if tables else ""
         if not rows and policy.allows_latest and table:
             latest_sql = f"SELECT DATE_FORMAT(MAX(create_time), '%Y-%m-%d %H:%i:%s') FROM {table} WHERE 1=1"
             latest_acl = apply_sql_acl(
@@ -174,19 +189,8 @@ class SqlNode:
         artifact.status_reasons = list(assessment.status_reasons)
         artifact.key_findings = list(assessment.key_findings)
         artifact.supporting_evidence_ids = list(assessment.supporting_evidence_ids)
-        node_id = str(node.get("node_id") or "sql")
         runtime_artifact_id = str(input_value(node, "artifact_id", "") or node.get("artifact_id") or "")
         artifact.artifact_id = runtime_artifact_id
-        sql_artifacts = state.artifacts.setdefault("sql_artifacts", {})
-        sql_rows_by_device = state.artifacts.setdefault("sql_rows_by_device", {})
-        assessments = state.artifacts.setdefault("runtime_status_assessments", {})
-        sql_artifacts[runtime_artifact_id] = artifact
-        sql_rows_by_device[assessment.device] = rows
-        assessments[assessment.device] = assessment
-        state.artifacts.setdefault("sql_artifact_ids", []).append(runtime_artifact_id)
-        state.artifacts["sql_artifact"] = artifact
-        state.artifacts["sql_rows"] = rows
-        state.artifacts["runtime_status_assessment"] = assessment
         evidence = models_to_dicts(evidence_models)
         claim = build_runtime_status_claim(assessment, claim_id=f"claim_{str(node.get('node_id') or 'sql')}_runtime_status")
         return NodeExecutionOutput(
@@ -203,15 +207,11 @@ class SqlNode:
             tool_call_refs=tool_call_refs,
             proposed_evidence=evidence,
             proposed_claims=[model_to_dict(claim)],
-            artifacts={
-                "sql_artifact": artifact,
-                "sql_rows": rows,
-                "runtime_status_assessment": assessment,
-                "sql_artifacts": sql_artifacts,
-                "sql_rows_by_device": sql_rows_by_device,
-                "runtime_status_assessments": assessments,
-                "sql_artifact_ids": state.artifacts["sql_artifact_ids"],
-            },
+            artifact_payload=SqlArtifactPayload(
+                sql_artifact=artifact,
+                runtime_status_assessment=assessment,
+                normalized_rows=rows,
+            ),
         )
 
 

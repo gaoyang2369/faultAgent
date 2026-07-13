@@ -87,7 +87,7 @@ class FileArtifactStoreBackend(ArtifactStoreBackend):
         return list(reversed(envelopes))[:normalized_limit]
 
     def save_artifact(self, envelope):  # noqa: ANN001, ANN201
-        from fault_diagnosis.domain.artifacts import ArtifactEnvelope
+        from fault_diagnosis.domain.artifacts import ArtifactEnvelope, load_artifact_envelope_json
         with self._lock:
             self._ensure_ready()
             target = self._artifact_file(envelope.thread_id)
@@ -95,7 +95,9 @@ class FileArtifactStoreBackend(ArtifactStoreBackend):
             if target.exists():
                 for line in target.read_text(encoding="utf-8").splitlines():
                     try:
-                        item = ArtifactEnvelope.model_validate_json(line)
+                        item = load_artifact_envelope_json(line)
+                        if item is None:
+                            continue
                     except Exception:
                         continue
                     records[item.artifact_id] = item
@@ -110,14 +112,16 @@ class FileArtifactStoreBackend(ArtifactStoreBackend):
             return ArtifactEnvelope.model_validate_json(saved.model_dump_json())
 
     def get_artifact(self, thread_id: str, artifact_id: str):  # noqa: ANN201
-        from fault_diagnosis.domain.artifacts import ArtifactEnvelope
+        from fault_diagnosis.domain.artifacts import load_artifact_envelope_json
         with self._lock:
             target = self._artifact_file(thread_id)
             if not target.exists():
                 return None
             for line in target.read_text(encoding="utf-8").splitlines():
                 try:
-                    item = ArtifactEnvelope.model_validate_json(line)
+                    item = load_artifact_envelope_json(line)
+                    if item is None:
+                        continue
                 except Exception:
                     continue
                 if item.thread_id == thread_id and item.artifact_id == artifact_id:

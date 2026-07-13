@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from fault_diagnosis.domain.context.contracts import PendingAction
+from fault_diagnosis.domain.diagnosis.analysis.contracts import StructuredAnalysisArtifact
+from fault_diagnosis.domain.diagnosis.contracts import (
+    KnowledgeStepArtifact,
+    ReportStepArtifact,
+    SqlStepArtifact,
+    WorkOrderDraftArtifact,
+    WorkOrderSuggestion,
+)
+from fault_diagnosis.domain.diagnosis.runtime_status import RuntimeComparisonArtifact, RuntimeStatusAssessment
 
 
 ArtifactType = Literal[
@@ -20,6 +31,61 @@ ArtifactType = Literal[
 
 class _ArtifactContract(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+
+class SqlArtifactPayload(_ArtifactContract):
+    payload_type: Literal["sql_artifact"] = "sql_artifact"
+    sql_artifact: SqlStepArtifact
+    runtime_status_assessment: RuntimeStatusAssessment
+    normalized_rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class KnowledgeArtifactPayload(_ArtifactContract):
+    payload_type: Literal["knowledge_artifact"] = "knowledge_artifact"
+    knowledge_artifact: KnowledgeStepArtifact
+
+
+class AnalysisArtifactPayload(_ArtifactContract):
+    payload_type: Literal["analysis_artifact"] = "analysis_artifact"
+    structured_analysis: StructuredAnalysisArtifact
+
+
+class ComparisonArtifactPayload(_ArtifactContract):
+    payload_type: Literal["comparison_artifact"] = "comparison_artifact"
+    comparison_artifact: RuntimeComparisonArtifact
+
+
+class ReportArtifactPayload(_ArtifactContract):
+    payload_type: Literal["report_artifact"] = "report_artifact"
+    report_artifact: ReportStepArtifact
+
+
+class WorkorderArtifactPayload(_ArtifactContract):
+    payload_type: Literal["workorder_artifact"] = "workorder_artifact"
+    workorder_suggestion: WorkOrderSuggestion | None = None
+    workorder_draft: WorkOrderDraftArtifact
+    pending_action: PendingAction
+
+
+ArtifactPayload = Annotated[
+    SqlArtifactPayload
+    | KnowledgeArtifactPayload
+    | AnalysisArtifactPayload
+    | ComparisonArtifactPayload
+    | ReportArtifactPayload
+    | WorkorderArtifactPayload,
+    Field(discriminator="payload_type"),
+]
+
+ArtifactPayloadModel = TypeVar(
+    "ArtifactPayloadModel",
+    SqlArtifactPayload,
+    KnowledgeArtifactPayload,
+    AnalysisArtifactPayload,
+    ComparisonArtifactPayload,
+    ReportArtifactPayload,
+    WorkorderArtifactPayload,
+)
 
 
 class ArtifactLineage(_ArtifactContract):
@@ -99,7 +165,7 @@ class ArtifactManifest(_ArtifactContract):
 
 
 class ArtifactEnvelope(_ArtifactContract):
-    schema_version: str = "artifact_envelope.v2"
+    schema_version: Literal["artifact_envelope.v3"] = "artifact_envelope.v3"
     artifact_id: str
     artifact_type: ArtifactType
     owner_user_id: str = ""
@@ -109,7 +175,7 @@ class ArtifactEnvelope(_ArtifactContract):
     trace_id: str = ""
     turn_id: str = ""
     produced_by_node: str = ""
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: ArtifactPayload
     manifest: ArtifactManifest
     lineage: ArtifactLineage
     status: Literal["complete", "legacy_partial", "invalid", "failed"] = "complete"
@@ -126,4 +192,6 @@ class ArtifactEnvelope(_ArtifactContract):
             raise ValueError("manifest.artifact_type must equal envelope.artifact_type")
         if self.lineage.artifact_type != self.artifact_type:
             raise ValueError("lineage.artifact_type must equal envelope.artifact_type")
+        if self.payload.payload_type != self.artifact_type:
+            raise ValueError("payload.payload_type must equal envelope.artifact_type")
         return self

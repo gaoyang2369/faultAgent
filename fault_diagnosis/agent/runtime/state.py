@@ -51,7 +51,7 @@ class RuntimeState(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    schema_version: str = "runtime_state.v1"
+    schema_version: Literal["runtime_state.v2"] = "runtime_state.v2"
     plan: ExecutionPlan
     trace_id: str = ""
     thread_id: str = ""
@@ -61,8 +61,7 @@ class RuntimeState(BaseModel):
     cancel_token: CancelToken = Field(default_factory=CancelToken, exclude=True)
     node_results: list[NodeResult] = Field(default_factory=list)
     evidence_ledger: EvidenceLedger = Field(default_factory=EvidenceLedger)
-    artifacts: dict[str, Any] = Field(default_factory=dict)
-    artifact_envelopes: dict[str, ArtifactEnvelope] = Field(default_factory=dict)
+    artifact_registry: dict[str, ArtifactEnvelope] = Field(default_factory=dict)
     trace_events: list[RuntimeTraceEvent] = Field(default_factory=list)
     interrupts: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[dict[str, Any]] = Field(default_factory=list)
@@ -104,9 +103,12 @@ class RuntimeState(BaseModel):
 
     def finalize_ledger(self) -> None:
         artifact_refs = [
-            {"artifact_type": key, "available": bool(getattr(value, "available", getattr(value, "success", True)))}
-            for key, value in self.artifacts.items()
-            if value is not None
+            {
+                "artifact_id": envelope.artifact_id,
+                "artifact_type": envelope.artifact_type,
+                "available": envelope.status == "complete",
+            }
+            for envelope in self.artifact_registry.values()
         ]
         finalize_ledger(self.evidence_ledger, auth_context=self.auth_context, artifact_refs=artifact_refs)
 
@@ -155,8 +157,14 @@ class RuntimeState(BaseModel):
             )),
             "deliverable_statuses": list(self.deliverable_statuses),
             "artifacts": {
-                "sql_artifact_ids": list(self.artifacts.get("sql_artifact_ids", [])),
-                "available_types": [key for key, value in self.artifacts.items() if value is not None],
+                "sql_artifact_ids": [
+                    envelope.artifact_id
+                    for envelope in self.artifact_registry.values()
+                    if envelope.artifact_type == "sql_artifact"
+                ],
+                "available_types": list(dict.fromkeys(
+                    envelope.artifact_type for envelope in self.artifact_registry.values()
+                )),
             },
             **dict(self.trace_observations),
         }

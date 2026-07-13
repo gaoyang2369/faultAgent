@@ -44,6 +44,22 @@ def test_legacy_structured_sql_is_verified_and_upgraded_to_complete() -> None:
                 final_answer="summary text is not used as proof",
                 payload={
                     "artifact_manifests": [manifest.model_dump(mode="json")],
+                    "artifacts_by_id": {
+                        artifact_id: {
+                            "sql_artifact": {
+                                "artifact_id": artifact_id,
+                                "success": True,
+                                "summary": "legacy structured sql",
+                                "source_table": "real_data_01",
+                            },
+                            "runtime_status_assessment": {
+                                "device": "G120电机1",
+                                "query_status": "success",
+                                "runtime_status": "abnormal",
+                                "data_basis": {"resolution_mode": "no_data"},
+                            },
+                        }
+                    },
                     "sql_artifact": {
                         "artifact_id": artifact_id,
                         "success": True,

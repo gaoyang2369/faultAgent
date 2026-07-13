@@ -83,6 +83,7 @@ def test_report_payload_renders_real_data_rows_as_tables() -> None:
     sql_artifact = SqlStepArtifact(
         success=True,
         summary=f"查询 {REAL_DATA_LATEST_TABLE} 最近 50 条运行状态、异常码和关键运行指标。",
+        source_table=REAL_DATA_LATEST_TABLE,
         sql_used=[sql],
         raw_output=str(
             [
@@ -347,7 +348,12 @@ def test_status_report_downgrades_a_code_to_warning_event() -> None:
             "应答：无"
         ),
     )
-    sql_artifact = SqlStepArtifact(success=True, summary="ok", raw_output=str([row] * 3))
+    sql_artifact = SqlStepArtifact(
+        success=True,
+        summary="ok",
+        source_table=REAL_DATA_LATEST_TABLE,
+        raw_output=str([row] * 3),
+    )
     artifact = build_structured_analysis_artifact(
         request=request,
         sql_artifact=sql_artifact,
@@ -472,7 +478,12 @@ def test_report_renders_alarm_code_zero_as_no_effective_alarm() -> None:
     )
     payload = build_report_payload(
         request=request,
-        sql_artifact=SqlStepArtifact(success=True, summary="ok", raw_output=str([row])),
+        sql_artifact=SqlStepArtifact(
+            success=True,
+            summary="ok",
+            source_table=REAL_DATA_LATEST_TABLE,
+            raw_output=str([row]),
+        ),
         knowledge_artifact=KnowledgeStepArtifact(success=False, query="", raw_output=""),
         analysis_artifact=AnalysisStepArtifact(success=True, conclusion="ok"),
         current_time="2026-06-23 12:13:00",
@@ -534,7 +545,12 @@ def test_structured_analysis_avoids_stale_timestamp_language() -> None:
     )
     artifact = build_structured_analysis_artifact(
         request=request,
-        sql_artifact=SqlStepArtifact(success=True, summary="ok", raw_output=str([row])),
+        sql_artifact=SqlStepArtifact(
+            success=True,
+            summary="ok",
+            source_table=REAL_DATA_LATEST_TABLE,
+            raw_output=str([row]),
+        ),
         knowledge_artifact=KnowledgeStepArtifact(
             success=True,
             query="F1030",
@@ -603,12 +619,22 @@ def test_structured_analysis_uses_rag_fault_code_actions() -> None:
     )
     artifact = build_structured_analysis_artifact(
         request=request,
-        sql_artifact=SqlStepArtifact(success=True, summary="ok", raw_output=str([row])),
+        sql_artifact=SqlStepArtifact(
+            success=True,
+            summary="ok",
+            source_table=REAL_DATA_LATEST_TABLE,
+            raw_output=str([row]),
+        ),
         knowledge_artifact=knowledge_artifact,
     )
     evidence_summary = build_analysis_evidence_summary(
         request=request,
-        sql_artifact=SqlStepArtifact(success=True, summary="ok", raw_output=str([row])),
+        sql_artifact=SqlStepArtifact(
+            success=True,
+            summary="ok",
+            source_table=REAL_DATA_LATEST_TABLE,
+            raw_output=str([row]),
+        ),
         knowledge_artifact=knowledge_artifact,
     )
 
@@ -622,4 +648,3 @@ def test_structured_analysis_uses_rag_fault_code_actions() -> None:
     assert not any("演示后建议" in item for item in artifact.recommendations)
     assert "RAG知识要点" in evidence_summary
     assert "F01002" in evidence_summary
-

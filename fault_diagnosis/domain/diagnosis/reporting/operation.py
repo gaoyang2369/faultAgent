@@ -38,7 +38,7 @@ from .utils import (
     unique_codes as _unique_codes,
     unique_non_empty as _unique_non_empty,
 )
-from fault_diagnosis.domain.security.sql_safety import REAL_DATA_LATEST_TABLE, is_generic_equipment_hint
+from fault_diagnosis.domain.security.sql_safety import is_generic_equipment_hint
 
 
 class ReportSeverity(str, Enum):
@@ -211,6 +211,7 @@ def _report_asset_label(
     rows: list[dict[str, object]],
     status_summary: dict[str, object],
     sql_statement: str,
+    source_table: str,
 ) -> str:
     devices_text = _covered_devices_text(rows)
     if _sql_has_device_filter(sql_statement):
@@ -219,7 +220,7 @@ def _report_asset_label(
             return request_asset
         return devices_text if devices_text != "未识别" else str(status_summary.get("device") or "DCMA 系统")
     suffix = f"（覆盖设备：{devices_text}）" if devices_text != "未识别" else ""
-    return f"{REAL_DATA_LATEST_TABLE} 最新采样窗口{suffix}"
+    return f"{source_table} 最新采样窗口{suffix}"
 
 
 def _risk_label(severity: ReportSeverity, currentness_level: DataCurrentnessLevel) -> str:
@@ -470,7 +471,7 @@ def _truncate(text: str, limit: int) -> str:
     return clean if len(clean) <= limit else f"{clean[: max(0, limit - 1)]}…"
 
 
-def _build_kpi_cards(rows: list[dict[str, object]]) -> list[ReportKpiCard]:
+def _build_kpi_cards(rows: list[dict[str, object]], source_table: str) -> list[ReportKpiCard]:
     if not rows:
         return [
             ReportKpiCard(name="运行数据", value="无可解析样本", reference="SQL 返回结果", severity=ReportSeverity.UNKNOWN)
@@ -525,7 +526,7 @@ def _build_kpi_cards(rows: list[dict[str, object]]) -> list[ReportKpiCard]:
                 if primary_code
                 else ReportSeverity.NORMAL
             ),
-            evidence_source=REAL_DATA_LATEST_TABLE,
+            evidence_source=source_table,
             evidence_id="E1",
         ),
         ReportKpiCard(
@@ -608,6 +609,7 @@ def _build_findings(
     rows: list[dict[str, object]],
     kpi_cards: list[ReportKpiCard],
     knowledge_artifact: KnowledgeStepArtifact,
+    source_table: str,
 ) -> list[ReportFinding]:
     if not rows:
         return [
@@ -615,7 +617,7 @@ def _build_findings(
                 finding_id="F1",
                 title="SQL 结果缺少可解析运行样本",
                 severity=ReportSeverity.UNKNOWN,
-                evidence_summary=f"{REAL_DATA_LATEST_TABLE} 查询结果不可用于运行诊断",
+                evidence_summary=f"{source_table} 查询结果不可用于运行诊断",
                 impact="无法判断当前状态",
                 engineering_meaning="运行数据不足，不能形成现场处置判断",
                 supporting_evidence="SQL 返回结果",
@@ -639,7 +641,7 @@ def _build_findings(
                     else f"{code} 在 {count}/{len(rows)} 条记录中出现"
                 ),
                 severity=ReportSeverity.HIGH if code.upper().startswith("F") else ReportSeverity.WARNING,
-                evidence_summary=f"{REAL_DATA_LATEST_TABLE} + {'知识库' if knowledge_artifact.success else 'SQL 结果'}",
+                evidence_summary=f"{source_table} + {'知识库' if knowledge_artifact.success else 'SQL 结果'}",
                 impact="需确认事件含义、触发条件和是否影响运行",
                 engineering_meaning=(
                     knowledge_summary
@@ -648,7 +650,7 @@ def _build_findings(
                     if code.upper().startswith("A")
                     else "故障码触发条件需按手册确认"
                 ),
-                supporting_evidence=f"{REAL_DATA_LATEST_TABLE}、知识库 {code}" if knowledge_artifact.success else REAL_DATA_LATEST_TABLE,
+                supporting_evidence=f"{source_table}、知识库 {code}" if knowledge_artifact.success else source_table,
                 missing_evidence="参数变更记录、现场运行模式、复测结果",
                 confidence="高" if count == len(rows) else "中",
                 evidence_ids=["E1", "E3"],
@@ -911,13 +913,14 @@ def _evidence_summary(
     data_quality: dict[str, object],
     knowledge_artifact: KnowledgeStepArtifact,
     analysis_artifact: AnalysisStepArtifact,
+    source_table: str,
 ) -> list[dict[str, str]]:
     counts = _event_counts(rows)
     primary_code = next(iter(counts.keys()), "")
     return [
         {
             "type": "运行数据",
-            "source": REAL_DATA_LATEST_TABLE,
+            "source": source_table,
             "summary": (
                 f"{len(rows)} 条样本，{primary_code} 出现 {counts[primary_code]}/{len(rows)}"
                 if rows and primary_code
@@ -1043,8 +1046,11 @@ def build_operation_diagnosis_report(
     knowledge_artifact: KnowledgeStepArtifact,
     analysis_artifact: AnalysisStepArtifact,
     workorder_suggestion: WorkOrderSuggestion | None,
+    source_table: str,
 ) -> OperationDiagnosisReport:
-    asset = _report_asset_label(request, rows, status_summary, sql_statement)
+    if not str(source_table or "").strip():
+        raise ValueError("source_table_unresolved")
+    asset = _report_asset_label(request, rows, status_summary, sql_statement, source_table)
     unfiltered_window = not _sql_has_device_filter(sql_statement)
     data_window = (
         f"{data_quality.get('oldest_sample_time', '-')} ~ {data_quality.get('latest_sample_time', '-')}"
@@ -1060,7 +1066,7 @@ def build_operation_diagnosis_report(
         if freshness_label != "实时性良好"
         else str(data_quality.get("currentness") or "可作为当前状态的强参考")
     )
-    kpi_cards = _build_kpi_cards(rows)
+    kpi_cards = _build_kpi_cards(rows, source_table)
     raw_fault_field_codes = _unique_codes(rows, "fault_code")
     raw_alarm_field_codes = _unique_codes(rows, "alarm_code")
     fault_codes = [code for code in raw_fault_field_codes if code.upper().startswith("F")]
@@ -1098,7 +1104,7 @@ def build_operation_diagnosis_report(
     if unfiltered_window:
         limitations.insert(
             1,
-            f"本报告 SQL 未限定单设备，报告对象为 {REAL_DATA_LATEST_TABLE} 最新采样窗口；覆盖设备：{_covered_devices_text(rows)}。",
+            f"本报告 SQL 未限定单设备，报告对象为 {source_table} 最新采样窗口；覆盖设备：{_covered_devices_text(rows)}。",
         )
     return OperationDiagnosisReport(
         title=title,
@@ -1124,11 +1130,17 @@ def build_operation_diagnosis_report(
         one_sentence_conclusion=conclusion,
         top_actions=_top_actions(action_plan),
         kpi_cards=kpi_cards,
-        findings=_build_findings(rows, kpi_cards, knowledge_artifact),
+        findings=_build_findings(rows, kpi_cards, knowledge_artifact, source_table),
         cause_candidates=_build_causes(rows, fault_codes, alarm_codes, knowledge_artifact),
         action_plan=action_plan,
         workorder_suggestion=_workorder_suggestion(severity, rows, workorder_suggestion),
-        evidence_summary=_evidence_summary(rows, data_quality, knowledge_artifact, analysis_artifact),
+        evidence_summary=_evidence_summary(
+            rows,
+            data_quality,
+            knowledge_artifact,
+            analysis_artifact,
+            source_table,
+        ),
         limitations=limitations,
         appendix=_build_appendix(rows, sql_summary, sql_statement, knowledge_artifact, report_time),
     )

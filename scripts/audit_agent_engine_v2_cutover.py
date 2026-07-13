@@ -114,8 +114,6 @@ class SourceAudit(ast.NodeVisitor):
     def visit_Name(self, node: ast.Name) -> Any:
         if node.id in {"semantic_intent", "task_family", "requested_action"}:
             self.semantic.append(self._evidence(node, node.id, self._category(node)))
-        if node.id in {"artifacts", "artifact_envelopes"} and isinstance(node.ctx, ast.Load):
-            self.payload.append(self._evidence(node, "RuntimeState alias", self._category(node)))
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> Any:
@@ -123,6 +121,13 @@ class SourceAudit(ast.NodeVisitor):
             self.semantic.append(self._evidence(node, node.attr, self._category(node)))
         if node.attr == "payload" and isinstance(node.ctx, ast.Load):
             self.payload.append(self._evidence(node, ".payload", self._category(node)))
+        if (
+            node.attr in {"artifacts", "artifact_envelopes"}
+            and isinstance(node.ctx, ast.Load)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "state"
+        ):
+            self.payload.append(self._evidence(node, "RuntimeState alias", self._category(node)))
         if (
             node.attr == "get"
             and isinstance(node.value, ast.Name)
@@ -234,17 +239,29 @@ def audit() -> dict[str, Any]:
     payload = _dedupe(item for audit_item in audits for item in audit_item.payload)
     final_content = _dedupe(item for audit_item in audits for item in audit_item.final_content)
     representations = _dedupe(item for audit_item in audits for item in audit_item.representations)
-    internal_payload = [item for item in payload if item.category != "trace/api/legacy compatibility read"]
     boundary_payload = [item for item in payload if item.category == "trace/api/legacy compatibility read"]
     alias_reads = [item for item in payload if item.symbol == "RuntimeState alias"]
+    canonical_payload_violations = [
+        item
+        for item in payload
+        if item.symbol == ".payload"
+        and (
+            item.file.startswith("fault_diagnosis/agent/runtime/")
+            or item.file.startswith("fault_diagnosis/agent/context/")
+            or (item.file == "fault_diagnosis/agent/artifacts.py" and item.function != "require_payload")
+        )
+    ]
     semantic_decisions = [item for item in semantic if item.category == "business decision"]
     content_entries = [item for item in final_content if item.category == "content orchestration entrypoint"]
     boundary_content = [item for item in final_content if item.category == "trace/api/legacy compatibility read"]
 
     rows = [
         _row("semantic intent decision entries", semantic_decisions),
-        _row("artifact internal representations", representations),
-        _row("internal payload read entries", internal_payload),
+        _row(
+            "canonical ArtifactEnvelope representations",
+            [item for item in representations if item.symbol == "ArtifactEnvelope.payload"],
+        ),
+        _row("canonical payload reads outside require_payload", canonical_payload_violations),
         _row("RuntimeState alias read entries", alias_reads),
         _row("final content orchestration entries", content_entries),
         _row("boundary/legacy compatibility reads", _dedupe([*boundary_payload, *boundary_content])),

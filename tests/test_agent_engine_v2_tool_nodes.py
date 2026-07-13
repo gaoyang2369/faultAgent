@@ -159,6 +159,30 @@ def test_real_sql_node_blocks_write_unauthorized_table_and_device_without_tool_c
         assert result.evidence_ledger.evidence_items == []
 
 
+def test_real_sql_node_blocks_unresolved_source_table_before_tool_call() -> None:
+    fake = FakeToolRuntime()
+    result = _runtime(fake).execute(
+        _plan(
+            [
+                {
+                    "node_id": "sql_1",
+                    "node_type": "sql",
+                    "inputs": {
+                        "sql_query": "SELECT 1",
+                        "device_refs": ["未注册电机99"],
+                        "source_table_error": "source_table_unresolved",
+                    },
+                }
+            ]
+        ),
+        auth_context=build_auth_context(role="admin"),
+    )
+
+    assert result.status == "blocked"
+    assert result.node_results[0].error["code"] == "source_table_unresolved"
+    assert fake.sql_calls == []
+
+
 def test_real_rag_node_uses_existing_visibility_filtering() -> None:
     fake = FakeToolRuntime()
     plan = _plan([{"node_id": "rag_1", "node_type": "rag", "inputs": {"query": "A07089"}}])

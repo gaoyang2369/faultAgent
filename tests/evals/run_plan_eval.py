@@ -24,6 +24,20 @@ from fault_diagnosis.server.http.routers.auth import router as auth_router
 from fault_diagnosis.server.http.routers.chat import router as chat_router
 from fault_diagnosis.server.auth.session_scope import SessionScopeManager
 from fault_diagnosis.agent.contracts import ArtifactEnvelope, ArtifactLineage, ArtifactManifest
+from fault_diagnosis.domain.artifacts import (
+    AnalysisArtifactPayload,
+    KnowledgeArtifactPayload,
+    ReportArtifactPayload,
+    SqlArtifactPayload,
+)
+from fault_diagnosis.domain.diagnosis.analysis.contracts import DiagnosticAssessment, StructuredAnalysisArtifact
+from fault_diagnosis.domain.diagnosis.contracts import (
+    AnalysisStepArtifact,
+    KnowledgeStepArtifact,
+    ReportStepArtifact,
+    SqlStepArtifact,
+)
+from fault_diagnosis.domain.diagnosis.runtime_status import DataBasis, RuntimeStatusAssessment
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import clear_all_artifacts, commit_artifact, save_thread_artifact
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
 from fault_diagnosis.server.devtools.dev_mode import init_dev_state
@@ -105,19 +119,12 @@ def install_artifact_fixture(thread_id: str, fixture_name: str | None) -> None:
                 },
                 deep=True,
             )
-            payload_key = {
-                "sql_artifact": "sql_artifact",
-                "knowledge_artifact": "knowledge_artifact",
-                "analysis_artifact": "analysis_artifact",
-                "report_artifact": "report_artifact",
-                "workorder_artifact": "workorder_draft",
-            }.get(manifest.artifact_type, manifest.artifact_type)
             canonical = commit_artifact(
                 ArtifactEnvelope(
                     artifact_id=manifest.artifact_id,
                     artifact_type=manifest.artifact_type,
                     thread_id=thread_id,
-                    payload={payload_key: legacy_payload.get(payload_key) or {"fixture": True}},
+                    payload=_fixture_payload(manifest, legacy_payload),
                     manifest=manifest,
                     lineage=lineage,
                 )
@@ -125,6 +132,61 @@ def install_artifact_fixture(thread_id: str, fixture_name: str | None) -> None:
             committed_manifests.append(canonical.manifest.model_dump(mode="json"))
         legacy_payload["artifact_manifests"] = committed_manifests
         save_thread_artifact(envelope.model_copy(update={"payload": legacy_payload}, deep=True))
+
+
+def _fixture_payload(manifest: ArtifactManifest, legacy_payload: dict[str, Any]):
+    if manifest.artifact_type == "sql_artifact":
+        sql = SqlStepArtifact.model_validate(legacy_payload["sql_artifact"])
+        return SqlArtifactPayload(
+            sql_artifact=sql,
+            runtime_status_assessment=RuntimeStatusAssessment(
+                device=(manifest.device_refs or ["J1"])[0],
+                query_status="success" if sql.success else "failed",
+                runtime_status="abnormal" if manifest.fault_code_refs else "unknown",
+                data_basis=DataBasis(
+                    resolution_mode="latest_available_fallback",
+                    freshness="historical_latest" if manifest.freshness == "stale" else "recent",
+                    usable_for_status=sql.success,
+                    usable_for_diagnosis=sql.success,
+                    usable_for_report=sql.success,
+                    usable_for_workorder_draft=sql.success,
+                ),
+                sample_count=int(sql.row_count or 0),
+                event_codes=list(manifest.fault_code_refs),
+            ),
+        )
+    if manifest.artifact_type == "knowledge_artifact":
+        return KnowledgeArtifactPayload(
+            knowledge_artifact=KnowledgeStepArtifact.model_validate(legacy_payload["knowledge_artifact"])
+        )
+    if manifest.artifact_type == "analysis_artifact":
+        analysis = AnalysisStepArtifact.model_validate(legacy_payload["analysis_artifact"])
+        return AnalysisArtifactPayload(
+            structured_analysis=StructuredAnalysisArtifact(
+                assessment=DiagnosticAssessment(
+                    success=analysis.success,
+                    asset=(manifest.device_refs or ["J1"])[0],
+                    source_table=manifest.source_table or "real_data_01",
+                    conclusion=analysis.conclusion,
+                    recommendations=list(analysis.recommendations),
+                    confidence="medium" if analysis.confidence == "medium" else "low",
+                ),
+                analysis_artifact=analysis,
+            )
+        )
+    if manifest.artifact_type == "report_artifact":
+        raw_report = legacy_payload.get("report_artifact")
+        if not isinstance(raw_report, dict):
+            filename = manifest.report_filename or manifest.artifact_id
+            raw_report = {
+                "success": True,
+                "report_filename": filename,
+                "report_url": f"/reports/{filename}",
+            }
+        return ReportArtifactPayload(
+            report_artifact=ReportStepArtifact.model_validate(raw_report)
+        )
+    raise ValueError(f"unsupported eval fixture artifact type: {manifest.artifact_type}")
 
 
 def login_identity(client: TestClient, fixture_name: str | None, role: str | None) -> None:

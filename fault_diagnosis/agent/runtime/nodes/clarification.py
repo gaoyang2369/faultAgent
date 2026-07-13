@@ -24,15 +24,7 @@ class ClarificationNode:
                 "missing_slots": missing_slots,
                 "candidate_targets": candidate_targets,
                 "reason": str(input_value(node, "reason", "authorized_but_incomplete") or "authorized_but_incomplete"),
-            },
-            artifacts={
-                "clarification": {
-                    "clarification_question": question,
-                    "missing_slots": missing_slots,
-                    "candidate_targets": candidate_targets,
-                    "reason": "authorized_but_incomplete",
-                }
-            },
+            }
         )
 
 

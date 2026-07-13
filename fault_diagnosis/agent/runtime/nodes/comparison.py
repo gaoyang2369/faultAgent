@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
+from fault_diagnosis.domain.artifacts import ComparisonArtifactPayload, SqlArtifactPayload
 from fault_diagnosis.domain.diagnosis.runtime_status import (
     ComparisonFinding,
     RuntimeComparisonArtifact,
@@ -13,6 +12,7 @@ from fault_diagnosis.agent.evidence.claims import build_v2_claim
 
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
+from ...artifacts import ArtifactPayloadError, require_payload, source_envelopes
 from .base import model_to_dict
 
 
@@ -20,7 +20,19 @@ class ComparisonNode:
     node_type = "comparison"
 
     def run(self, *, node: dict[str, Any], state: RuntimeState) -> NodeExecutionOutput:
-        assessments = _assessments(state.artifacts.get("runtime_status_assessments"))
+        sql_sources = [
+            envelope
+            for envelope in source_envelopes("comparison", node=node, state=state)
+            if envelope.artifact_type == "sql_artifact"
+        ]
+        try:
+            assessments = [require_payload(envelope, SqlArtifactPayload).runtime_status_assessment for envelope in sql_sources]
+        except ArtifactPayloadError as exc:
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"success": False, "artifact_access_error": exc.code},
+                error={"code": exc.code, "message": exc.message},
+            )
         if len(assessments) < 2:
             return NodeExecutionOutput(
                 status="failed",
@@ -77,7 +89,7 @@ class ComparisonNode:
                 ),
             ]
         )
-        source_ids = [str(item) for item in state.artifacts.get("sql_artifact_ids", []) if str(item)]
+        source_ids = [envelope.artifact_id for envelope in sql_sources]
         similarities, differences = _similarities_and_differences(findings)
         ranking = _ranking(assessments)
         artifact = RuntimeComparisonArtifact(
@@ -91,7 +103,6 @@ class ComparisonNode:
             conclusion=_status_conclusion(status_values),
             source_artifact_ids=source_ids,
         )
-        state.artifacts["comparison_artifact"] = artifact
         supporting = [
             evidence_id
             for item in assessments
@@ -110,19 +121,8 @@ class ComparisonNode:
         return NodeExecutionOutput(
             output={"success": True, "artifact": model_to_dict(artifact)},
             proposed_claims=[claim],
-            artifacts={"comparison_artifact": artifact},
+            artifact_payload=ComparisonArtifactPayload(comparison_artifact=artifact),
         )
-
-
-def _assessments(value: Any) -> list[RuntimeStatusAssessment]:
-    raw = list(value.values()) if isinstance(value, dict) else list(value or []) if isinstance(value, list) else []
-    result: list[RuntimeStatusAssessment] = []
-    for item in raw:
-        if isinstance(item, RuntimeStatusAssessment):
-            result.append(item)
-        elif isinstance(item, dict):
-            result.append(RuntimeStatusAssessment.model_validate(item))
-    return result
 
 
 def _status_conclusion(values: dict[str, str]) -> str:

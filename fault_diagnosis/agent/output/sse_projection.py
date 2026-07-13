@@ -11,6 +11,7 @@ from ..contracts import ExecutionPlan, NodeResult, OutputFrame
 from ..evidence import project_ledger_to_evidence_bundle
 from .answer import build_output_frame
 from .artifact_projection import project_artifact_envelope
+from .artifact_view import project_runtime_artifact_view
 
 if TYPE_CHECKING:
     from ..runtime.state import RuntimeState, RuntimeStatus
@@ -94,9 +95,10 @@ def project_complete(
         trace_id=state.trace_id,
         task={"plan_id": state.plan.plan_id},
     )
+    artifact_map = project_runtime_artifact_view(state.artifact_registry, state.node_results)
     frame = output_frame or build_output_frame(
         status=status,
-        artifacts=state.artifacts,
+        artifact_registry=state.artifact_registry,
         evidence_bundle=bundle,
         node_results=state.node_results,
         error=state.errors[-1] if state.errors else None,
@@ -108,7 +110,8 @@ def project_complete(
         thread_id=state.thread_id,
         output_frame=frame,
         evidence_bundle=bundle,
-        artifacts=state.artifacts,
+        artifacts=artifact_map,
+        artifact_registry=state.artifact_registry,
         node_results=state.node_results,
         trace=state.trace_payload(),
         request_summary=_request_summary(state.plan),
@@ -128,8 +131,8 @@ def project_complete(
         "policy_id": _policy_id(state.plan),
         "final_content": final_text,
         "content": final_text,
-        "report_filename": _report_artifact(state.artifacts).get("report_filename"),
-        "report_url": _report_artifact(state.artifacts).get("report_url"),
+        "report_filename": _report_artifact(artifact_map).get("report_filename"),
+        "report_url": _report_artifact(artifact_map).get("report_url"),
         "decision": _decision_payload(state.plan),
         "resolved_context": {},
         "goal_set": _goal_set(state.plan),
@@ -140,14 +143,14 @@ def project_complete(
         "manual_confirmation": _manual_confirmation_payload(workorder_payload),
         "approval_requirements": workorder_payload.get("approval_requirements", list(state.plan.approval_requirements)),
         "authorization": state.auth_context.audit_summary() if state.auth_context else {},
-        "sql_artifact": _artifact_dict(state.artifacts, "sql_artifact"),
-        "knowledge_artifact": _artifact_dict(state.artifacts, "knowledge_artifact"),
-        "analysis_artifact": _artifact_dict(state.artifacts, "analysis_artifact"),
-        "workorder_decision": _artifact_dict(state.artifacts, "workorder_suggestion"),
-        "workorder_pending_action": _artifact_dict(state.artifacts, "workorder_pending_action"),
-        "workorder_draft": _artifact_dict(state.artifacts, "workorder_draft"),
+        "sql_artifact": _artifact_dict(artifact_map, "sql_artifact"),
+        "knowledge_artifact": _artifact_dict(artifact_map, "knowledge_artifact"),
+        "analysis_artifact": _artifact_dict(artifact_map, "analysis_artifact"),
+        "workorder_decision": _artifact_dict(artifact_map, "workorder_suggestion"),
+        "workorder_pending_action": _artifact_dict(artifact_map, "workorder_pending_action"),
+        "workorder_draft": _artifact_dict(artifact_map, "workorder_draft"),
         "workorder_draft_payload": workorder_payload,
-        "report_artifact": _artifact_dict(state.artifacts, "report_artifact"),
+        "report_artifact": _artifact_dict(artifact_map, "report_artifact"),
         "evidence_bundle": bundle.model_dump(mode="json", exclude_none=True),
         "output_guardrail": frame.guardrail_result,
         "rendered_answer": frame.model_dump(mode="json", exclude_none=True),

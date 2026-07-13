@@ -60,6 +60,7 @@ def _sql_artifact() -> SqlStepArtifact:
     return SqlStepArtifact(
         success=True,
         summary="查询 real_data_01 最近 50 条运行状态、异常码和关键运行指标。",
+        source_table="real_data_01",
         raw_output=str([_row(index) for index in range(50, 0, -1)]),
     )
 

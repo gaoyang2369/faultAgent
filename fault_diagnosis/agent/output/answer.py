@@ -16,12 +16,15 @@ from ..contracts import CompositeOutputFrame, NodeResult, OutputFrame, PlanGoal
 from ..observability.cutover_observation import build_output_observation
 from .deliverables import DeliverableAssembler, build_workorder_payload, composite_status
 from .presenter import CompositePresenter
+from .artifact_view import project_runtime_artifact_view
+from fault_diagnosis.domain.artifacts import ArtifactEnvelope
 
 
 def build_output_frame(
     *,
     status: str = "completed",
     artifacts: dict[str, Any] | None = None,
+    artifact_registry: dict[str, ArtifactEnvelope] | None = None,
     evidence_bundle: EvidenceBundle | dict[str, Any] | None = None,
     node_results: list[NodeResult] | list[dict[str, Any]] | None = None,
     requested_variant: str | None = None,
@@ -33,9 +36,13 @@ def build_output_frame(
 ) -> OutputFrame:
     """Build the public frame through assembler then the single presenter."""
 
-    artifact_map = dict(artifacts or {})
     goal_items = list(goals or [])
     node_result_items = list(node_results or [])
+    artifact_map = (
+        project_runtime_artifact_view(artifact_registry, node_result_items)
+        if artifact_registry is not None
+        else dict(artifacts or {})
+    )
     bundle = _model(evidence_bundle, EvidenceBundle)
     sql_artifact = _model(artifact_map.get("sql_artifact"), SqlStepArtifact)
     runtime_assessment = _model(artifact_map.get("runtime_status_assessment"), RuntimeStatusAssessment)

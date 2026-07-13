@@ -7,10 +7,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fault_diagnosis.domain.diagnosis.contracts import KnowledgeStepArtifact
+from fault_diagnosis.domain.artifacts import KnowledgeArtifactPayload
 from fault_diagnosis.domain.diagnosis.steps.knowledge_lookup import extract_fault_code_entries, extract_fault_codes_from_text
 from fault_diagnosis.domain.security.runtime_context import reset_current_auth_context, set_current_auth_context
 from fault_diagnosis.domain.diagnosis.evidence.knowledge import build_knowledge_evidence_items
 from ...context.artifact_access import resolve_target_artifact
+from ...artifacts import ArtifactPayloadError, require_payload
 from fault_diagnosis.agent.evidence.claims import build_v2_claim
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
@@ -32,7 +34,14 @@ class RagNode:
                 output={"success": False, "error": "missing_query"},
                 error={"code": "missing_query", "message": "RAG node requires inputs.query."},
             )
-        reused_artifact = _previous_knowledge_artifact(node=node, state=state)
+        try:
+            reused_artifact = _previous_knowledge_artifact(node=node, state=state)
+        except ArtifactPayloadError as exc:
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"success": False, "artifact_access_error": exc.code},
+                error={"code": exc.code, "message": exc.message},
+            )
         if reused_artifact is not None:
             artifact = reused_artifact.model_copy(
                 update={
@@ -44,7 +53,6 @@ class RagNode:
             )
             evidence = models_to_dicts(build_knowledge_evidence_items(artifact, request=build_request(state, node, goal="知识库检索")))
             claims = _fault_code_explanation_claims(node=node, artifact=artifact, evidence=evidence)
-            state.artifacts["knowledge_artifact"] = artifact
             return NodeExecutionOutput(
                 output={
                     "success": True,
@@ -56,7 +64,7 @@ class RagNode:
                 tool_call_refs=[],
                 proposed_evidence=evidence,
                 proposed_claims=claims,
-                artifacts={"knowledge_artifact": artifact},
+                artifact_payload=KnowledgeArtifactPayload(knowledge_artifact=artifact),
             )
         auth = auth_context(state)
         token = set_current_auth_context(auth)
@@ -94,7 +102,6 @@ class RagNode:
             fault_code_entries=entries,
         )
         request = build_request(state, node, goal="知识库检索")
-        state.artifacts["knowledge_artifact"] = artifact
         evidence = models_to_dicts(build_knowledge_evidence_items(artifact, request=request))
         claims = _fault_code_explanation_claims(node=node, artifact=artifact, evidence=evidence)
         tool_metrics = {
@@ -119,7 +126,7 @@ class RagNode:
             tool_call_refs=["query_knowledge_base"],
             proposed_evidence=evidence,
             proposed_claims=claims,
-            artifacts={"knowledge_artifact": artifact},
+            artifact_payload=KnowledgeArtifactPayload(knowledge_artifact=artifact),
         )
 
 
@@ -206,41 +213,16 @@ def _previous_knowledge_artifact(*, node: dict[str, Any], state: RuntimeState) -
         expected_devices=[],
         require_complete_lineage=True,
     )
-    if not access.allowed or access.record is None:
+    if not access.allowed or access.record is None or access.record.artifact_envelope is None:
         return None
-    artifact = _find_knowledge_artifact(access.record.payload)
-    if artifact is None or not artifact.success:
+    artifact = require_payload(access.record.artifact_envelope, KnowledgeArtifactPayload).knowledge_artifact
+    if not artifact.success:
         return None
     requested_codes = {str(code).upper() for code in input_value(node, "fault_code_refs", []) or []}
     artifact_codes = {str(code).upper() for code in artifact.fault_codes}
     if requested_codes and artifact_codes and not requested_codes.intersection(artifact_codes):
         return None
     return artifact
-
-
-def _find_knowledge_artifact(value: Any) -> KnowledgeStepArtifact | None:
-    if isinstance(value, KnowledgeStepArtifact):
-        return value
-    if isinstance(value, dict):
-        if "knowledge_artifact" in value:
-            found = _find_knowledge_artifact(value.get("knowledge_artifact"))
-            if found is not None:
-                return found
-        if {"success", "query"}.issubset(value.keys()) and ("raw_output" in value or "snippets" in value):
-            try:
-                return KnowledgeStepArtifact.model_validate(value)
-            except Exception:
-                pass
-        for item in value.values():
-            found = _find_knowledge_artifact(item)
-            if found is not None:
-                return found
-    if isinstance(value, list):
-        for item in value:
-            found = _find_knowledge_artifact(item)
-            if found is not None:
-                return found
-    return None
 
 
 def _utc_now_iso() -> str:

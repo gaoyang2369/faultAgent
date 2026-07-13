@@ -51,7 +51,7 @@ class DiagnosticAssessment(BaseModel):
     success: bool
     analyzer_id: str = "dcma_runtime"
     asset: str = "DCMA 系统"
-    source_table: str = "real_data_01"
+    source_table: str
     sample_count: int = 0
     latest_sample_time: str | None = None
     oldest_sample_time: str | None = None

@@ -15,7 +15,7 @@ from fault_diagnosis.platform.logging import bind_request_id, get_logger, new_re
 from fault_diagnosis.server.session.runtime_namespace import clear_namespace, set_namespace
 from .stream_control import StreamCancellationHandle, clear_stream_handle
 from fault_diagnosis.shared.utils import summarize_identifier_for_log
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import commit_artifact, save_thread_artifact
+from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import save_thread_artifact
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
 from fault_diagnosis.agent import AgentEngineV2, WorkflowRuntimeExecutor
 from fault_diagnosis.agent.contracts import ArtifactEnvelope
@@ -551,7 +551,9 @@ def _save_v2_complete_artifact(complete: dict[str, Any], *, thread_id: str) -> N
         for raw in raw_envelopes:
             try:
                 canonical = ArtifactEnvelope.model_validate(raw)
-                committed.append(commit_artifact(canonical))
+                if canonical.persistence_status != "committed" or not canonical.readback_verified:
+                    raise RuntimeError("artifact_not_committed_by_executor")
+                committed.append(canonical)
             except Exception as exc:  # noqa: BLE001 - failed readback must not publish a ref.
                 failed_id = str(raw.get("artifact_id") or "") if isinstance(raw, dict) else ""
                 if failed_id:

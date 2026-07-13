@@ -20,7 +20,6 @@ from ..reporting.utils import (
     unique_non_empty as _unique_values,
 )
 from ..steps.sql_result_parser import parse_sql_rows
-from fault_diagnosis.domain.security.sql_safety import REAL_DATA_LATEST_TABLE
 from .utils import dedupe, first_non_empty
 
 _FRESH_SECONDS = 5 * 60
@@ -38,6 +37,20 @@ def build_sql_evidence_items(
 ) -> list[EvidenceItem]:
     """Build evidence items from normalized SQL tool output."""
 
+    source_table = str(sql_artifact.source_table or "").strip()
+    if not source_table:
+        return [
+            EvidenceItem(
+                evidence_id="ev_sql_source_table_missing",
+                evidence_type="tool_error",
+                source_type="sql",
+                source_name="unresolved",
+                asset_id=request.equipment_hint if request else None,
+                content={"error": "source_table_unresolved"},
+                summary="SQL Artifact 缺少明确数据表。",
+                quality=EvidenceQuality(reliability="medium", freshness="unknown", relevance="high", completeness="missing"),
+            )
+        ]
     rows = parse_sql_rows(sql_artifact.raw_output or sql_artifact.result_preview)
     if not sql_artifact.success or not rows:
         return [
@@ -45,7 +58,7 @@ def build_sql_evidence_items(
                 evidence_id="ev_sql_result_missing",
                 evidence_type="tool_error" if sql_artifact.error else "device_status",
                 source_type="sql",
-                source_name=REAL_DATA_LATEST_TABLE,
+                source_name=source_table,
                 asset_id=request.equipment_hint if request else None,
                 content={
                     "summary": sql_artifact.summary,
@@ -76,7 +89,7 @@ def build_sql_evidence_items(
             evidence_id="ev_sql_sample_window",
             evidence_type="device_status",
             source_type="sql",
-            source_name=REAL_DATA_LATEST_TABLE,
+            source_name=source_table,
             asset_id=asset_id,
             timestamp=latest_time if latest_time != "-" else None,
             time_range={"start": oldest_time, "end": latest_time} if oldest_time != "-" and latest_time != "-" else None,
@@ -86,10 +99,10 @@ def build_sql_evidence_items(
                 "latest_status": _format_value(latest.get("status")),
                 "latest_sample_time": latest_time,
                 "oldest_sample_time": oldest_time,
-                "source_table": REAL_DATA_LATEST_TABLE,
+                "source_table": source_table,
             },
             summary=(
-                f"SQL 返回 {len(rows)} 条 {REAL_DATA_LATEST_TABLE} 运行记录，"
+                f"SQL 返回 {len(rows)} 条 {source_table} 运行记录，"
                 f"最新时间 {latest_time}，设备 {', '.join(devices) or asset_id or '未识别'}。"
             ),
             quality=EvidenceQuality(
@@ -98,7 +111,7 @@ def build_sql_evidence_items(
                 relevance="high",
                 completeness="complete",
             ),
-            metadata={"sql_used": sql_artifact.sql_used, "table": REAL_DATA_LATEST_TABLE},
+            metadata={"sql_used": sql_artifact.sql_used, "table": source_table},
             title="SQL 样本窗口",
             importance="high",
         )
@@ -109,7 +122,7 @@ def build_sql_evidence_items(
                 evidence_id="ev_sql_event_codes",
                 evidence_type="alarm_event",
                 source_type="sql",
-                source_name=REAL_DATA_LATEST_TABLE,
+                source_name=source_table,
                 asset_id=asset_id,
                 timestamp=latest_time if latest_time != "-" else None,
                 time_range={"start": oldest_time, "end": latest_time} if oldest_time != "-" and latest_time != "-" else None,
@@ -126,17 +139,19 @@ def build_sql_evidence_items(
                     f"{', '.join(effective_codes)}。"
                 ),
                 quality=EvidenceQuality(reliability="high", freshness=_freshness_from_timestamp(latest_time), relevance="high", completeness="complete"),
-                metadata={"columns": ["fault_code", "alarm_code"], "table": REAL_DATA_LATEST_TABLE},
+                metadata={"columns": ["fault_code", "alarm_code"], "table": source_table},
                 title="SQL 异常码统计",
                 importance="high",
             )
         )
 
-    items.extend(_sql_metric_evidence(rows, asset_id=asset_id, latest_time=latest_time))
+    items.extend(_sql_metric_evidence(rows, asset_id=asset_id, latest_time=latest_time, source_table=source_table))
     return items
 
 
-def _sql_metric_evidence(rows: list[dict[str, Any]], *, asset_id: str | None, latest_time: str) -> list[EvidenceItem]:
+def _sql_metric_evidence(
+    rows: list[dict[str, Any]], *, asset_id: str | None, latest_time: str, source_table: str
+) -> list[EvidenceItem]:
     latest = rows[0]
     items: list[EvidenceItem] = []
     speed_deviation = _speed_deviation_percent(latest)
@@ -147,7 +162,7 @@ def _sql_metric_evidence(rows: list[dict[str, Any]], *, asset_id: str | None, la
                 evidence_id="ev_sql_speed_deviation",
                 evidence_type="timeseries_feature",
                 source_type="sql",
-                source_name=REAL_DATA_LATEST_TABLE,
+                source_name=source_table,
                 asset_id=asset_id,
                 timestamp=latest_time if latest_time != "-" else None,
                 content={
@@ -176,7 +191,7 @@ def _sql_metric_evidence(rows: list[dict[str, Any]], *, asset_id: str | None, la
                 evidence_id="ev_sql_load_level",
                 evidence_type="metric_snapshot",
                 source_type="sql",
-                source_name=REAL_DATA_LATEST_TABLE,
+                source_name=source_table,
                 asset_id=asset_id,
                 timestamp=latest_time if latest_time != "-" else None,
                 content={
@@ -210,7 +225,7 @@ def _sql_metric_evidence(rows: list[dict[str, Any]], *, asset_id: str | None, la
                 evidence_id="ev_sql_temperature_level",
                 evidence_type="metric_snapshot",
                 source_type="sql",
-                source_name=REAL_DATA_LATEST_TABLE,
+                source_name=source_table,
                 asset_id=asset_id,
                 timestamp=latest_time if latest_time != "-" else None,
                 content={
