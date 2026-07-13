@@ -51,6 +51,26 @@ def _artifact(
                     "report_filename": f"{asset}.html",
                     "available_followups": ["generate_report", "create_workorder_draft"],
                     "available_actions": ["create_workorder_draft"],
+                    "lineage": {
+                        "lineage_status": "complete",
+                        "artifact_id": f"report:{asset}",
+                        "artifact_type": "report_artifact",
+                        "subject_device_refs": [asset],
+                        "source_artifact_ids": [f"analysis:{asset}"],
+                    },
+                },
+                {
+                    "artifact_id": f"analysis:{asset}",
+                    "artifact_type": "analysis_artifact",
+                    "thread_id": thread_id,
+                    "status": "completed",
+                    "followupable": True,
+                    "reportable": True,
+                    "actionable": True,
+                    "device_refs": [asset],
+                    "fault_code_refs": [fault_code],
+                    "available_followups": ["generate_report", "create_workorder_draft"],
+                    "available_actions": ["create_workorder_draft"],
                 }
             ],
             "request": {
@@ -348,7 +368,7 @@ def test_followup_detail_inherits_latest_knowledge_artifact_fault_code() -> None
     assert snapshot.context_frame.missing_context == []
     assert snapshot.context_frame.reuse_blockers == []
     assert snapshot.skill_route.primary_skill == "fault_code_explain"
-    assert [node.node_type for node in snapshot.execution_plan.nodes] == ["rag", "kg"]
+    assert [node.node_type for node in snapshot.execution_plan.nodes] == ["rag"]
     assert "clarification" not in snapshot.skill_route.selected_skills
 
     plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id=thread_id, auth_context=_engineer())
@@ -361,7 +381,7 @@ def test_followup_detail_inherits_latest_knowledge_artifact_fault_code() -> None
     assert rag_inputs["source_artifact_refs"][0]["artifact_id"] == "knowledge:trace.detail:A07089"
 
 
-def test_effective_request_overrides_legacy_ambiguous_context_when_target_is_unique() -> None:
+def test_effective_request_cannot_override_ambiguous_context_even_with_target() -> None:
     intent = IntentFrameBuilder().build("详细点")
     context = ContextFrame(
         relation_to_previous="ambiguous",
@@ -388,9 +408,9 @@ def test_effective_request_overrides_legacy_ambiguous_context_when_target_is_uni
         effective_request_frame=effective,
     )
 
-    assert route.primary_skill == "fault_code_explain"
-    assert route.selected_skills == ["fault_code_explain"]
-    assert route.blocked_skills == {}
+    assert route.primary_skill == "clarification"
+    assert route.selected_skills == ["clarification"]
+    assert route.blocked_skills
 
 
 def test_followup_detail_with_multiple_fault_codes_requires_clarification() -> None:

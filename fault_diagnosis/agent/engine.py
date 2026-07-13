@@ -58,6 +58,7 @@ class AgentEngineV2:
         )
         effective_request_frame = EffectiveRequestBuilder().build(
             raw_message=raw_message,
+            thread_id=thread_id,
             intent_frame=intent_frame,
             context_frame=context_frame,
             conversation_context=conversation_context,
@@ -100,7 +101,6 @@ class AgentEngineV2:
                 authorization={**primary_authorization.model_dump(mode="json"), "goals": goal_authorizations},
                 metadata=snapshot_metadata,
             )
-        context_frame = _normalize_context_with_effective_request(context_frame, effective_request_frame)
         rewrite_frame = RewriteFrameBuilder().build(
             raw_message,
             intent_frame=intent_frame,
@@ -223,34 +223,6 @@ class AgentEngineV2:
         """Deprecated compatibility wrapper; use build_plan_snapshot()."""
 
         return self.build_plan_snapshot(**kwargs)
-
-
-def _normalize_context_with_effective_request(
-    context_frame: ContextFrame,
-    effective_request_frame: EffectiveRequestFrame,
-) -> ContextFrame:
-    """Let the finalized effective request settle legacy ambiguous follow-ups."""
-
-    if context_frame.relation_to_previous != "ambiguous":
-        return context_frame
-    if effective_request_frame.needs_clarification:
-        return context_frame
-    fault_codes = [code for code in effective_request_frame.effective_fault_code_refs if str(code).strip()]
-    if (
-        len(fault_codes) == 1
-        and effective_request_frame.target_artifact_id
-        and effective_request_frame.semantic_intent
-        in {"expand_previous_answer", "show_manual_fields", "explain_fault_code"}
-    ):
-        return context_frame.model_copy(
-            update={
-                "relation_to_previous": "knowledge_followup",
-                "reuse_decision": "reuse_artifact",
-                "missing_context": [],
-                "reuse_blockers": [],
-            }
-        )
-    return context_frame
 
 
 def _resolution_status(context_frame: ContextFrame, effective_request_frame: EffectiveRequestFrame) -> str:

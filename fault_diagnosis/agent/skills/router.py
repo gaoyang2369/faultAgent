@@ -182,13 +182,13 @@ def _needs_clarification(
     intent_frame: IntentFrame,
     effective_request_frame: EffectiveRequestFrame | None = None,
 ) -> bool:
+    if context_frame.relation_to_previous in {"ambiguous", "unresolved"}:
+        return True
     if effective_request_frame is not None:
         if effective_request_frame.needs_clarification:
             return True
         if _effective_request_has_executable_target(effective_request_frame):
             return False
-    if context_frame.relation_to_previous == "ambiguous":
-        return True
     if "missing_device" in intent_frame.ambiguities and not (
         effective_request_frame and effective_request_frame.effective_device_refs
     ):

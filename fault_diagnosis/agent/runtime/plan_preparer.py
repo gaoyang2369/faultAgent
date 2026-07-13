@@ -8,7 +8,6 @@ from typing import Any
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisRequest
 from fault_diagnosis.domain.diagnosis.report_mapper import map_artifact_to_report_payload
 from fault_diagnosis.domain.security.sql_safety import build_fallback_sql_query
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_thread_artifact
 from fault_diagnosis.domain.security.permissions import build_auth_context
 from ..context.artifact_access import resolve_target_artifact
 
@@ -163,18 +162,16 @@ def _readiness_blocker(skill_name: str, plan: ExecutionPlan, *, snapshot: PlanSn
 
 def _rag_query(snapshot: PlanSnapshotV2, node: Any | None = None) -> str:
     effective = snapshot.effective_request_frame
-    query_spec_id = str((node.get("query_spec_id") if node is not None else "") or "")
-    for spec in effective.goal_query_specs:
-        if spec.query_spec_id == query_spec_id and spec.rag_query:
-            return spec.rag_query
     codes = [item for item in _effective_fault_codes(snapshot) if str(item).strip()]
     if (
         effective.semantic_intent in {"expand_previous_answer", "show_manual_fields"}
         and len(codes) == 1
     ):
-        return (
-            f"{codes[0]} 故障原因 触发条件 处理措施 检查步骤 复位方法 详细说明"
-        )
+        return f"{codes[0]} 故障原因 触发条件 处理措施 检查步骤 复位方法 详细说明"
+    query_spec_id = str((node.get("query_spec_id") if node is not None else "") or "")
+    for spec in effective.goal_query_specs:
+        if spec.query_spec_id == query_spec_id and spec.rag_query:
+            return spec.rag_query
     queries = [item for item in snapshot.rewrite_frame.retrieval_queries if str(item).strip()]
     if queries:
         return str(queries[0])
@@ -260,6 +257,26 @@ def _workorder_manifest_inputs(
         result["report_url"] = str(selected.get("report_url") or selected.get("report_filename") or "")
         if str(selected.get("freshness") or "") == "stale":
             result["stale_evidence_disclosure_required"] = True
+    reuse_id = str(inputs.get("reuse_existing_artifact_id") or "")
+    if reuse_id:
+        reuse_access = resolve_target_artifact(
+            thread_id=thread_id,
+            artifact_id=reuse_id,
+            auth=auth_context,
+            expected_types={"workorder_artifact"},
+            expected_devices=_effective_devices(snapshot),
+            require_complete_lineage=True,
+        )
+        reuse_lineage = (
+            reuse_access.record.manifest.get("lineage")
+            if reuse_access.allowed and reuse_access.record is not None
+            else {}
+        )
+        reuse_sources = reuse_lineage.get("source_artifact_ids", []) if isinstance(reuse_lineage, dict) else []
+        if not reuse_access.allowed or reuse_access.record is None or target_id not in reuse_sources:
+            return {"artifact_access_error": reuse_access.code if not reuse_access.allowed else "workorder_idempotency_source_mismatch"}
+        result["reuse_existing_artifact_id"] = reuse_id
+        result["idempotency_key"] = str(inputs.get("idempotency_key") or "")
     if snapshot.effective_request_frame.stale_evidence_disclosure_required:
         result["stale_evidence_disclosure_required"] = True
     return result
@@ -311,7 +328,7 @@ def _reportable_payload(
             return {}
         artifact = access.record.envelope
     else:
-        artifact = get_thread_artifact(thread_id)
+        return {}
     if artifact is None:
         return {}
     try:

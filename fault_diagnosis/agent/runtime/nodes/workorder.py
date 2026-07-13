@@ -53,6 +53,15 @@ class WorkorderNode:
         target_id = str(input_value(node, "target_artifact_id", "") or "")
         if action_type == "confirm_workorder_draft":
             return _confirm_draft(node=node, state=state, target_id=target_id, devices=devices)
+        reuse_id = str(input_value(node, "reuse_existing_artifact_id", "") or "")
+        if reuse_id:
+            return _reuse_existing_draft(
+                node=node,
+                state=state,
+                reuse_id=reuse_id,
+                source_id=target_id,
+                devices=devices,
+            )
         if target_id and not any(key in state.artifacts for key in ("analysis_artifact", "structured_analysis", "report_artifact")):
             access = resolve_target_artifact(
                 thread_id=state.thread_id or "",
@@ -210,6 +219,71 @@ def _confirm_draft(*, node: dict[str, Any], state: RuntimeState, target_id: str,
             "dispatch_forbidden": True,
         },
         artifacts={"workorder_draft": draft, "workorder_pending_action": pending},
+    )
+
+
+def _reuse_existing_draft(
+    *,
+    node: dict[str, Any],
+    state: RuntimeState,
+    reuse_id: str,
+    source_id: str,
+    devices: list[str],
+) -> NodeExecutionOutput:
+    access = resolve_target_artifact(
+        thread_id=state.thread_id or "",
+        artifact_id=reuse_id,
+        auth=auth_context(state),
+        expected_types={"workorder_artifact"},
+        expected_devices=devices,
+        require_complete_lineage=True,
+    )
+    if not access.allowed or access.record is None or access.record.artifact_envelope is None:
+        return NodeExecutionOutput(
+            status="blocked",
+            output={"success": False, "artifact_access_error": access.code},
+            error={"code": access.code, "message": "既有工单草稿无法按精确 Artifact ID 读取。"},
+        )
+    lineage = access.record.manifest.get("lineage") if isinstance(access.record.manifest.get("lineage"), dict) else {}
+    if source_id not in (lineage.get("source_artifact_ids") or []):
+        return NodeExecutionOutput(
+            status="blocked",
+            output={"success": False, "artifact_access_error": "workorder_idempotency_source_mismatch"},
+            error={"code": "workorder_idempotency_source_mismatch", "message": "既有工单草稿与当前来源不一致。"},
+        )
+    payload = access.record.payload if isinstance(access.record.payload, dict) else {}
+    raw_draft = payload.get("workorder_draft")
+    raw_pending = payload.get("pending_action")
+    if not isinstance(raw_draft, dict) or not isinstance(raw_pending, dict):
+        return NodeExecutionOutput(
+            status="blocked",
+            output={"success": False, "artifact_access_error": "workorder_draft_payload_invalid"},
+            error={"code": "workorder_draft_payload_invalid", "message": "既有工单 Artifact 不含完整草稿。"},
+        )
+    draft = WorkOrderDraftArtifact.model_validate(raw_draft)
+    pending = PendingAction.model_validate(raw_pending)
+    state.artifacts["workorder_draft"] = draft
+    state.artifacts["workorder_pending_action"] = pending
+    return NodeExecutionOutput(
+        output={
+            "success": True,
+            "draft": model_to_dict(draft),
+            "pending_action": model_to_dict(pending),
+            "source_artifact_refs": [
+                {
+                    "artifact_id": source_id,
+                    "artifact_type": str(input_value(node, "target_artifact_type", "") or ""),
+                }
+            ],
+            "manual_confirmation_required": True,
+            "draft_only": True,
+            "dispatch_forbidden": True,
+            "idempotency_key": str(input_value(node, "idempotency_key", "") or ""),
+            "idempotency_result": "reused",
+            "reused_artifact_id": reuse_id,
+        },
+        artifacts={"workorder_draft": draft, "workorder_pending_action": pending},
+        reused_artifact_envelope=access.record.artifact_envelope,
     )
 
 

@@ -34,9 +34,15 @@ def allocate_node_artifact_id(node: dict[str, Any]) -> str:
     existing = str(node.get("artifact_id") or "")
     if existing:
         return existing
+    inputs = dict(node.get("inputs") or {})
+    reused = str(inputs.get("reuse_existing_artifact_id") or inputs.get("artifact_id") or "")
+    if reused:
+        node["artifact_id"] = reused
+        inputs["artifact_id"] = reused
+        node["inputs"] = inputs
+        return reused
     artifact_id = artifact_id_factory(artifact_type)
     node["artifact_id"] = artifact_id
-    inputs = dict(node.get("inputs") or {})
     inputs["artifact_id"] = artifact_id
     node["inputs"] = inputs
     return artifact_id

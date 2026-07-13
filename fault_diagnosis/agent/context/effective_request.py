@@ -6,8 +6,9 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from fault_diagnosis.agent.contracts import ArtifactManifest, ContextFrame, EffectiveRequestFrame, IntentFrame, SourceBinding
+from fault_diagnosis.agent.contracts import ArtifactManifest, ContextFrame, EffectiveRequestFrame, IntentFrame
 from .goals import build_goal_query_specs, build_target_scope, canonicalize_requested_goals, evaluate_goal_slots
+from .source_selector import GoalScopedSourceSelector
 
 
 DETAIL_WORDS = ("详细", "展开", "手册字段", "完整字段", "原文")
@@ -127,6 +128,7 @@ class EffectiveRequestBuilder:
         self,
         *,
         raw_message: str,
+        thread_id: str = "",
         intent_frame: IntentFrame,
         context_frame: ContextFrame,
         conversation_context: dict[str, Any] | None = None,
@@ -135,6 +137,11 @@ class EffectiveRequestBuilder:
         package = conversation_context if isinstance(conversation_context, dict) else {}
         signals = recent_context_signals if isinstance(recent_context_signals, dict) else {}
         manifests = _manifest_list(package)
+        manifests = _expand_exact_referenced_lineage(
+            thread_id=thread_id or str(package.get("thread_id") or ""),
+            referenced_artifact_id=context_frame.referenced_artifact_id,
+            manifests=manifests,
+        )
         active_case = package.get("latest_case_state") if isinstance(package.get("latest_case_state"), dict) else {}
         compact = (raw_message or "").replace(" ", "")
 
@@ -163,62 +170,66 @@ class EffectiveRequestBuilder:
         if intent_frame.time_window:
             frame.slot_sources["time_window"] = "current_message"
 
-        target = _select_target(
-            manifests=manifests,
-            active_case=active_case,
-            context_frame=context_frame,
-            wants_action=bool(_has_any(compact, WORKORDER_WORDS)),
-            wants_detail=bool(_has_any(compact, DETAIL_WORDS)),
-            wants_report=bool(_has_any(compact, REPORT_WORDS)),
-            wants_confirmation=bool(_has_any(compact, WORKORDER_CONFIRM_WORDS)),
-        )
-        frame.resolution_trace.append(
-            _source_selection_observation(
-                manifests=manifests,
-                target=target,
-                wants_action=bool(_has_any(compact, WORKORDER_WORDS)),
-                wants_detail=bool(_has_any(compact, DETAIL_WORDS)),
-                wants_report=bool(_has_any(compact, REPORT_WORDS)),
-                wants_confirmation=bool(_has_any(compact, WORKORDER_CONFIRM_WORDS)),
+        if _context_is_irreversibly_ambiguous(context_frame, intent_frame):
+            frame.target_scope = build_target_scope(
+                raw_message=raw_message,
+                current_devices=list(intent_frame.device_refs),
+                inherited_devices=[],
+                source="current_message",
             )
-        )
-        if target is not None:
-            frame.target_artifact_id = target.artifact_id
-            frame.target_artifact_type = target.artifact_type
-            frame.target_evidence_bundle_id = target.evidence_bundle_id or target.linked_evidence_bundle_id or None
-            frame.target_report_id = target.report_url or target.report_filename or None
-            frame.available_actions = list(target.available_actions)
-            frame.freshness = target.freshness or "unknown"
-            frame.stale_evidence_disclosure_required = target.freshness == "stale"
-            if (
-                target.artifact_status == "complete"
-                and target.persistence_status == "committed"
-                and target.readback_verified
-                and target.lineage.lineage_status == "complete"
-            ):
-                frame.source_bindings.append(
-                    SourceBinding(
-                        artifact_id=target.artifact_id,
-                        artifact_type=target.artifact_type,
-                        thread_id=target.thread_id,
-                        lineage_status=target.lineage.lineage_status,
-                        persistence_status=target.persistence_status,
-                        readback_verified=True,
-                    )
+            _assign_requested_goals(frame, intent_frame)
+            frame.requested_goals = [goal.capability for goal in frame.requested_goal_set.goals]
+            frame.goal_query_specs = build_goal_query_specs(
+                goals=frame.requested_goal_set,
+                target_scope=frame.target_scope,
+                fault_codes=frame.effective_fault_code_refs,
+                time_window=frame.effective_time_window,
+            )
+            _normalize_semantics(frame, compact)
+            frame.effective_semantic_intent = frame.semantic_intent
+            frame.needs_clarification = True
+            frame.clarification_question = (
+                context_frame.missing_context[0]
+                if context_frame.missing_context
+                else "请明确当前消息所指的设备或故障码。"
+            )
+            frame.ambiguity = {
+                "slot": "context_reference",
+                "candidate_targets": [],
+                "priority": "immutable_context_safety",
+            }
+            frame.safety_flags.append("ambiguous_context_is_irreversible")
+            for goal in frame.requested_goal_set.goals:
+                frame.resolution_trace.append(
+                    {
+                        "stage": "source.select.goal",
+                        "selector": "GoalScopedSourceSelector.select",
+                        "goal_id": goal.goal_id,
+                        "capability": goal.capability,
+                        "source_policy": goal.source_policy,
+                        "selection_status": "blocked",
+                        "selection_reason": "immutable_ambiguous_context",
+                        "selected_artifact_id": "",
+                        "selected_artifact_type": "",
+                    }
                 )
-            frame.resolution_trace.append(
-                {
-                    "stage": "target.select",
-                    "source": "artifact_manifest",
-                    "artifact_id": target.artifact_id,
-                    "artifact_type": target.artifact_type,
-                }
+            return frame
+
+        target: ArtifactManifest | None = None
+
+        manifest_devices = _unique_device_refs(manifests)
+        manifest_fault_codes = _unique_fault_codes(manifests)
+        if len(manifest_devices) == 1:
+            _fill_slot(frame, "device", manifest_devices, "verified_manifest_candidate")
+        elif manifests and all(item.device_refs for item in manifests):
+            _fill_slot(
+                frame,
+                "device",
+                _dedupe([device for item in manifests for device in item.device_refs]),
+                "verified_manifest_candidate",
             )
-            _fill_slot(frame, "device", target.device_refs, "artifact")
-            _fill_slot(frame, "fault_codes", target.fault_code_refs, "artifact")
-            if target.time_window and not frame.effective_time_window:
-                frame.effective_time_window = dict(target.time_window)
-                frame.slot_sources["time_window"] = "artifact"
+        if len(manifest_fault_codes) == 1:
+            _fill_slot(frame, "fault_codes", manifest_fault_codes, "verified_manifest_candidate")
 
         inherited = context_frame.inherited_slots
         _fill_slot(frame, "device", _as_list(inherited.get("device") or inherited.get("asset")), "context_frame")
@@ -230,20 +241,6 @@ class EffectiveRequestBuilder:
             frame.target_evidence_bundle_id = str(inherited.get("evidence_bundle"))
         if inherited.get("report") and not frame.target_report_id:
             frame.target_report_id = str(inherited.get("report"))
-        inherited_artifact_type = str(inherited.get("latest_artifact_type") or "")
-        action_compatible_reference = (
-            _has_any(compact, WORKORDER_WORDS)
-            and inherited_artifact_type in {"report_artifact", "analysis_artifact"}
-        )
-        if context_frame.referenced_artifact_id and not frame.target_artifact_id and (
-            not _has_any(compact, WORKORDER_WORDS) or action_compatible_reference
-        ):
-            frame.target_artifact_id = context_frame.referenced_artifact_id
-        if inherited_artifact_type and not frame.target_artifact_type and (
-            not _has_any(compact, WORKORDER_WORDS) or action_compatible_reference
-        ):
-            frame.target_artifact_type = inherited_artifact_type
-
         _fill_slot(frame, "device", _as_list(active_case.get("active_asset")), "case_state")
         _fill_slot(frame, "fault_codes", _as_list(active_case.get("active_fault_codes")), "case_state")
         if not frame.effective_time_window and isinstance(active_case.get("active_time_window"), dict):
@@ -268,10 +265,6 @@ class EffectiveRequestBuilder:
                 frame.semantic_intent = str(fallback.get("semantic_intent") or frame.semantic_intent)
                 frame.requested_action = str(fallback.get("requested_action") or frame.requested_action)
             frame.requested_output_mode = str(fallback.get("requested_output_mode") or frame.requested_output_mode)
-            if fallback.get("target_artifact_id"):
-                frame.target_artifact_id = str(fallback.get("target_artifact_id"))
-            if fallback.get("target_artifact_type"):
-                frame.target_artifact_type = str(fallback.get("target_artifact_type"))
             _fill_slot(frame, "device", _as_list(fallback.get("effective_device_refs")), "semantic_fallback")
             _fill_slot(frame, "fault_codes", _as_list(fallback.get("effective_fault_code_refs")), "semantic_fallback")
             if fallback.get("needs_clarification"):
@@ -279,8 +272,34 @@ class EffectiveRequestBuilder:
                 frame.clarification_question = str(fallback.get("clarification_question") or frame.clarification_question)
             frame.confidence = max(frame.confidence, _float(fallback.get("confidence"), 0.0))
 
+        if (
+            manifests
+            and frame.evidence_policy == "collect_new"
+            and not intent_frame.device_refs
+            and not intent_frame.fault_code_refs
+            and frame.semantic_intent
+            in {
+                "expand_previous_answer",
+                "show_manual_fields",
+                "diagnose_fault",
+                "diagnose_from_runtime",
+                "generate_report",
+                "generate_report_from_previous",
+                "create_workorder_draft",
+                "confirm_workorder_draft",
+            }
+        ):
+            frame.evidence_policy = "reuse_verified_artifact"
+            frame.resolution_trace.append(
+                {
+                    "stage": "source.policy",
+                    "source_policy": "reuse_verified_artifact",
+                    "reason": "verified_conversation_manifest_candidate",
+                }
+            )
+
         inherited_devices = [item for item in frame.effective_device_refs if item not in intent_frame.device_refs]
-        scope_source = "artifact" if target is not None else "case_state" if active_case else "context_signal"
+        scope_source = "case_state" if active_case else "context_signal"
         frame.target_scope = build_target_scope(
             raw_message=raw_message,
             current_devices=list(intent_frame.device_refs),
@@ -288,28 +307,59 @@ class EffectiveRequestBuilder:
             source=scope_source,
         )
         frame.effective_device_refs = list(frame.target_scope.resolved_devices)
-        if frame.target_scope.operation == "replace" and target is not None:
-            if set(target.device_refs).intersection(frame.target_scope.excluded_devices) or (
-                target.device_refs and not set(target.device_refs).issubset(frame.target_scope.resolved_devices)
-            ):
-                frame.discarded_artifact_ids.append(target.artifact_id)
-                frame.target_artifact_id = None
-                frame.target_artifact_type = None
-                frame.target_evidence_bundle_id = None
-                frame.target_report_id = None
-                frame.effective_fault_code_refs = list(intent_frame.fault_code_refs)
-                frame.effective_time_window = dict(intent_frame.time_window)
-                frame.resolution_trace.append(
-                    {"stage": "target.discard", "artifact_id": target.artifact_id, "reason": "explicit_device_replace"}
-                )
-                target = None
-
-        frame.requested_goal_set = canonicalize_requested_goals(
-            intent_frame,
-            target_scope=frame.target_scope,
-            source_policy=frame.evidence_policy,
-        )
+        goal_intent = _intent_for_goal_canonicalization(intent_frame, frame.semantic_intent)
+        _assign_requested_goals(frame, goal_intent)
         frame.requested_goals = [goal.capability for goal in frame.requested_goal_set.goals]
+        selector = GoalScopedSourceSelector()
+        selections = []
+        for goal in frame.requested_goal_set.goals:
+            selection = selector.select(
+                goal=goal,
+                manifests=manifests,
+                explicit_artifact_id=context_frame.referenced_artifact_id,
+                expected_devices=list(frame.target_scope.resolved_devices),
+                thread_id=thread_id or str(package.get("thread_id") or ""),
+            )
+            selections.append(selection)
+            frame.resolution_trace.append(selection.observation)
+            if selection.binding is not None:
+                frame.source_bindings.append(selection.binding)
+        primary_selection = next(
+            (
+                item
+                for goal, item in zip(frame.requested_goal_set.goals, selections, strict=False)
+                if goal.goal_id == frame.requested_goal_set.primary_goal_id and item.manifest is not None
+            ),
+            None,
+        )
+        if primary_selection is None:
+            primary_selection = next((item for item in selections if item.manifest is not None), None)
+        if primary_selection is not None:
+            target = primary_selection.manifest
+            frame.target_artifact_id = target.artifact_id
+            frame.target_artifact_type = target.artifact_type
+            frame.target_evidence_bundle_id = target.evidence_bundle_id or target.linked_evidence_bundle_id or None
+            frame.target_report_id = target.report_url or target.report_filename or None
+            frame.available_actions = list(target.available_actions)
+            frame.freshness = target.freshness or "unknown"
+            frame.stale_evidence_disclosure_required = target.freshness == "stale"
+            _fill_slot(frame, "device", target.device_refs, "artifact")
+            _fill_slot(frame, "fault_codes", target.fault_code_refs, "artifact")
+            if not frame.target_scope.resolved_devices and target.device_refs:
+                frame.target_scope = frame.target_scope.model_copy(
+                    update={
+                        "resolved_devices": list(target.device_refs),
+                        "source": "artifact",
+                    }
+                )
+            if target.time_window and not frame.effective_time_window:
+                frame.effective_time_window = dict(target.time_window)
+                frame.slot_sources["time_window"] = "artifact"
+        ambiguous_selection = next((item for item in selections if item.status == "ambiguous"), None)
+        if ambiguous_selection is not None:
+            frame.needs_clarification = True
+            frame.clarification_question = "存在多个兼容的历史产物，请明确要继续使用哪一个。"
+            frame.ambiguity = {"slot": "source_artifact", "candidate_targets": []}
         frame.goal_query_specs = build_goal_query_specs(
             goals=frame.requested_goal_set,
             target_scope=frame.target_scope,
@@ -339,113 +389,6 @@ class EffectiveRequestBuilder:
             frame.clarification_question = _clarification_question(str(reason["missing_slot"]))
         _finalize_contract(frame, context_frame=context_frame)
         return frame
-
-
-def _select_target(
-    *,
-    manifests: list[ArtifactManifest],
-    active_case: dict[str, Any],
-    context_frame: ContextFrame,
-    wants_action: bool,
-    wants_detail: bool,
-    wants_report: bool,
-    wants_confirmation: bool,
-) -> ArtifactManifest | None:
-    completed = [
-        item for item in manifests
-        if item.status == "completed"
-        and item.artifact_status == "complete"
-        and item.persistence_status == "committed"
-        and item.readback_verified
-        and item.lineage.lineage_status == "complete"
-    ]
-    if context_frame.referenced_artifact_id:
-        for item in completed:
-            if item.artifact_id == context_frame.referenced_artifact_id:
-                if not wants_action or item.artifact_type in {"workorder_artifact", "report_artifact", "analysis_artifact"}:
-                    return item
-    preferred_types: list[str]
-    if wants_confirmation:
-        preferred_types = ["workorder_artifact"]
-        pool = [item for item in completed if item.artifact_type == "workorder_artifact" and item.followupable]
-    elif wants_action:
-        preferred_types = ["report_artifact", "analysis_artifact"]
-        pool = [item for item in completed if item.artifact_type in preferred_types and (item.actionable or item.available_actions)]
-    elif wants_detail:
-        preferred_types = ["analysis_artifact", "sql_artifact", "knowledge_artifact", "report_artifact"]
-        pool = [item for item in completed if item.artifact_type in preferred_types and item.followupable]
-    elif wants_report:
-        preferred_types = ["analysis_artifact", "report_artifact", "sql_artifact"]
-        pool = [item for item in completed if item.artifact_type in preferred_types and (item.reportable or item.followupable)]
-    else:
-        preferred_types = ["report_artifact", "analysis_artifact", "knowledge_artifact", "sql_artifact"]
-        pool = [item for item in completed if item.followupable or item.actionable or item.reportable]
-    if pool:
-        return sorted(pool, key=lambda item: preferred_types.index(item.artifact_type) if item.artifact_type in preferred_types else 99)[0]
-    if wants_action:
-        return None
-    latest_id = str(active_case.get("latest_artifact_id") or "")
-    if latest_id:
-        for item in completed:
-            if item.artifact_id == latest_id:
-                return item
-    return completed[0] if completed else None
-
-
-def _source_selection_observation(
-    *,
-    manifests: list[ArtifactManifest],
-    target: ArtifactManifest | None,
-    wants_action: bool,
-    wants_detail: bool,
-    wants_report: bool,
-    wants_confirmation: bool,
-) -> dict[str, Any]:
-    if wants_confirmation:
-        expected_types = ["workorder_artifact"]
-    elif wants_action:
-        expected_types = ["report_artifact", "analysis_artifact"]
-    elif wants_detail:
-        expected_types = ["analysis_artifact", "sql_artifact", "knowledge_artifact", "report_artifact"]
-    elif wants_report:
-        expected_types = ["analysis_artifact", "report_artifact", "sql_artifact"]
-    else:
-        expected_types = ["report_artifact", "analysis_artifact", "knowledge_artifact", "sql_artifact"]
-    before = [_manifest_observation(item) for item in manifests]
-    selected_id = target.artifact_id if target is not None else ""
-    after = sorted(before, key=lambda item: 0 if item["artifact_id"] == selected_id else 1)
-    rejected = [
-        {
-            "artifact_id": item["artifact_id"],
-            "reason": "lower_priority_or_incompatible" if target is not None else "not_selectable",
-        }
-        for item in before
-        if item["artifact_id"] != selected_id
-    ]
-    return {
-        "stage": "source.select.observe",
-        "selector": "_select_target",
-        "expected_types": expected_types,
-        "candidates_before": before,
-        "candidates_after": after,
-        "selected_artifact_id": selected_id,
-        "selected_artifact_type": target.artifact_type if target is not None else "",
-        "selection_reason": "selected_by_existing_policy" if target is not None else "no_candidate_selected",
-        "rejected": rejected,
-    }
-
-
-def _manifest_observation(item: ArtifactManifest) -> dict[str, Any]:
-    return {
-        "artifact_id": item.artifact_id,
-        "artifact_type": item.artifact_type,
-        "subject_devices": list(item.device_refs),
-        "source_artifact_ids": list(item.lineage.source_artifact_ids),
-        "source_tables": list(item.lineage.source_tables),
-        "lineage_status": item.lineage.lineage_status,
-        "persistence_status": item.persistence_status,
-        "readback_verified": item.readback_verified,
-    }
 
 
 def _validate_ambiguity(
@@ -514,16 +457,6 @@ def _normalize_semantics(frame: EffectiveRequestFrame, compact: str) -> None:
 
 
 def _finalize_contract(frame: EffectiveRequestFrame, *, context_frame: ContextFrame) -> None:
-    resolved = bool(frame.target_artifact_id or frame.effective_device_refs or frame.effective_fault_code_refs)
-    if not frame.needs_clarification and resolved and context_frame.relation_to_previous == "ambiguous":
-        frame.resolution_trace.append(
-            {
-                "stage": "contract.normalize",
-                "event": "context_ambiguity_resolved_by_effective_request",
-                "diagnostic_missing_context": list(context_frame.missing_context),
-                "diagnostic_reuse_blockers": list(context_frame.reuse_blockers),
-            }
-        )
     if frame.semantic_intent == "generate_report_from_previous" and not frame.target_artifact_id:
         frame.semantic_intent = "generate_report"
         frame.resolution_trace.append(
@@ -532,6 +465,12 @@ def _finalize_contract(frame: EffectiveRequestFrame, *, context_frame: ContextFr
                 "event": "explicit_report_without_target_uses_generate_report",
             }
         )
+
+
+def _context_is_irreversibly_ambiguous(context_frame: ContextFrame, intent_frame: IntentFrame) -> bool:
+    if intent_frame.device_refs or intent_frame.fault_code_refs:
+        return False
+    return context_frame.relation_to_previous in {"ambiguous", "unresolved"}
 
 
 def _manifest_list(package: dict[str, Any]) -> list[ArtifactManifest]:
@@ -559,6 +498,36 @@ def _manifest_list(package: dict[str, Any]) -> list[ArtifactManifest]:
     return _dedupe_manifests(manifests)
 
 
+def _expand_exact_referenced_lineage(
+    *,
+    thread_id: str,
+    referenced_artifact_id: str | None,
+    manifests: list[ArtifactManifest],
+) -> list[ArtifactManifest]:
+    if not thread_id or not referenced_artifact_id:
+        return manifests
+    if manifests and referenced_artifact_id not in {item.artifact_id for item in manifests}:
+        return manifests
+    from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_artifact_manifest_exact
+
+    by_id = {item.artifact_id: item for item in manifests}
+    pending = [referenced_artifact_id]
+    while pending:
+        artifact_id = str(pending.pop(0) or "")
+        if not artifact_id or artifact_id in by_id:
+            continue
+        try:
+            raw = get_artifact_manifest_exact(thread_id, artifact_id)
+            manifest = ArtifactManifest.model_validate(raw) if isinstance(raw, dict) else None
+        except Exception:
+            manifest = None
+        if manifest is None:
+            continue
+        by_id[manifest.artifact_id] = manifest
+        pending.extend(manifest.lineage.source_artifact_ids)
+    return list(by_id.values())
+
+
 def _semantic_from_intent(intent: IntentFrame) -> str:
     mapping = {
         "explain_fault_code": "explain_fault_code",
@@ -573,6 +542,28 @@ def _semantic_from_intent(intent: IntentFrame) -> str:
         "root_cause_analysis": "root_cause_analysis",
     }
     return mapping.get(intent.primary_intent, intent.primary_intent or "")
+
+
+def _assign_requested_goals(frame: EffectiveRequestFrame, intent: IntentFrame) -> None:
+    frame.requested_goal_set = canonicalize_requested_goals(
+        intent,
+        target_scope=frame.target_scope,
+        source_policy=frame.evidence_policy,
+    )
+
+
+def _intent_for_goal_canonicalization(intent: IntentFrame, semantic_intent: str) -> IntentFrame:
+    if intent.sub_intents or intent.primary_intent:
+        return intent
+    inferred = {
+        "expand_previous_answer": "explain_fault_code",
+        "show_manual_fields": "explain_fault_code",
+        "generate_report_from_previous": "generate_report",
+        "diagnose_from_runtime": "diagnose_fault",
+    }.get(semantic_intent, semantic_intent)
+    if not inferred:
+        return intent
+    return intent.model_copy(update={"primary_intent": inferred, "sub_intents": [inferred]}, deep=True)
 
 
 def _task_family_from_intent(intent: IntentFrame) -> str:

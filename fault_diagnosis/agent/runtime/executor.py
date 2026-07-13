@@ -35,6 +35,7 @@ class NodeExecutionOutput:
         proposed_claims: list[dict[str, Any]] | None = None,
         artifacts: dict[str, Any] | None = None,
         error: dict[str, Any] | None = None,
+        reused_artifact_envelope: Any | None = None,
     ) -> None:
         self.status = status
         self.output = output or {}
@@ -43,6 +44,7 @@ class NodeExecutionOutput:
         self.proposed_claims = list(proposed_claims or [])
         self.artifacts = dict(artifacts or {})
         self.error = error
+        self.reused_artifact_envelope = reused_artifact_envelope
 
 
 class TypedNode(Protocol):
@@ -285,7 +287,7 @@ class WorkflowRuntimeExecutor:
                 if output.status == "completed":
                     evidence_refs = state.commit_evidence(node, output.proposed_evidence)
                     state.commit_claims(output.proposed_claims)
-                envelope = build_node_artifact_envelope(
+                envelope = output.reused_artifact_envelope or build_node_artifact_envelope(
                     node=node,
                     state=state,
                     node_status=output.status,

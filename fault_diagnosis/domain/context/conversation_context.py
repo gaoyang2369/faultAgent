@@ -45,10 +45,12 @@ class ConversationContextAssembler:
         )
         case_state = self.case_store.load(thread_id)
         active_case = case_state.active_case
+        recent_artifact_ids = self._recent_artifact_ids(recent_messages)
         artifact_manifests = _latest_artifact_manifests(
             thread_id,
             artifact_getter=self.artifact_getter,
             manifest_getter=self.artifact_manifest_getter,
+            seed_artifact_ids=recent_artifact_ids,
         )
         artifact_refs = _latest_artifact_refs(artifact_manifests)
         previous_assistant_turn = self._previous_assistant_turn(recent_messages)
@@ -89,6 +91,23 @@ class ConversationContextAssembler:
             "previous_assistant_artifact_ref_count": len(previous_assistant_turn.get("produced_artifacts") or []),
         }
         return package
+
+    def _recent_artifact_ids(self, recent_messages: list[dict[str, Any]]) -> list[str]:
+        artifact_ids: list[str] = []
+        for item in reversed(recent_messages):
+            message_id = str(item.get("id") or "")
+            if not message_id:
+                continue
+            try:
+                refs = self.conversation_repository.list_message_artifact_refs(message_id=message_id)
+            except Exception:
+                continue
+            artifact_ids.extend(
+                str(ref.get("artifact_id") or "")
+                for ref in refs
+                if isinstance(ref, dict) and str(ref.get("artifact_id") or "").strip()
+            )
+        return list(dict.fromkeys(artifact_ids))
 
     def _previous_assistant_turn(self, recent_messages: list[dict[str, Any]]) -> dict[str, Any]:
         for item in reversed(recent_messages):
@@ -139,22 +158,31 @@ def _latest_artifact_manifests(
     *,
     artifact_getter: ArtifactGetter,
     manifest_getter: ArtifactManifestGetter,
+    seed_artifact_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    pending = list(seed_artifact_ids or [])
     try:
         envelope = artifact_getter(thread_id)
     except Exception:
-        return []
-    if not envelope or not isinstance(envelope.payload, dict):
-        return []
-    manifests = envelope.payload.get("artifact_manifests")
-    if not isinstance(manifests, list):
-        return []
+        envelope = None
+    manifests = envelope.payload.get("artifact_manifests") if envelope and isinstance(envelope.payload, dict) else []
+    if isinstance(manifests, list):
+        pending.extend(
+            str(item.get("artifact_id") or "")
+            for item in manifests
+            if isinstance(item, dict) and str(item.get("artifact_id") or "").strip()
+        )
     verified: list[dict[str, Any]] = []
-    for item in manifests:
-        if not isinstance(item, dict):
+    visited: set[str] = set()
+    while pending:
+        artifact_id = pending.pop(0)
+        if not artifact_id or artifact_id in visited:
             continue
-        artifact_id = str(item.get("artifact_id") or "")
-        manifest = manifest_getter(thread_id, artifact_id) if artifact_id else None
+        visited.add(artifact_id)
+        try:
+            manifest = manifest_getter(thread_id, artifact_id)
+        except Exception:
+            manifest = None
         if (
             isinstance(manifest, dict)
             and manifest.get("artifact_status") == "complete"
@@ -163,4 +191,10 @@ def _latest_artifact_manifests(
             and (manifest.get("lineage") or {}).get("lineage_status") == "complete"
         ):
             verified.append(manifest)
+            lineage = manifest.get("lineage") if isinstance(manifest.get("lineage"), dict) else {}
+            pending.extend(
+                str(item)
+                for item in lineage.get("source_artifact_ids", [])
+                if str(item or "").strip() and str(item) not in visited
+            )
     return verified

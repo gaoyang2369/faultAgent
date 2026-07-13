@@ -114,6 +114,10 @@ class SourceBinding(AgentEngineContract):
     lineage_status: Literal["complete", "legacy_partial", "invalid"] = "legacy_partial"
     persistence_status: Literal["staged", "committed", "failed", "not_persisted"] = "not_persisted"
     readback_verified: bool = False
+    source_policy: str = ""
+    selection_reason: str = ""
+    reusable_result_artifact_id: str | None = None
+    idempotency_key: str | None = None
 
 
 class InternalPrerequisite(AgentEngineContract):
@@ -372,6 +376,11 @@ class WorkorderNodeInputs(GoalScopedNodeInputs):
     manual_confirmation_required: bool = True
     draft_only: bool = True
     artifact_access_error: str = ""
+    reuse_existing_artifact_id: str = ""
+    idempotency_key: str = ""
+    source_policy: str = ""
+    source_selection_reason: str = ""
+    artifact_id: str = ""
 
 
 class ApprovalNodeInputs(GoalScopedNodeInputs):

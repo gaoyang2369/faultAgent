@@ -148,7 +148,7 @@ def canonicalize_requested_goals(intent: IntentFrame, *, target_scope: TargetSco
                 required_slots=list(_REQUIRED.get(capability, [])),
                 optional_slots=list(_OPTIONAL.get(capability, [])),
                 evidence_requirements=list(_EVIDENCE.get(capability, [])),
-                source_policy=source_policy or "collect_new",
+                source_policy=_goal_source_policy(capability, source_policy),
                 priority=_PRIORITY.get(capability, 100),
                 confidence=intent.confidence,
                 explicit=True,
@@ -163,6 +163,15 @@ def canonicalize_requested_goals(intent: IntentFrame, *, target_scope: TargetSco
             primary = goal.goal_id
             break
     return RequestedGoalSet(goals=goals, primary_goal_id=primary)
+
+
+def _goal_source_policy(capability: str, context_policy: str) -> str:
+    policy = str(context_policy or "collect_new")
+    if capability == "check_runtime_status" and policy == "reuse_and_refresh_status":
+        return "refresh_runtime_data"
+    if policy in {"reuse_previous_artifact", "reuse_artifact", "reuse_verified_artifact"}:
+        return "reuse_verified_artifact"
+    return "collect_new"
 
 
 def build_goal_query_specs(

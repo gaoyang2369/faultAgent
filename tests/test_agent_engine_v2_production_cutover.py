@@ -183,10 +183,6 @@ def test_comparison_transport_is_identical_and_renders_once(production_harness) 
     assert turn.complete["rendered_answer"]["answer_variant"] != "status_brief_v2"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Phase 2: singular pronoun after a two-device comparison must clarify instead of inheriting one device",
-)
 def test_singular_pronoun_after_comparison_only_runs_clarification(production_harness) -> None:
     client, db_path, _ = production_harness
     comparison = _turn(client, db_path, "比较 G120电机1 和 G120电机2 当前运行状态")
@@ -213,10 +209,6 @@ def test_singular_pronoun_after_comparison_only_runs_clarification(production_ha
     assert node_types == ["clarification"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Phases 2-3: motor-2 lineage and repeated-workorder source selection are not yet converged",
-)
 def test_motor2_report_and_repeated_workorder_keep_typed_source_lineage(production_harness) -> None:
     client, db_path, adapters = production_harness
     turns: list[FrontendTurn] = []
@@ -263,6 +255,13 @@ def test_motor2_report_and_repeated_workorder_keep_typed_source_lineage(producti
     assert not any("real_data_01" in call["payload"] for call in adapters.sql_calls)
     assert observations[3]["context"]["selected_artifact_type"] in {"report_artifact", "analysis_artifact"}
     assert not any(error.get("code") == "target_artifact_type_mismatch" for error in observations[3]["errors"])
+    third_workorder = next(item for item in observations[2]["artifacts"] if item["type"] == "workorder_artifact")
+    fourth_workorder = next(item for item in observations[3]["artifacts"] if item["type"] == "workorder_artifact")
+    assert fourth_workorder["id"] == third_workorder["id"]
+    fourth_workorder_result = next(
+        item for item in turns[3].complete["node_results"] if item["node_type"] == "workorder"
+    )
+    assert fourth_workorder_result["output"]["idempotency_result"] == "reused"
 
 
 def _turn(client: TestClient, db_path: Path, message: str, thread_id: str | None = None) -> FrontendTurn:

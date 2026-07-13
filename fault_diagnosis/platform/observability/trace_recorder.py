@@ -876,6 +876,13 @@ def _all_final_claims_have_evidence(ledger: Any) -> bool:
 def _source_selection(resolution_trace: Any) -> dict[str, Any]:
     if not isinstance(resolution_trace, list):
         return {}
+    goal_selections = [
+        item
+        for item in resolution_trace
+        if isinstance(item, dict) and item.get("stage") == "source.select.goal"
+    ]
+    if goal_selections:
+        return {**goal_selections[0], "goal_selections": goal_selections}
     for item in resolution_trace:
         if isinstance(item, dict) and item.get("stage") == "source.select.observe":
             return item

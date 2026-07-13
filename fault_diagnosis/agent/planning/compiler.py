@@ -311,6 +311,25 @@ def _goal_scoped_nodes(
                 "target_scope_id": effective_request_frame.target_scope.scope_id,
             }
         )
+        binding = _source_binding_for_goals(effective_request_frame, goal_ids)
+        if binding is not None:
+            inputs.update(
+                {
+                    "target_artifact_id": binding.artifact_id,
+                    "target_artifact_type": binding.artifact_type,
+                }
+            )
+            if node_type in {"rag", "workorder"}:
+                inputs["source_artifact_refs"] = [
+                    {"artifact_id": binding.artifact_id, "artifact_type": binding.artifact_type}
+                ]
+            if node_type == "workorder":
+                inputs["source_policy"] = binding.source_policy
+                inputs["source_selection_reason"] = binding.selection_reason
+                inputs["idempotency_key"] = binding.idempotency_key or ""
+                if binding.reusable_result_artifact_id:
+                    inputs["reuse_existing_artifact_id"] = binding.reusable_result_artifact_id
+                    inputs["artifact_id"] = binding.reusable_result_artifact_id
         if node_type not in {"workorder", "approval"}:
             inputs["requested_action"] = ""
         node = {
@@ -491,6 +510,11 @@ def _source_artifact_refs(frame: EffectiveRequestFrame) -> list[dict[str, str]]:
             }
         )
     return refs
+
+
+def _source_binding_for_goals(frame: EffectiveRequestFrame, goal_ids: list[str]):
+    wanted = set(goal_ids)
+    return next((item for item in frame.source_bindings if item.goal_id in wanted), None)
 
 
 def _wanted_node_types(
