@@ -1,13 +1,22 @@
-"""Fail when retired legacy planning contracts leak into production internals."""
+"""Guard the goal-native cutover and ratchet known legacy authority debt."""
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+from scripts.legacy_authority_scan import (
+    ALLOWLIST_PATH,
+    compare_with_allowlist,
+    grouped_counts,
+    load_allowlist,
+    scan_authority_reads,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,18 +66,47 @@ def run_check(root: Path = ROOT) -> dict[str, object]:
     hits = _collect_hits(_iter_files(root), root)
     forbidden = [hit for hit in hits if not _allowed(hit.path)]
     allowed = [hit for hit in hits if _allowed(hit.path)]
+    observed_debt = scan_authority_reads(root)
+    comparison = compare_with_allowlist(observed_debt, load_allowlist(root / ALLOWLIST_PATH.relative_to(ROOT)))
     return {
-        "schema_version": "goal_native_cutover_check.v1",
-        "summary": {"internal_forbidden_hits": len(forbidden), "compat_allowed_hits": len(allowed)},
+        "schema_version": "goal_native_cutover_check.v2",
+        "allowlist": str(root / ALLOWLIST_PATH.relative_to(ROOT)),
+        "summary": {
+            "retired_internal_forbidden_hits": len(forbidden),
+            "compat_allowed_hits": len(allowed),
+            "accepted_authority_debt_hits": len(comparison["accepted"]),
+            "unexpected_authority_hits": len(comparison["unexpected"]),
+            "stale_allowlist_entries": len(comparison["stale"]),
+            "authority_debt_by_component": grouped_counts(comparison["accepted"]),
+        },
         "internal_forbidden_hits": [hit.to_dict() for hit in forbidden],
         "compat_allowed_hits": [hit.to_dict() for hit in allowed],
+        "accepted_authority_debt": comparison["accepted"],
+        "unexpected_authority_hits": comparison["unexpected"],
+        "stale_allowlist_entries": comparison["stale"],
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Require the observed authority debt to match the checked-in allowlist exactly.",
+    )
+    parser.parse_args(argv)
     payload = run_check(ROOT)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    return 1 if payload["summary"]["internal_forbidden_hits"] else 0
+    summary = dict(payload["summary"])
+    failed = any(
+        int(summary[key]) > 0
+        for key in (
+            "retired_internal_forbidden_hits",
+            "unexpected_authority_hits",
+            "stale_allowlist_entries",
+        )
+    )
+    return 1 if failed else 0
 
 
 def _iter_files(root: Path) -> Iterable[Path]:

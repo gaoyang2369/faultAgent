@@ -1,4 +1,4 @@
-"""Summarize legacy compatibility references after the goal-native cutover."""
+"""Summarize retired references and exact legacy execution-authority debt."""
 
 from __future__ import annotations
 
@@ -9,6 +9,14 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+from scripts.legacy_authority_scan import (
+    ALLOWLIST_PATH,
+    compare_with_allowlist,
+    grouped_counts,
+    load_allowlist,
+    scan_authority_reads,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,17 +73,27 @@ def run_scan(root: Path = ROOT) -> dict[str, object]:
     internal_hits = [hit for hit in hits if _category(hit.path) == "internal_forbidden"]
     allowed_hits = [hit for hit in hits if _category(hit.path) == "compat_allowed"]
     archived_hits = [hit for hit in hits if _category(hit.path) == "legacy_archived"]
+    observed_debt = scan_authority_reads(root)
+    comparison = compare_with_allowlist(observed_debt, load_allowlist(root / ALLOWLIST_PATH.relative_to(ROOT)))
     payload: dict[str, object] = {
-        "schema_version": "legacy_dependency_scan.v2",
+        "schema_version": "legacy_dependency_scan.v3",
         "root": str(root),
+        "allowlist": str(root / ALLOWLIST_PATH.relative_to(ROOT)),
         "summary": {
             "internal_forbidden_hits": len(internal_hits),
             "compat_allowed_hits": len(allowed_hits),
             "legacy_archived_hits": len(archived_hits),
+            "accepted_authority_debt_hits": len(comparison["accepted"]),
+            "unexpected_authority_hits": len(comparison["unexpected"]),
+            "stale_allowlist_entries": len(comparison["stale"]),
+            "authority_debt_by_component": grouped_counts(comparison["accepted"]),
         },
         "internal_forbidden_hits": [hit.to_dict() for hit in internal_hits],
         "compat_allowed_hits": [hit.to_dict() for hit in allowed_hits],
         "legacy_archived_hits": [hit.to_dict() for hit in archived_hits],
+        "accepted_authority_debt": comparison["accepted"],
+        "unexpected_authority_hits": comparison["unexpected"],
+        "stale_allowlist_entries": comparison["stale"],
     }
     return payload
 
@@ -89,6 +107,11 @@ def write_outputs(payload: dict[str, object]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", action="store_true", help="Print the full JSON payload.")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Require the observed authority debt to match the checked-in allowlist exactly.",
+    )
     args = parser.parse_args(argv)
     payload = run_scan(ROOT)
     write_outputs(payload)
@@ -96,7 +119,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     else:
         print(json.dumps({"json": str(JSON_OUTPUT), "markdown": str(MD_OUTPUT), "summary": payload["summary"]}, ensure_ascii=False, indent=2))
-    return 1 if int(payload["summary"]["internal_forbidden_hits"]) > 0 else 0
+    summary = dict(payload["summary"])
+    failed = any(
+        int(summary[key]) > 0
+        for key in ("internal_forbidden_hits", "unexpected_authority_hits", "stale_allowlist_entries")
+    )
+    return 1 if failed else 0
 
 
 def _iter_files(root: Path) -> Iterable[Path]:
@@ -141,20 +169,38 @@ def _category(path: str) -> str:
 def _to_markdown(payload: dict[str, object]) -> str:
     summary = dict(payload.get("summary") or {})
     lines = ["# Legacy Dependency Scan", "", "## Summary", ""]
-    for key in ("internal_forbidden_hits", "compat_allowed_hits", "legacy_archived_hits"):
+    for key in (
+        "internal_forbidden_hits",
+        "compat_allowed_hits",
+        "legacy_archived_hits",
+        "accepted_authority_debt_hits",
+        "unexpected_authority_hits",
+        "stale_allowlist_entries",
+    ):
         lines.append(f"- `{key}`: `{summary.get(key, 0)}`")
+    lines.append(f"- `authority_debt_by_component`: `{summary.get('authority_debt_by_component', {})}`")
     for key, title in (
         ("internal_forbidden_hits", "Internal Forbidden Hits"),
         ("compat_allowed_hits", "Compat Allowed Hits"),
         ("legacy_archived_hits", "Legacy Archived Hits"),
+        ("accepted_authority_debt", "Accepted Legacy Authority Debt"),
+        ("unexpected_authority_hits", "Unexpected Legacy Authority Reads"),
+        ("stale_allowlist_entries", "Stale Allowlist Entries"),
     ):
         lines.extend(["", f"## {title}", ""])
         entries = payload.get(key) or []
         if not isinstance(entries, list) or not entries:
             lines.append("- None found.")
             continue
-        for item in entries[:120]:
-            lines.append(f"- `{item['path']}:{item['line']}` {item['snippet']}")
+        for item in entries[:160]:
+            if "snippet" in item:
+                lines.append(f"- `{item['path']}:{item['line']}` {item['snippet']}")
+            else:
+                location = f"{item['path']}:{item.get('line', '?')}::{item['symbol']}"
+                lines.append(
+                    f"- `{item['component']}` `{location}` `{item['authority']}` "
+                    f"purpose=`{item['purpose']}` usage=`{item['usage']}` expression=`{item['expression']}`"
+                )
         if len(entries) > 120:
             lines.append(f"- ... truncated, total `{len(entries)}` hits.")
     return "\n".join(lines) + "\n"

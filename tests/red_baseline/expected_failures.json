@@ -1,0 +1,90 @@
+{
+  "schema_version": "phase0_red_baseline.v1",
+  "expected_failed": [
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_a_source_phrase_is_not_a_new_diagnosis_goal",
+      "reason": "source phrase is incorrectly promoted to diagnose_fault"
+    },
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_a_reuses_exact_analysis_without_sql_or_analysis_nodes",
+      "reason": "report follow-up replans sql and analysis"
+    },
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_a_report_input_discloses_inherited_source_freshness",
+      "reason": "report input has no inherited source freshness field"
+    },
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_b_preserves_user_clause_goal_order",
+      "reason": "diagnosis priority reorders status and diagnosis clauses"
+    },
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_b_multi_goal_compatibility_projection_is_composite",
+      "reason": "multi-goal plan is collapsed to diagnose_fault capability"
+    },
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_b_output_uses_composite_variant_and_execution_observation",
+      "reason": "output selects diagnosis_answer and omits executed goal observations"
+    },
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_c_ambiguous_pronoun_creates_goal_scoped_pending",
+      "reason": "multi-device diagnosis pronoun does not create clarification state"
+    },
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_c_slot_only_reply_restores_original_diagnosis_goal",
+      "reason": "slot-only reply loses the pending diagnosis goal"
+    },
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_c_mixed_reply_restores_pending_and_adds_explicit_report_goal",
+      "reason": "mixed reply adds report but does not resume diagnosis"
+    },
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_d_fault_code_explanation_never_requires_device[查询 A07089]",
+      "reason": "fault-code query shape produces no canonical goal"
+    },
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_d_fault_code_explanation_never_requires_device[A07089]",
+      "reason": "fault-code-only shape produces no canonical goal"
+    },
+    {
+      "node_id": "phase0_v2_native_red.py::test_case_d_missing_device_goal_does_not_block_explicit_explanation",
+      "reason": "global clarification removes independently ready explanation node"
+    },
+    {
+      "node_id": "phase0_report_source_property_red.py::test_report_source_grammar_produces_only_report_action",
+      "reason": "all generated source expressions add diagnose_fault"
+    },
+    {
+      "node_id": "phase0_report_source_property_red.py::test_report_source_grammar_never_recomputes_sql_or_analysis",
+      "reason": "all generated source expressions plan sql and analysis"
+    },
+    {
+      "node_id": "phase0_report_source_property_red.py::test_report_source_binding_belongs_only_to_report_goal",
+      "reason": "analysis source is also bound to the spurious diagnosis goal"
+    },
+    {
+      "node_id": "phase0_architecture_invariants_red.py::test_pending_clarification_repository_has_waiting_cas_and_idempotency_boundary",
+      "reason": "conversation repository has no clarification CAS or turn idempotency API"
+    },
+    {
+      "node_id": "phase0_architecture_invariants_red.py::test_source_selector_reports_satisfaction_not_merely_candidate_selection",
+      "reason": "source selector reports selected rather than satisfaction state"
+    },
+    {
+      "node_id": "phase0_architecture_invariants_red.py::test_source_selector_does_not_recursively_guess_a_compatible_ancestor",
+      "reason": "source selector recursively chooses an analysis ancestor"
+    },
+    {
+      "node_id": "phase0_architecture_invariants_red.py::test_requested_goals_record_origin_and_clause_order",
+      "reason": "goals have no origin or clause_index contract"
+    },
+    {
+      "node_id": "phase0_architecture_invariants_red.py::test_dependency_goal_has_terminal_state_but_no_user_deliverable",
+      "reason": "dependency goal receives a user-visible deliverable"
+    }
+  ],
+  "expected_passed": [
+    "phase0_v2_native_red.py::test_case_b_one_failed_goal_does_not_delete_independent_deliverables",
+    "phase0_v2_native_red.py::test_case_d_fault_code_explanation_never_requires_device[A07089 是什么意思？]",
+    "phase0_v2_native_red.py::test_case_d_fault_code_explanation_never_requires_device[详细解释一下 A07089]"
+  ]
+}
