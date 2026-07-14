@@ -16,9 +16,10 @@ from pydantic import ValidationError
 
 from fault_diagnosis.agent.canonical_turn import CurrentUtteranceParser
 from fault_diagnosis.agent.canonical_turn.clause_parser import DeterministicClauseParser
-from fault_diagnosis.agent.canonical_turn.intent_shadow import infer_shadow_metadata
+from fault_diagnosis.agent.canonical_turn.llm_structured_clause_model import build_intent_clause_model
 from fault_diagnosis.agent.canonical_turn.model_clause_parser import ClauseModelRequest, ModelClauseParser
-from fault_diagnosis.server.bootstrap.app_models import build_intent_clause_model
+from fault_diagnosis.domain.canonical_turn import ALL_INTENT_CAPABILITIES
+from tests.evals.intent_shadow_comparator import infer_shadow_metadata
 
 
 CASES_PATH = Path(__file__).with_name("intent_shadow_cases.yaml")
@@ -69,7 +70,7 @@ def _model(case: dict[str, Any], configured) -> dict[str, Any]:  # noqa: ANN001
     if configured is None:
         return {"status": "model_not_configured", "returned": False, "schema_valid": False,
                 "validation_passed": False, "latency_ms": 0.0, "parsed": parsed, "clauses": []}
-    model, _, _ = configured
+    model, _ = configured
     started = time.perf_counter()
     try:
         payload = model.parse(ClauseModelRequest(
@@ -97,7 +98,11 @@ def _model(case: dict[str, Any], configured) -> dict[str, Any]:  # noqa: ANN001
             return {
                 "status": "completed", "returned": True, "schema_valid": True, "validation_passed": True,
                 "latency_ms": (time.perf_counter() - started) * 1000, "parsed": parsed,
-                "clauses": _prediction(parsed, validation.clauses, validation.metadata),
+                "clauses": _prediction(
+                    parsed,
+                    validation.clauses,
+                    [clause.shadow_metadata for clause in validation.clauses],
+                ),
             }
     return {
         "status": status, "returned": returned, "schema_valid": schema_valid,
@@ -221,12 +226,20 @@ def _percentile(values: list[float], fraction: float) -> float:
 def main() -> int:
     args = _args()
     cases = yaml.safe_load(args.cases.read_text(encoding="utf-8"))
+    unknown_capabilities = sorted({
+        clause["capability"]
+        for case in cases
+        for clause in case["expected"]["clauses"]
+        if clause.get("capability") not in ALL_INTENT_CAPABILITIES
+    })
+    if unknown_capabilities:
+        raise ValueError(f"Gold Dataset contains unknown capabilities: {unknown_capabilities}")
     deterministic = [_deterministic(case) for case in cases]
     configured = None
     configuration_error = ""
     if args.mode in {"model", "compare"}:
         try: configured = build_intent_clause_model()
-        except RuntimeError as exc: configuration_error = str(exc)
+        except Exception as exc: configuration_error = f"{type(exc).__name__}: {exc}"
     model = []
     if args.mode in {"model", "compare"}:
         with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as pool:

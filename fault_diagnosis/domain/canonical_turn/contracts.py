@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-CAPABILITY_ALLOWLIST = frozenset(
+CANONICAL_CAPABILITIES = frozenset(
     {
         "check_runtime_status",
         "compare_runtime_status",
@@ -19,12 +19,13 @@ CAPABILITY_ALLOWLIST = frozenset(
         "resolution_recommendation",
     }
 )
-# Structured-clause candidates may express non-executable semantics during
-# intent shadow evaluation. CanonicalGoal deliberately keeps the narrower
-# production allowlist above.
-STRUCTURED_CLAUSE_CAPABILITY_ALLOWLIST = CAPABILITY_ALLOWLIST | frozenset(
+SHADOW_ONLY_CAPABILITIES = frozenset(
     {"evaluate_workorder_need", "meta", "unsupported_high_risk_action"}
 )
+ALL_INTENT_CAPABILITIES = CANONICAL_CAPABILITIES | SHADOW_ONLY_CAPABILITIES
+# Backward-compatible production name. It intentionally excludes Shadow-only
+# candidates and remains the authority for ClauseAction and CanonicalGoal.
+CAPABILITY_ALLOWLIST = CANONICAL_CAPABILITIES
 
 GoalOrigin = Literal["explicit", "inferred", "dependency"]
 PendingStatus = Literal["waiting", "resumed", "consumed", "expired", "cancelled"]
@@ -88,7 +89,7 @@ class ClauseAction(CanonicalContract):
     @field_validator("capability")
     @classmethod
     def capability_is_allowlisted(cls, value: str) -> str:
-        if value not in STRUCTURED_CLAUSE_CAPABILITY_ALLOWLIST:
+        if value not in CANONICAL_CAPABILITIES:
             raise ValueError(f"capability is not allowlisted: {value}")
         return value
 
@@ -177,7 +178,7 @@ class CanonicalGoal(CanonicalContract):
     @field_validator("capability")
     @classmethod
     def capability_is_allowlisted(cls, value: str) -> str:
-        if value not in CAPABILITY_ALLOWLIST:
+        if value not in CANONICAL_CAPABILITIES:
             raise ValueError(f"capability is not allowlisted: {value}")
         return value
 

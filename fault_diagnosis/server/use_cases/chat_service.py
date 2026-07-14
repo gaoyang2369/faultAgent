@@ -13,8 +13,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
 import fault_diagnosis.platform.settings as config
-from fault_diagnosis.agent.canonical_turn.intent_shadow import IntentShadowResult, IntentShadowRunner
-from fault_diagnosis.server.bootstrap.app_models import build_intent_clause_model
 from fault_diagnosis.server.auth.admin_auth import resolve_auth_context
 from fault_diagnosis.server.devtools.dev_mode import get_dev_messages
 from fault_diagnosis.platform.logging import ensure_request_id, get_logger
@@ -358,34 +356,19 @@ class ChatService:
         canonical, snapshot, plan = self._turn_coordinator(request.app).preview_turn(context)
         payload = build_plan_preview_payload(snapshot=snapshot, plan=plan)
         if config.ENABLE_LLM_INTENT_SHADOW:
-            try:
-                model, model_name, model_source = build_intent_clause_model()
-                intent_shadow = IntentShadowRunner(
-                    model=model, model_name=model_name, model_config_source=model_source,
-                ).run(canonical.request.current_parse)
-            except Exception as exc:
-                intent_shadow = IntentShadowResult(
-                    status=(
-                        "model_not_configured"
-                        if "not_configured" in str(exc)
-                        else "model_error"
-                    ),
-                    fallback_reason=f"{type(exc).__name__}: {exc}",
-                    deterministic_clause_count=len(canonical.request.current_parse.clauses),
-                    deterministic_capabilities=[
-                        clause.action.capability
-                        for clause in canonical.request.current_parse.clauses
-                        if clause.action
-                    ],
-                )
-            summary = intent_shadow.safe_plan_summary()
+            from fault_diagnosis.agent.canonical_turn.intent_shadow_service import IntentShadowService
+
+            intent_shadow = IntentShadowService().evaluate_current_message(
+                canonical.request.current_parse
+            )
+            summary = intent_shadow.model_dump(mode="json") if intent_shadow else None
             self._log.info(
                 "intent shadow 完成",
                 status=summary["status"], model_name=summary["model_name"],
-                duration_ms=summary["duration_ms"], exact_match=summary["exact_match"],
-                difference_dimensions=[item["dimension"] for item in summary["differences"]],
+                duration_ms=summary["duration_ms"],
+                difference_dimensions=summary["difference_dimensions"],
             )
-            if config.INTENT_SHADOW_INCLUDE_IN_PLAN_PAYLOAD:
+            if summary and config.INTENT_SHADOW_INCLUDE_IN_PLAN_PAYLOAD:
                 payload["intent_shadow"] = summary
         payload["turn_result"] = canonical.model_dump(mode="json", exclude_none=True)
         payload["thread_id"] = context.thread_id

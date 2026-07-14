@@ -1,8 +1,10 @@
 """Canonical-turn contracts shared by production and preview paths."""
 
 from .contracts import (
+    ALL_INTENT_CAPABILITIES,
     CAPABILITY_ALLOWLIST,
-    STRUCTURED_CLAUSE_CAPABILITY_ALLOWLIST,
+    CANONICAL_CAPABILITIES,
+    SHADOW_ONLY_CAPABILITIES,
     CanonicalGoal,
     CanonicalTurnRequest,
     ClauseAction,
@@ -24,8 +26,10 @@ from .contracts import (
 )
 
 __all__ = [
+    "ALL_INTENT_CAPABILITIES",
     "CAPABILITY_ALLOWLIST",
-    "STRUCTURED_CLAUSE_CAPABILITY_ALLOWLIST",
+    "CANONICAL_CAPABILITIES",
+    "SHADOW_ONLY_CAPABILITIES",
     "CanonicalGoal",
     "CanonicalTurnRequest",
     "ClauseAction",
