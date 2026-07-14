@@ -21,6 +21,8 @@ from fault_diagnosis.agent import WorkflowRuntimeExecutor
 from fault_diagnosis.agent.contracts import ArtifactEnvelope
 from fault_diagnosis.agent.output import (
     build_output_frame,
+    effective_answer_frame,
+    project_answer_complete_payload,
     project_complete,
     project_start,
     project_task_update,
@@ -32,6 +34,7 @@ from fault_diagnosis.agent.runtime import CancelToken
 from fault_diagnosis.domain.security.contracts import AuthContext
 from fault_diagnosis.domain.security.permissions import build_auth_context
 from fault_diagnosis.platform.observability import TraceRecorder, TraceRunContext, export_trace_snapshot
+from .answer_synthesis import runtime_evidence_bundle, synthesize_v2_answer
 
 _log = get_logger("streaming")
 AgentEngineV2 = None  # test-only injection seam; production receives coordinator output.
@@ -161,6 +164,7 @@ async def token_stream_events(
         recorder.add_plan_snapshot(v2_snapshot)
         if v2_snapshot.status == "blocked":
             async for chunk in _stream_v2_validation_blocked(
+                app=app,
                 snapshot=v2_snapshot,
                 recorder=recorder,
                 user_message=message,
@@ -170,6 +174,7 @@ async def token_stream_events(
                 trace_id=trace_id,
                 auth_context=effective_auth,
                 complete_payload_enricher=complete_payload_enricher,
+                model_name=model_name,
             ):
                 yield chunk
             return
@@ -258,6 +263,7 @@ async def token_stream_events(
 
 async def _stream_v2_validation_blocked(
     *,
+    app: FastAPI,
     snapshot,
     recorder: TraceRecorder,
     user_message: str,
@@ -267,6 +273,7 @@ async def _stream_v2_validation_blocked(
     trace_id: str,
     auth_context: AuthContext,
     complete_payload_enricher,
+    model_name: str | None = None,
 ) -> AsyncGenerator[str, None]:
     message = _validation_blocked_message(snapshot)
     plan = snapshot.execution_plan
@@ -285,6 +292,17 @@ async def _stream_v2_validation_blocked(
         auth_context=auth_context,
     )
     state.status = "blocked"
+    answer_result = await synthesize_v2_answer(
+        app=app,
+        user_message=user_message,
+        output_frame=output_frame,
+        evidence_bundle=None,
+        runtime_status="blocked",
+        auth_context=auth_context,
+        model_name=model_name,
+    )
+    response_frame = effective_answer_frame(output_frame, answer_result)
+    recorder.add_answer_synthesis(answer_result.audit_summary())
     canonical_trace = recorder.finish(status="blocked")
     _export_canonical_trace(
         canonical_trace,
@@ -303,11 +321,16 @@ async def _stream_v2_validation_blocked(
         trace_id=trace_id,
     )
     yield encode_sse_event("task_update", project_task_update(state=state), trace_id=trace_id)
-    yield encode_sse_event("token", project_token(output_frame), trace_id=trace_id)
+    yield encode_sse_event("token", project_token(response_frame), trace_id=trace_id)
     complete = project_complete(
         state=state,
         status="blocked",
         output_frame=output_frame,
+    )
+    complete = project_answer_complete_payload(
+        complete,
+        deterministic_answer=output_frame.final_answer,
+        answer_result=answer_result,
     )
     _attach_canonical_trace(complete, canonical_trace.model_dump(mode="json"))
     if complete_payload_enricher is not None:
@@ -406,6 +429,18 @@ async def _stream_v2_runtime(
         auth_context=auth_context,
     )
     recorder.add_runtime_result(plan=plan, result=result)
+    answer_result = await synthesize_v2_answer(
+        app=app,
+        user_message=user_message,
+        output_frame=result.output_frame,
+        evidence_bundle=runtime_evidence_bundle(result),
+        runtime_status=result.status,
+        auth_context=auth_context,
+        model_name=model_name,
+        skip_reason="cancelled" if result.complete_payload.get("cancelled") else "",
+    )
+    response_frame = effective_answer_frame(result.output_frame, answer_result)
+    recorder.add_answer_synthesis(answer_result.audit_summary())
     canonical_trace = recorder.finish(status=result.status)
     _export_canonical_trace(
         canonical_trace,
@@ -433,9 +468,13 @@ async def _stream_v2_runtime(
             project_tool_end(state=state_for_progress, result=node_result),
             trace_id=trace_id,
         )
-    if result.output_frame.final_answer and not result.complete_payload.get("cancelled"):
-        yield encode_sse_event("token", project_token(result.output_frame), trace_id=trace_id)
-    complete = dict(result.complete_payload)
+    if response_frame.final_answer and not result.complete_payload.get("cancelled"):
+        yield encode_sse_event("token", project_token(response_frame), trace_id=trace_id)
+    complete = project_answer_complete_payload(
+        result.complete_payload,
+        deterministic_answer=result.output_frame.final_answer,
+        answer_result=answer_result,
+    )
     _attach_canonical_trace(complete, canonical_trace.model_dump(mode="json"))
     if complete_payload_enricher is not None:
         try:

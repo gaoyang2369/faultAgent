@@ -482,6 +482,33 @@ class TraceRecorder:
             error=payload,
         )
 
+    def add_answer_synthesis(self, summary: dict[str, Any]) -> None:
+        """Record only the safe audit summary of the optional answer-model call."""
+
+        synthesis_status = str(summary.get("status") or "fallback")
+        span_status = "failed" if synthesis_status in {"model_error", "validation_failed"} else "completed"
+        self._add_span(
+            span_id="span.answer.synthesis",
+            parent_span_id="span.workflow.execute" if "span.workflow.execute" in self._span_ids else "span.chat.request",
+            name="answer_synthesis",
+            kind="llm",
+            status=span_status,
+            duration_ms=float(summary.get("duration_ms") or 0.0),
+            attributes={
+                "enabled": bool(summary.get("enabled")),
+                "attempted": bool(summary.get("attempted")),
+                "status": synthesis_status,
+                "model_name": str(summary.get("model_name") or ""),
+                "duration_ms": float(summary.get("duration_ms") or 0.0),
+                "input_char_count": int(summary.get("input_char_count") or 0),
+                "output_char_count": int(summary.get("output_char_count") or 0),
+                "used_claim_count": int(summary.get("used_claim_count") or 0),
+                "used_evidence_count": int(summary.get("used_evidence_count") or 0),
+                "validation_errors": list(summary.get("validation_errors") or []),
+                "fallback_reason": str(summary.get("fallback_reason") or ""),
+            },
+        )
+
     def finish(self, *, status: str = "completed") -> TraceEnvelope:
         ended_at = utc_now_iso()
         duration_ms = round((time.monotonic() - self._started_monotonic) * 1000, 1)
