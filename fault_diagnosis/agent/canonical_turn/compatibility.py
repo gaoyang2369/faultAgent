@@ -17,6 +17,7 @@ from fault_diagnosis.agent.contracts import (
     TargetScope,
 )
 from fault_diagnosis.domain.canonical_turn import (
+    BoundCanonicalTurn,
     CanonicalTurnRequest,
     GoalAuthorizationDecision,
     GoalReadinessDecision,
@@ -54,6 +55,7 @@ def project_legacy_frames_from_canonical(
     sources: list[GoalSourceResolution],
     *,
     conversation_context: dict[str, Any] | None = None,
+    bound_turn: BoundCanonicalTurn | None = None,
 ) -> LegacyFrameProjection:
     """Project, never infer: this function cannot add, delete or reorder Goals."""
 
@@ -69,7 +71,7 @@ def project_legacy_frames_from_canonical(
     context_relation = "report_handoff" if source and any(goal.capability == "generate_report" for goal in request.goals) else "continuation" if source else "new_case"
     if request.pending_binding.kind in {"slot_only", "mixed"}:
         context_relation = "pending_resume"
-    candidate_devices = _context_candidate_devices(conversation_context)
+    candidate_devices = _binding_candidate_devices(bound_turn)
     projected_fault_codes = list(
         dict.fromkeys(
             [
@@ -168,13 +170,13 @@ def project_legacy_frames_from_canonical(
         requested_output_mode="report" if any(goal.capability == "generate_report" for goal in request.goals) else "detailed" if any(marker in request.raw_message for marker in ("详细", "展开", "字段")) else "concise",
         effective_device_refs=target_devices,
         effective_fault_code_refs=projected_fault_codes,
-        effective_time_window={"raw": time_windows[0]} if time_windows else {},
+        effective_time_window={"raw": time_windows[0]} if time_windows else next((dict(item.resolved_slots["time_window"]) for item in sources if isinstance(item.resolved_slots.get("time_window"), dict)), {}),
         target_artifact_id=source.artifact_id if source else None,
         target_artifact_type=source.artifact_type if source else None,
         freshness=source.source_freshness if source else "unknown",
         stale_evidence_disclosure_required=bool(source and source.status == "stale"),
         needs_clarification=bool(clarification),
-        clarification_question=_clarification_question(clarification),
+        clarification_question=_binding_question(bound_turn) or _clarification_question(clarification),
         ambiguity=_ambiguity(request, clarification, candidate_devices),
         confidence=1.0,
         resolution_trace=[item.model_dump(mode="json") for item in sources],
@@ -220,7 +222,7 @@ def project_legacy_frames_from_canonical(
     context = ContextFrame(
         relation_to_previous=context_relation,
         referenced_artifact_id=source.artifact_id if source else None,
-        inherited_slots={"device_refs": target_devices, "fault_code_refs": fault_codes},
+        inherited_slots={"device_refs": target_devices, "fault_code_refs": projected_fault_codes},
         missing_context=[item["missing_slot"] for item in clarification],
         reuse_decision="reuse_verified" if source else "collect_new",
         permission_context={"canonical_request_id": request.request_id},
@@ -285,11 +287,14 @@ def _ambiguity(request: CanonicalTurnRequest, items: list[dict[str, str]], candi
     }
 
 
-def _context_candidate_devices(context: dict[str, Any] | None) -> list[str]:
+def _binding_candidate_devices(bound_turn: BoundCanonicalTurn | None) -> list[str]:
     return list(dict.fromkeys(
-        str(device)
-        for manifest in ((context or {}).get("artifact_manifests") or [])
-        if isinstance(manifest, dict)
-        for device in (manifest.get("device_refs") or [])
-        if str(device)
+        str(option.asset_ref)
+        for binding in (bound_turn.goal_bindings if bound_turn else [])
+        for option in (binding.clarification.options if binding.clarification else [])
+        if option.asset_ref
     ))
+
+
+def _binding_question(bound_turn: BoundCanonicalTurn | None) -> str:
+    return next((item.clarification.question for item in (bound_turn.goal_bindings if bound_turn else []) if item.clarification), "")

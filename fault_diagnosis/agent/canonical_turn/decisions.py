@@ -5,9 +5,9 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from fault_diagnosis.agent.contracts import ArtifactManifest
 from fault_diagnosis.domain.canonical_turn import (
-    CanonicalTurnRequest,
+    BoundCanonicalTurn,
+    ContextCandidate,
     GoalAuthorizationDecision,
     GoalReadinessDecision,
     GoalSourceResolution,
@@ -17,29 +17,19 @@ from fault_diagnosis.domain.security.capability import authorize_capability_pref
 from fault_diagnosis.domain.security.contracts import AuthContext
 
 
-_SOURCE_TYPES = {
-    "check_runtime_status": {"sql_artifact"},
-    "compare_runtime_status": {"comparison_artifact", "sql_artifact"},
-    "explain_fault_code": {"knowledge_artifact"},
-    "diagnose_fault": {"analysis_artifact", "sql_artifact"},
-    "resolution_recommendation": {"analysis_artifact", "sql_artifact"},
-    "generate_report": {"analysis_artifact"},
-    "create_workorder_draft": {"report_artifact", "analysis_artifact"},
-    "evaluate_workorder_need": {"report_artifact", "analysis_artifact"},
-}
-
-
 def decide_goal_authorization(
-    request: CanonicalTurnRequest,
+    bound_turn: BoundCanonicalTurn,
     auth: AuthContext,
 ) -> list[GoalAuthorizationDecision]:
+    request = bound_turn.canonical_turn
+    bindings = {item.goal_id: item for item in bound_turn.goal_bindings}
     decisions: list[GoalAuthorizationDecision] = []
     for goal in request.goals:
         preflight = authorize_capability_preflight(auth, goal.capability)
         status = "authorized" if preflight.allowed and preflight.mode == "allow" else "denied"
         reason_code = preflight.denied_reason_code
         reason = preflight.reason
-        devices = _slot_values(goal.resolved_slots.get("device"))
+        devices = bindings[goal.goal_id].asset_refs
         if status == "authorized" and not auth.is_admin():
             denied_device = next(
                 (device for device in devices if not asset_is_in_scope(device, auth.asset_scope)),
@@ -81,135 +71,96 @@ def decide_goal_authorization(
 
 
 def resolve_goal_sources(
-    request: CanonicalTurnRequest,
-    conversation_context: dict[str, Any] | None,
+    bound_turn: BoundCanonicalTurn,
+    candidates: list[ContextCandidate],
 ) -> list[GoalSourceResolution]:
-    manifests = _manifests(conversation_context)
+    request = bound_turn.canonical_turn
+    bindings = {item.goal_id: item for item in bound_turn.goal_bindings}
+    by_ref = {item.artifact_ref: item for item in candidates if item.artifact_ref}
     results: list[GoalSourceResolution] = []
     for goal in request.goals:
-        if goal.capability in {"check_runtime_status", "compare_runtime_status"}:
-            contextual = _resolve_explicit_candidate(goal, manifests, _SOURCE_TYPES[goal.capability])
-            if contextual is not None:
-                results.append(
-                    GoalSourceResolution(
-                        goal_id=goal.goal_id,
-                        status="requires_execution",
-                        artifact_id=contextual.artifact_id,
-                        artifact_type=contextual.artifact_type,
-                        source_freshness=str(contextual.freshness or "unknown"),
-                        reason="historical source supplies context only; runtime status is refreshed",
-                        candidate_artifact_ids=[contextual.artifact_id],
-                        resolved_slots={
-                            "device": contextual.device_refs[0] if len(contextual.device_refs) == 1 else list(contextual.device_refs),
-                            "fault_code": contextual.fault_code_refs[0] if len(contextual.fault_code_refs) == 1 else list(contextual.fault_code_refs),
-                        },
-                    )
-                )
-            else:
-                results.append(GoalSourceResolution(goal_id=goal.goal_id, status="requires_execution", reason="runtime status is always refreshed"))
+        binding = bindings[goal.goal_id]
+        slots = _binding_slots(binding)
+        selected = next((by_ref.get(ref) for ref in binding.source_artifact_refs if by_ref.get(ref)), None)
+        if binding.binding_status == "needs_clarification":
+            reason = binding.clarification.reason_code if binding.clarification else "context_ambiguous"
+            status = "ambiguous" if reason.startswith("ambiguous_") else "unresolved"
+            results.append(GoalSourceResolution(goal_id=goal.goal_id, status=status, reason_code=reason, reason="canonical context binding requires clarification", resolved_slots=slots))
             continue
-        allowed = _SOURCE_TYPES.get(goal.capability, set())
+        if binding.binding_status == "refresh_required":
+            results.append(GoalSourceResolution(goal_id=goal.goal_id, status="stale", artifact_id=selected.artifact_ref if selected else None, artifact_type=selected.artifact_type if selected else None, source_freshness=selected.freshness_state if selected else "stale", reason_code="refresh_required", reason="bound source requires refresh", resolved_slots=slots))
+            continue
         if goal.dependencies and goal.capability in {"generate_report", "evaluate_workorder_need", "create_workorder_draft"}:
-            results.append(GoalSourceResolution(
-                goal_id=goal.goal_id,
-                status="requires_execution",
-                reason="same-turn canonical dependency supplies the execution source",
-            ))
+            results.append(GoalSourceResolution(goal_id=goal.goal_id, status="requires_execution", reason="same-turn canonical dependency supplies the execution source", resolved_slots=slots))
             continue
-        if goal.capability == "evaluate_workorder_need" and not goal.source_requirements and not goal.dependencies:
-            results.append(GoalSourceResolution(goal_id=goal.goal_id, status="requires_execution", reason="no evidence candidate; return insufficient_evidence without creating an artifact"))
+        if selected is None:
+            reason = "no evidence candidate; return insufficient_evidence" if goal.capability == "evaluate_workorder_need" else "new execution required"
+            results.append(GoalSourceResolution(goal_id=goal.goal_id, status="requires_execution", reason=reason, resolved_slots=slots))
             continue
-        if not goal.source_requirements or not allowed:
-            results.append(GoalSourceResolution(goal_id=goal.goal_id, status="requires_execution", reason="no explicit reusable source"))
-            continue
-        verified = [item for item in manifests if _verified(item)]
-        compatible = [item for item in verified if item.artifact_type in allowed]
-        explicit_ids = set(goal.source_requirements).intersection(item.artifact_id for item in verified)
-        if explicit_ids:
-            compatible = [item for item in compatible if item.artifact_id in explicit_ids]
-        requested_type = _requested_source_type(goal.source_requirements)
-        if requested_type:
-            compatible = [item for item in compatible if item.artifact_type == requested_type]
-        candidate_ids = [item.artifact_id for item in verified]
-        if len(compatible) > 1:
-            results.append(GoalSourceResolution(goal_id=goal.goal_id, status="ambiguous", reason="multiple compatible explicit source candidates", candidate_artifact_ids=candidate_ids))
-            continue
-        if not compatible:
-            status = "incompatible" if verified else "unresolved"
-            results.append(GoalSourceResolution(goal_id=goal.goal_id, status=status, reason="explicit source has no compatible artifact", candidate_artifact_ids=candidate_ids))
-            continue
-        selected = compatible[0]
-        freshness = str(selected.freshness or "unknown")
-        if freshness == "stale":
-            results.append(GoalSourceResolution(goal_id=goal.goal_id, status="stale", artifact_id=selected.artifact_id, artifact_type=selected.artifact_type, source_freshness=freshness, reason="explicit source is stale", candidate_artifact_ids=candidate_ids))
-            continue
-        if goal.capability == "generate_report" and not selected.report_input_snapshot_schema_version:
+        if goal.capability == "generate_report" and selected.artifact_type == "analysis_artifact" and not selected.report_input_snapshot_schema_version:
             results.append(
                 GoalSourceResolution(
                     goal_id=goal.goal_id,
                     status="blocked",
-                    artifact_id=selected.artifact_id,
+                    artifact_id=selected.artifact_ref,
                     artifact_type=selected.artifact_type,
-                    source_freshness=freshness,
+                    source_freshness=selected.freshness_state,
                     reason="legacy Analysis Artifact has no immutable ReportInputSnapshot",
                     reason_code="legacy_analysis_missing_report_input_snapshot",
-                    candidate_artifact_ids=candidate_ids,
+                    candidate_artifact_ids=[str(selected.artifact_ref)],
+                    resolved_slots=slots,
                 )
             )
             continue
         satisfied = (
             goal.capability in {"diagnose_fault", "resolution_recommendation"}
             and selected.artifact_type == "analysis_artifact"
-        )
+        ) or goal.capability in {"check_runtime_status", "compare_runtime_status"}
         reusable_id = None
         if goal.capability == "create_workorder_draft":
-            reusable = [
-                item
-                for item in verified
-                if item.artifact_type == "workorder_artifact"
-                and selected.artifact_id in item.lineage.source_artifact_ids
-            ]
+            reusable = {
+                item.artifact_ref: item for item in candidates
+                if item.completed and item.artifact_type == "workorder_artifact"
+                and selected.artifact_ref in item.lineage_refs
+                and item.artifact_ref
+            }
             if len(reusable) == 1:
-                reusable_id = reusable[0].artifact_id
+                reusable_id = next(iter(reusable))
         operation_key = hashlib.sha256(
-            f"{request.thread_id}|{goal.capability}|{selected.artifact_id}".encode("utf-8")
+            f"{request.thread_id}|{goal.capability}|{selected.artifact_ref}".encode("utf-8")
         ).hexdigest()[:24]
         results.append(
             GoalSourceResolution(
                 goal_id=goal.goal_id,
                 status="satisfied_by_artifact" if satisfied else "source_for_execution",
-                artifact_id=selected.artifact_id,
+                artifact_id=selected.artifact_ref,
                 artifact_type=selected.artifact_type,
-                source_freshness=freshness,
-                reason="explicit compatible source selected",
-                candidate_artifact_ids=candidate_ids,
-                resolved_slots={
-                    "device": selected.device_refs[0] if len(selected.device_refs) == 1 else list(selected.device_refs),
-                    "fault_code": selected.fault_code_refs[0] if len(selected.fault_code_refs) == 1 else list(selected.fault_code_refs),
-                },
+                source_freshness=selected.freshness_state,
+                reason="CanonicalContextBinder selected a compatible source",
+                candidate_artifact_ids=[str(selected.artifact_ref)],
+                resolved_slots=slots,
                 reusable_result_artifact_id=reusable_id,
                 idempotency_key=operation_key,
-                tabular_source_artifact_id=(
-                    selected.report_tabular_source_sql_artifact_id or None
-                    if goal.capability == "generate_report"
-                    else None
-                ),
+                tabular_source_artifact_id=selected.tabular_source_artifact_ref if goal.capability == "generate_report" else None,
             )
         )
     return results
 
 
 def decide_goal_readiness(
-    request: CanonicalTurnRequest,
+    bound_turn: BoundCanonicalTurn,
     authorization: list[GoalAuthorizationDecision],
     sources: list[GoalSourceResolution],
 ) -> list[GoalReadinessDecision]:
+    request = bound_turn.canonical_turn
+    bindings = {item.goal_id: item for item in bound_turn.goal_bindings}
     auth_by_goal = {item.goal_id: item for item in authorization}
     source_by_goal = {item.goal_id: item for item in sources}
     results: list[GoalReadinessDecision] = []
     for goal in request.goals:
         auth = auth_by_goal[goal.goal_id]
         source = source_by_goal[goal.goal_id]
+        binding = bindings[goal.goal_id]
         if auth.status == "denied":
             results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="blocked_permission", blockers=[auth.reason_code or "permission_denied"]))
         elif goal.capability == "explain_fault_code" and len(_slot_values(source.resolved_slots.get("fault_code") or goal.resolved_slots.get("fault_code"))) != 1:
@@ -218,9 +169,9 @@ def decide_goal_readiness(
             results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="blocked_source", blockers=["condition_source_unresolved"]))
         elif goal.capability in {"evaluate_workorder_need", "create_workorder_draft"} and len(_slot_values(source.resolved_slots.get("device") or goal.resolved_slots.get("device"))) != 1:
             results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="blocked_missing_slot", blockers=["exactly_one_device"]))
-        elif [slot for slot in goal.missing_slots if slot not in source.resolved_slots]:
-            unresolved = [slot for slot in goal.missing_slots if slot not in source.resolved_slots]
-            results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="blocked_missing_slot", blockers=unresolved))
+        elif binding.binding_status in {"needs_clarification", "blocked"}:
+            blockers = ["device" if item == "missing_asset" else item for item in binding.blockers]
+            results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="blocked_missing_slot", blockers=blockers))
         elif source.status == "satisfied_by_artifact":
             results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="satisfied_by_artifact"))
         elif source.status in {"ambiguous", "unresolved", "incompatible", "stale", "blocked"}:
@@ -244,46 +195,12 @@ def _slot_values(value: Any) -> list[str]:
     return [str(value)] if str(value) else []
 
 
-def _manifests(context: dict[str, Any] | None) -> list[ArtifactManifest]:
-    values = (context or {}).get("artifact_manifests") or []
-    result: list[ArtifactManifest] = []
-    for value in values:
-        try:
-            result.append(ArtifactManifest.model_validate(value))
-        except Exception:
-            continue
+def _binding_slots(binding) -> dict[str, Any]:  # noqa: ANN001
+    result: dict[str, Any] = {}
+    if binding.asset_refs:
+        result["device"] = binding.asset_refs[0] if len(binding.asset_refs) == 1 else binding.asset_refs
+    if binding.fault_codes:
+        result["fault_code"] = binding.fault_codes[0] if len(binding.fault_codes) == 1 else binding.fault_codes
+    if binding.time_window:
+        result["time_window"] = binding.time_window
     return result
-
-
-def _verified(item: ArtifactManifest) -> bool:
-    return (
-        item.status == "completed"
-        and item.artifact_status == "complete"
-        and item.persistence_status == "committed"
-        and item.readback_verified
-        and item.lineage.lineage_status == "complete"
-    )
-
-
-def _requested_source_type(requirements: list[str]) -> str:
-    text = " ".join(requirements)
-    if "诊断" in text or "分析" in text:
-        return "analysis_artifact"
-    if "报告" in text:
-        return "report_artifact"
-    if "数据" in text:
-        return "sql_artifact"
-    return ""
-
-
-def _resolve_explicit_candidate(goal, manifests: list[ArtifactManifest], allowed: set[str]) -> ArtifactManifest | None:
-    if not goal.source_requirements:
-        return None
-    verified = [item for item in manifests if _verified(item) and item.artifact_type in allowed]
-    explicit_ids = set(goal.source_requirements).intersection(item.artifact_id for item in verified)
-    if explicit_ids:
-        verified = [item for item in verified if item.artifact_id in explicit_ids]
-    requested_type = _requested_source_type(goal.source_requirements)
-    if requested_type:
-        verified = [item for item in verified if item.artifact_type == requested_type]
-    return verified[0] if len(verified) == 1 else None

@@ -122,12 +122,20 @@ class ConversationContextAssembler:
                 ref for ref in refs
                 if str(ref.get("ref_role") or "").strip() in {"produced", "produced_by"}
             ]
+            payload = item.get("content_json") if isinstance(item.get("content_json"), dict) else {}
+            authorization = payload.get("authorization") if isinstance(payload.get("authorization"), dict) else {}
+            ui_payload = payload.get("ui_payload") if isinstance(payload.get("ui_payload"), dict) else {}
             return {
                 "message_id": item.get("id"),
                 "turn_index": item.get("turn_index"),
                 "status": item.get("status"),
                 "created_at": item.get("created_at"),
                 "produced_artifacts": produced,
+                "context_unavailable": (
+                    str(payload.get("status") or "") in {"blocked", "failed", "denied"}
+                    or authorization.get("mode") == "deny"
+                    or ui_payload.get("type") == "access_denied"
+                ),
             }
         return {}
 

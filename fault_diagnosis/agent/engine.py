@@ -75,6 +75,7 @@ class AgentEngineV2:
             result.readiness,
             result.source_resolutions,
             conversation_context=context,
+            bound_turn=result.bound_turn,
         )
         denied = [item for item in result.authorization if item.status == "denied"]
         executable = bool(validation.validated_plan.nodes)
@@ -110,6 +111,7 @@ class AgentEngineV2:
             "compatibility_only": True,
             "primary_execution_capability": projection.primary_execution_capability,
             "canonical_request": request.model_dump(mode="json"),
+            "bound_canonical_turn": result.bound_turn.model_dump(mode="json") if result.bound_turn else None,
             "clause_semantics": [
                 {
                     "clause_index": clause.clause_index,
@@ -138,6 +140,10 @@ class AgentEngineV2:
                 "mode": "canonical_turn",
                 "status": status,
                 "canonical_request": request.model_dump(mode="json"),
+                "context_binding": next(
+                    (event.detail for event in result.events if event.event_type == "context_binding"),
+                    {},
+                ),
                 "clause_semantics": canonical_metadata["clause_semantics"],
                 "goal_authorization": canonical_metadata["goal_authorization"],
                 "goal_readiness": canonical_metadata["goal_readiness"],

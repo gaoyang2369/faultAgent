@@ -99,11 +99,12 @@ def _prepare_plan(
         if goal is None:
             inputs["preparation_error"] = "canonical_goal_not_found"
         elif node.node_type == "rag":
-            inputs["query"] = _rag_query(request, goal)
-            inputs.setdefault("retrieval_strategy", "fault_code_exact_then_semantic" if _fault_codes(goal) else "semantic_search")
-            inputs.setdefault("top_k", 5 if _fault_codes(goal) else 3)
+            inputs["query"] = _rag_query(request, goal, inputs)
+            codes = _texts(inputs.get("fault_code_refs")) or _fault_codes(goal)
+            inputs.setdefault("retrieval_strategy", "fault_code_exact_then_semantic" if codes else "semantic_search")
+            inputs.setdefault("top_k", 5 if codes else 3)
         elif node.node_type == "sql":
-            diagnosis_request = _diagnosis_request(request, goal, devices=_node_devices(inputs))
+            diagnosis_request = _diagnosis_request(request, goal, devices=_node_devices(inputs), slots=inputs.get("canonical_resolved_slots") or {})
             try:
                 query = build_fallback_sql_query(diagnosis_request, asset_filters=_node_devices(inputs))
             except SourceTableResolutionError as exc:
@@ -178,11 +179,12 @@ def _diagnosis_request(
     goal: CanonicalGoal,
     *,
     devices: list[str],
+    slots: dict[str, Any],
 ) -> DiagnosisRequest:
-    codes = _fault_codes(goal) or [
+    codes = _texts(slots.get("fault_code")) or _fault_codes(goal) or [
         entity.value for entity in request.current_parse.entities if entity.kind == "fault_code"
     ]
-    window = goal.resolved_slots.get("time_window")
+    window = slots.get("time_window") or goal.resolved_slots.get("time_window")
     return DiagnosisRequest(
         user_message=request.raw_message,
         user_identity=request.user_id,
@@ -196,8 +198,8 @@ def _diagnosis_request(
     )
 
 
-def _rag_query(request: CanonicalTurnRequest, goal: CanonicalGoal) -> str:
-    codes = _fault_codes(goal) or [
+def _rag_query(request: CanonicalTurnRequest, goal: CanonicalGoal, inputs: dict[str, Any]) -> str:
+    codes = _texts(inputs.get("fault_code_refs")) or _fault_codes(goal) or [
         entity.value for entity in request.current_parse.entities if entity.kind == "fault_code"
     ]
     detail = " 详细说明" if any(marker in request.raw_message for marker in ("详细", "展开", "字段")) else ""
@@ -206,6 +208,12 @@ def _rag_query(request: CanonicalTurnRequest, goal: CanonicalGoal) -> str:
 
 def _fault_codes(goal: CanonicalGoal) -> list[str]:
     value = goal.resolved_slots.get("fault_code")
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item)]
+    return [str(value)] if value else []
+
+
+def _texts(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value if str(item)]
     return [str(value)] if value else []

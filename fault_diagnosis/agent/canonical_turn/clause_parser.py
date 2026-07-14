@@ -15,7 +15,7 @@ from fault_diagnosis.domain.canonical_turn import (
 )
 
 
-_NEGATION = re.compile(r"(?:(?<!要)不要|不用|无需|不需要|先别|不是要|不必|别(?:再)?|禁止)")
+_NEGATION = re.compile(r"(?:(?<!要)不要|不用|无需|不需要|先别|不是要|不必|(?<!分)别(?:再)?|禁止)")
 _CONTRAST = re.compile(r"^(?:我)?(?:只|而是|只是|只需|只要)")
 _SEQUENCE = re.compile(r"(?:^先|然后|最后|接着|(?:^|[，,])再|完成后再|查完.+再)")
 _CONDITION_TYPES = (

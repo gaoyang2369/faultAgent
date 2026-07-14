@@ -62,8 +62,8 @@ class PlanCompiler:
                 "skill": skill_for_capability(goal.capability),
                 "goal_type": goal.capability,
                 "description": goal.capability,
-                "device_refs": _slot_values(goal.resolved_slots.get("device")),
-                "fault_code_refs": _fault_codes(request),
+                "device_refs": _goal_devices(request, goal.goal_id, source[goal.goal_id]),
+                "fault_code_refs": _goal_fault_codes(request, goal, source[goal.goal_id]),
                 "expected_outputs": _deliverables(goal.capability),
                 "requested_deliverables": _deliverables(goal.capability),
                 "risk_level": "high" if goal.capability in {"create_workorder_draft", "dispatch_workorder"} else "medium",
@@ -139,8 +139,8 @@ class PlanCompiler:
 
 def _nodes_for_goal(goal, request: CanonicalTurnRequest, source: GoalSourceResolution) -> list[tuple[str, str]]:
     capability = goal.capability
-    devices = _slot_values(goal.resolved_slots.get("device"))
-    codes = _fault_codes(request)
+    devices = _goal_devices(request, goal.goal_id, source)
+    codes = _goal_fault_codes(request, goal, source)
     if goal.dependencies and capability == "generate_report":
         dependency_capabilities = {
             item.capability for item in request.goals if item.goal_id in goal.dependencies
@@ -162,7 +162,7 @@ def _nodes_for_goal(goal, request: CanonicalTurnRequest, source: GoalSourceResol
         return [*(("rag", "") for _ in [0] if codes), *(("sql", device) for device in devices), ("analysis", "")]
     if capability == "generate_report":
         if source.status == "source_for_execution":
-            return [("report", "")]
+            return [("analysis", ""), ("report", "")] if source.artifact_type == "sql_artifact" else [("report", "")]
         return [*(("sql", device) for device in devices), ("analysis", ""), ("report", "")]
     if capability == "create_workorder_draft":
         if source.status == "source_for_execution":
@@ -196,6 +196,16 @@ def _compile_node(spec: dict, *, request: CanonicalTurnRequest, source_by_goal: 
     devices = [spec["device"]] if spec["device"] else list(dict.fromkeys(device for goal_id in goal_ids for device in _goal_devices(request, goal_id, source_by_goal[goal_id])))
     node_id = f"{node_type}_{spec['ordinal']}"
     planned_output_artifact_id = _planned_artifact_id(request.request_id, node_id, node_type)
+    resolved_slots = {**primary.resolved_slots, **(source.resolved_slots if source is not None else {})}
+    fault_codes = list(dict.fromkeys(
+        code
+        for goal_id in goal_ids
+        for code in _goal_fault_codes(
+            request,
+            next(item for item in request.goals if item.goal_id == goal_id),
+            source_by_goal[goal_id],
+        )
+    ))
     inputs = {
         "goal_id": primary.goal_id,
         "node_id": node_id,
@@ -204,12 +214,12 @@ def _compile_node(spec: dict, *, request: CanonicalTurnRequest, source_by_goal: 
         "target_scope_id": "scope_current",
         "artifact_role_bindings": [],
         "device_refs": devices,
-        "fault_code_refs": _fault_codes(request),
+        "fault_code_refs": fault_codes,
         "context_relation": "canonical_turn",
         "requested_output_mode": "report" if primary.capability == "generate_report" else "concise",
         "canonical_capability": primary.capability,
         "canonical_raw_message": request.raw_message,
-        "canonical_resolved_slots": dict(primary.resolved_slots),
+        "canonical_resolved_slots": resolved_slots,
         "source_freshness": source.source_freshness if source is not None else "unknown",
         "artifact_id": planned_output_artifact_id,
     }
@@ -406,6 +416,13 @@ def _approval_requirements(nodes) -> list[dict]:
 
 def _fault_codes(request: CanonicalTurnRequest) -> list[str]:
     return list(dict.fromkeys(entity.value for entity in request.current_parse.entities if entity.kind == "fault_code"))
+
+
+def _goal_fault_codes(request: CanonicalTurnRequest, goal, source: GoalSourceResolution | None) -> list[str]:  # noqa: ANN001
+    values = _slot_values(goal.resolved_slots.get("fault_code"))
+    if not values and source is not None:
+        values = _slot_values(source.resolved_slots.get("fault_code"))
+    return values or _fault_codes(request)
 
 
 def _slot_values(value) -> list[str]:

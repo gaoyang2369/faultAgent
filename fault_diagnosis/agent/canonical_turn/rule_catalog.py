@@ -135,7 +135,7 @@ RULE_CATALOG = (
     {
         "rule_id": "action.report.generate.v1",
         "category": "action_predicate",
-        "pattern": r"(?:生成|整理成?|出一份|制作|整份|给我整).{0,24}(?:运行)?报告|(?:不要|不用|无需|不需要|先别|不必|别).{0,8}(?:生成)?报告",
+        "pattern": r"(?:生成|导出|整理成?|出一份|制作|整份|给我整).{0,24}(?:运行)?报告|(?:不要|不用|无需|不需要|先别|不必|别).{0,8}(?:生成)?报告",
         "semantic_value": "generate_report",
         "priority": 900,
         "confidence": 1.0,
@@ -215,9 +215,35 @@ RULE_CATALOG = (
         "example": "查询G120电机1运行状态",
     },
     {
+        "rule_id": "action.fault_code.detail_followup.v1",
+        "category": "action_predicate",
+        "pattern": r"(?:再)?(?:详细|展开|多说)(?:一点|点)?|(?:展示|给出)(?:手册)?字段",
+        "semantic_value": "explain_fault_code",
+        "priority": 849,
+        "confidence": 1.0,
+        "allowed_clause_roles": ("action",),
+        "entity_ref_kinds": ("*",),
+        "match_mode": "fullmatch",
+        "inferred": True,
+        "example": "详细点",
+    },
+    {
+        "rule_id": "action.runtime.window_correction.v1",
+        "category": "action_predicate",
+        "pattern": r"(?:改成|更正为|调整为).{0,16}",
+        "semantic_value": "check_runtime_status",
+        "priority": 848,
+        "confidence": 1.0,
+        "allowed_clause_roles": ("action",),
+        "requires_entity_kind": "time_window",
+        "entity_ref_kinds": ("time_window", "device_reference"),
+        "inferred": True,
+        "example": "改成最近两小时",
+    },
+    {
         "rule_id": "action.workorder.create_draft.v1",
         "category": "action_predicate",
-        "pattern": r"(?:创建|生成|新建).{0,24}(?:工单|维修单|草稿)|(?:不要|不用|无需|不需要|先别|不是要|不必|别).{0,10}(?:创建|生成|新建|执行)?(?:工单|维修单|草稿)",
+        "pattern": r"(?:创建|生成|新建).{0,24}(?:工单|维修单|草稿)|(?:创建|生成|新建)(?:吧|它吧)$|(?:不要|不用|无需|不需要|先别|不是要|不必|别).{0,10}(?:创建|生成|新建|执行)?(?:工单|维修单|草稿)",
         "semantic_value": "create_workorder_draft",
         "priority": 885,
         "confidence": 1.0,
@@ -228,7 +254,7 @@ RULE_CATALOG = (
 )
 
 CAPABILITY_LEXICON = {
-    "check_runtime_status": ("action.runtime.status.v1",),
+    "check_runtime_status": ("action.runtime.status.v1", "action.runtime.window_correction.v1"),
     "compare_runtime_status": ("action.runtime.compare.v1",),
     "create_workorder_draft": ("action.workorder.create_draft.v1",),
     "dispatch_workorder": ("action.workorder.dispatch.v1",),
@@ -237,6 +263,7 @@ CAPABILITY_LEXICON = {
     "explain_fault_code": (
         "action.fault_code.explain_explicit.v1",
         "action.fault_code.explain_inferred.v1",
+        "action.fault_code.detail_followup.v1",
     ),
     "generate_report": ("action.report.generate.v1",),
     "resolution_recommendation": ("action.recommendation.request.v1",),

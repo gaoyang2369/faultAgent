@@ -51,6 +51,7 @@ SourceResolutionStatus = Literal[
     "blocked",
 ]
 GoalTerminalStatus = Literal["pending", "completed", "failed", "blocked", "denied", "satisfied", "skipped"]
+BindingStatus = Literal["bound", "partially_bound", "needs_clarification", "blocked", "refresh_required"]
 
 
 class CanonicalContract(BaseModel):
@@ -300,6 +301,84 @@ class CanonicalTurnRequest(CanonicalContract):
         return self
 
 
+class ClarificationOption(CanonicalContract):
+    option_id: str
+    label: str
+    asset_ref: str | None = None
+
+
+class ClarificationRequirement(CanonicalContract):
+    reason_code: Literal[
+        "ambiguous_asset_reference",
+        "ambiguous_source_artifact",
+        "missing_asset",
+        "missing_source",
+    ]
+    question: str
+    options: list[ClarificationOption] = Field(default_factory=list)
+
+
+class ContextCandidate(CanonicalContract):
+    """ACL-filtered, safe projection of context metadata; never artifact content."""
+
+    candidate_id: str
+    artifact_ref: str | None = None
+    artifact_type: str | None = None
+    asset_refs: list[str] = Field(default_factory=list)
+    fault_codes: list[str] = Field(default_factory=list)
+    time_window: dict[str, Any] | None = None
+    produced_turn_id: str | None = None
+    produced_by_immediately_previous_turn: bool = False
+    completed: bool = False
+    reportable: bool = False
+    actionable: bool = False
+    freshness_state: str = "unknown"
+    lineage_refs: list[str] = Field(default_factory=list)
+    report_input_snapshot_schema_version: str = ""
+    tabular_source_artifact_ref: str | None = None
+    pending_action_type: str | None = None
+    source_kind: Literal["artifact_manifest", "case_state", "pending_action", "explicit_reference"]
+
+
+class ContextSlotBinding(CanonicalContract):
+    slot_name: Literal[
+        "asset_refs", "fault_codes", "time_window", "source_artifact_refs", "output_target_refs"
+    ]
+    status: Literal["explicit", "inherited", "unbound", "ambiguous", "unavailable", "refresh_required"]
+    values: list[Any] = Field(default_factory=list)
+    provenance: Literal[
+        "current_message",
+        "explicit_correction",
+        "immediately_previous_turn",
+        "referenced_artifact",
+        "pending_action",
+        "case_state",
+        "recent_thread_artifact",
+    ] | None = None
+    candidate_ids: list[str] = Field(default_factory=list)
+    reason_code: str = ""
+
+
+class GoalContextBinding(CanonicalContract):
+    goal_id: str
+    capability: str
+    asset_refs: list[str] = Field(default_factory=list)
+    fault_codes: list[str] = Field(default_factory=list)
+    time_window: dict[str, Any] | None = None
+    source_artifact_refs: list[str] = Field(default_factory=list)
+    output_target_refs: list[str] = Field(default_factory=list)
+    slots: list[ContextSlotBinding] = Field(default_factory=list)
+    binding_status: BindingStatus
+    blockers: list[str] = Field(default_factory=list)
+    clarification: ClarificationRequirement | None = None
+
+
+class BoundCanonicalTurn(CanonicalContract):
+    schema_version: Literal["bound_canonical_turn.v1"] = "bound_canonical_turn.v1"
+    canonical_turn: CanonicalTurnRequest
+    goal_bindings: list[GoalContextBinding] = Field(default_factory=list)
+
+
 class GoalAuthorizationDecision(CanonicalContract):
     """Current-turn authorization for exactly one canonical Goal."""
 
@@ -385,6 +464,7 @@ class TurnEvent(CanonicalContract):
 class TurnResult(CanonicalContract):
     schema_version: Literal["turn_result.v1"] = "turn_result.v1"
     request: CanonicalTurnRequest
+    bound_turn: BoundCanonicalTurn | None = None
     events: list[TurnEvent]
     pending_transition: PendingTransitionProposal
     authorization: list[GoalAuthorizationDecision] = Field(default_factory=list)

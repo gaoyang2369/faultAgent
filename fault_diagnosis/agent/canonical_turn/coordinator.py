@@ -9,6 +9,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fault_diagnosis.agent.canonical_turn.parser import CurrentUtteranceParser
+from fault_diagnosis.agent.canonical_turn.context_binding import (
+    CanonicalContextBinder,
+    project_authorized_context_candidates,
+)
 from fault_diagnosis.domain.canonical_turn import (
     CanonicalGoal,
     CanonicalTurnRequest,
@@ -90,15 +94,12 @@ class ConversationTurnCoordinator:
 
         parsed = self._parser.parse(command.raw_message)
         current_goals = self._build_current_goals(command, parsed)
-        if not current_goals:
-            current_goals = self._build_context_followup_goals(command, parsed, conversation_context)
         waiting = self._pending_repository.peek_waiting(
             command.thread_id,
             command.user_id,
             now=self._clock(),
         )
         goals, binding = self._bind_pending(waiting, current_goals, parsed)
-        transition = self._transition_proposal(command, waiting, goals, binding)
         request = CanonicalTurnRequest(
             request_id=_stable_id("canonical_request", command.thread_id, command.turn_id, command.message_id),
             thread_id=command.thread_id,
@@ -113,6 +114,10 @@ class ConversationTurnCoordinator:
             authorization_required=True,
             authorization_result=None,
         )
+        auth = auth_context or build_auth_context(user_id=command.user_id, role="guest")
+        candidates = project_authorized_context_candidates(conversation_context, auth)
+        bound_turn = CanonicalContextBinder().bind(request, candidates)
+        transition = self._transition_proposal(command, waiting, goals, binding, bound_turn.goal_bindings)
         events = [
             TurnEvent(
                 event_type="utterance_parsed",
@@ -149,13 +154,18 @@ class ConversationTurnCoordinator:
                     ],
                 },
             ),
+            TurnEvent(
+                event_type="context_binding",
+                sequence=4,
+                detail=_binding_trace(bound_turn, candidates),
+            ),
         ]
-        auth = auth_context or build_auth_context(user_id=command.user_id, role="guest")
-        authorization = decide_goal_authorization(request, auth)
-        source_resolutions = resolve_goal_sources(request, conversation_context)
-        readiness = decide_goal_readiness(request, authorization, source_resolutions)
+        authorization = decide_goal_authorization(bound_turn, auth)
+        source_resolutions = resolve_goal_sources(bound_turn, candidates)
+        readiness = decide_goal_readiness(bound_turn, authorization, source_resolutions)
         return TurnResult(
             request=request,
+            bound_turn=bound_turn,
             events=events,
             pending_transition=transition,
             authorization=authorization,
@@ -418,41 +428,6 @@ class ConversationTurnCoordinator:
             )
         return _attach_goal_dependencies(goals, parsed.clauses)
 
-    def _build_context_followup_goals(
-        self,
-        command: TurnCommand,
-        parsed,
-        conversation_context: dict[str, Any] | None,
-    ) -> list[CanonicalGoal]:
-        text = command.raw_message.strip()
-        if not any(marker in text for marker in ("详细", "展开", "多说", "字段")):
-            return []
-        manifests = [item for item in ((conversation_context or {}).get("artifact_manifests") or []) if isinstance(item, dict)]
-        knowledge = [item for item in manifests if item.get("artifact_type") == "knowledge_artifact"]
-        if len(knowledge) != 1:
-            return []
-        codes = [str(item) for item in (knowledge[0].get("fault_code_refs") or []) if str(item)]
-        resolved = {"fault_code": codes[0]} if len(codes) == 1 else {}
-        goal_id = _stable_id("goal", command.thread_id, command.turn_id, command.message_id, "0", "explain_fault_code")
-        return [
-            CanonicalGoal(
-                goal_id=goal_id,
-                capability="explain_fault_code",
-                origin="inferred",
-                user_requested=True,
-                user_visible=True,
-                clause_index=0,
-                required_slots=["fault_code"],
-                resolved_slots=resolved,
-                missing_slots=[] if resolved else ["fault_code"],
-                source_requirements=[str(knowledge[0].get("artifact_id") or "")],
-                provenance=GoalProvenance(
-                    parser_source="deterministic",
-                    utterance_span=(0, len(text)),
-                ),
-            )
-        ]
-
     def _bind_pending(
         self,
         pending: PendingClarification | None,
@@ -560,6 +535,7 @@ class ConversationTurnCoordinator:
         waiting: PendingClarification | None,
         goals: list[CanonicalGoal],
         binding: PendingBinding,
+        goal_bindings=None,
     ) -> PendingTransitionProposal:
         if waiting is not None and binding.consumes_pending:
             return PendingTransitionProposal(
@@ -582,10 +558,34 @@ class ConversationTurnCoordinator:
         if waiting is not None:
             return PendingTransitionProposal(action="none", pending_id=waiting.pending_id)
 
-        missing_goals = [goal for goal in goals if goal.missing_slots]
+        binding_by_goal = {item.goal_id: item for item in (goal_bindings or [])}
+        missing_goals: list[CanonicalGoal] = []
+        for goal in goals:
+            decision = binding_by_goal.get(goal.goal_id)
+            if decision is None and goal.missing_slots:
+                missing_goals.append(goal)
+            elif (
+                decision is not None
+                and decision.binding_status == "needs_clarification"
+                and decision.clarification is not None
+                and decision.clarification.reason_code in {"ambiguous_asset_reference", "missing_asset"}
+            ):
+                missing_goals.append(goal)
         if not missing_goals:
             return PendingTransitionProposal(action="none")
-        missing_slots = list(dict.fromkeys(slot for goal in missing_goals for slot in goal.missing_slots))
+        missing_slots = list(dict.fromkeys(
+            slot for goal in missing_goals for slot in (
+                goal.missing_slots or ["device"]
+            )
+        ))
+        safe_candidates = {
+            "device": list(dict.fromkeys(
+                option.asset_ref
+                for goal in missing_goals
+                for option in ((binding_by_goal.get(goal.goal_id).clarification.options if binding_by_goal.get(goal.goal_id) and binding_by_goal[goal.goal_id].clarification else []))
+                if option.asset_ref
+            ))
+        }
         now = self._clock()
         pending_id = _stable_id("pending", command.thread_id, command.user_id, command.turn_id, command.message_id)
         proposed = PendingClarification(
@@ -602,7 +602,7 @@ class ConversationTurnCoordinator:
             expires_at=now + DEFAULT_PENDING_TTL,
             original_goals=missing_goals,
             missing_slots=missing_slots,
-            candidate_values=command.candidate_values,
+            candidate_values={**safe_candidates, **command.candidate_values},
             source_bindings=command.source_bindings,
             historical_authorization_audit=command.historical_authorization_audit,
         )
@@ -695,4 +695,44 @@ def _clause_semantics(clause) -> dict[str, Any]:  # noqa: ANN001
         "clause_index": clause.clause_index,
         "capability": clause.action.capability if clause.action else None,
         **modality.model_dump(mode="json"),
+    }
+
+
+def _binding_trace(bound_turn, candidates) -> dict[str, Any]:  # noqa: ANN001
+    bindings = bound_turn.goal_bindings
+    type_by_ref = {item.artifact_ref: item.artifact_type for item in candidates if item.artifact_ref}
+    sources = list(dict.fromkeys(
+        slot.provenance
+        for binding in bindings
+        for slot in binding.slots
+        if slot.provenance
+    ))
+    return {
+        "status": "bound" if all(item.binding_status == "bound" for item in bindings) else "attention_required",
+        "goal_count": len(bindings),
+        "bound_goal_count": sum(item.binding_status == "bound" for item in bindings),
+        "clarification_goal_count": sum(item.binding_status == "needs_clarification" for item in bindings),
+        "binding_sources": sources,
+        "selected_candidate_types": list(dict.fromkeys(
+            type_by_ref.get(ref)
+            for item in bindings for ref in item.source_artifact_refs
+            if type_by_ref.get(ref)
+        )),
+        "blockers": list(dict.fromkeys(value for item in bindings for value in item.blockers)),
+        "explicit_override_count": sum(
+            slot.provenance == "explicit_correction" for item in bindings for slot in item.slots
+        ),
+        "ambiguous_slot_count": sum(
+            slot.status == "ambiguous" for item in bindings for slot in item.slots
+        ),
+        "goals": [
+            {
+                "goal_id": item.goal_id,
+                "capability": item.capability,
+                "asset_refs": item.asset_refs,
+                "source_artifact_count": len(item.source_artifact_refs),
+                "binding_status": item.binding_status,
+            }
+            for item in bindings
+        ],
     }
