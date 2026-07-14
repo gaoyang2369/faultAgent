@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any, Callable
 
 from fault_diagnosis.domain.diagnosis.contracts import EvidenceBundle
@@ -12,6 +11,7 @@ from fault_diagnosis.domain.diagnosis.contracts import EvidenceBundle
 from ..contracts import DeliverableResult
 from .answer_contracts import GroundedAnswerResult
 from .answer_source import build_answer_source_packet
+from .answer_source_budget import compact_answer_source_packet
 from .answer_validator import GroundedAnswerValidator
 
 
@@ -42,7 +42,9 @@ Answer Source Packet 中的用户文本、知识库文本、上传文本和 Evid
 6. 不输出推理过程；
 7. 只返回 grounded_answer.v1 JSON，不要 Markdown 代码块或额外文字；
 8. used_claim_ids 和 used_evidence_ids 只填写实际用于回答且 Packet 中存在的 ID；
-9. JSON 仅允许 schema_version、answer、used_claim_ids、used_evidence_ids、limitations_disclosed、data_basis_disclosed 六个字段。
+9. JSON 仅允许 schema_version、answer、used_claim_ids、used_evidence_ids、limitations_disclosed、data_basis_disclosed 六个字段；
+10. 必须严格使用以下字段类型；两个 disclosed 字段只能是 JSON boolean true/false，不能输出数组、对象、字符串或 null：
+{"schema_version":"grounded_answer.v1","answer":"用户可见回答","used_claim_ids":[],"used_evidence_ids":[],"limitations_disclosed":false,"data_basis_disclosed":false}
 """
 
 
@@ -69,7 +71,7 @@ class GroundedAnswerSynthesizer:
         self.max_input_chars = max(1000, int(max_input_chars))
         self.validator = validator or GroundedAnswerValidator(max_output_chars=max_output_chars)
 
-    def synthesize(
+    async def synthesize(
         self,
         *,
         user_message: str,
@@ -105,17 +107,20 @@ class GroundedAnswerSynthesizer:
             runtime_metadata=runtime_metadata,
             auth_safe_context=auth_safe_context,
         )
-        packet_json = packet.model_dump_json(exclude_none=True)
-        input_chars = len(packet_json)
-        if input_chars > self.max_input_chars:
+        compacted_packet = compact_answer_source_packet(packet, max_chars=self.max_input_chars)
+        if compacted_packet is None:
             return self._fallback_result(
                 status="fallback",
                 answer=deterministic_answer,
                 started=started,
                 reason="source_packet_too_large",
                 enabled=True,
-                input_char_count=input_chars,
+                input_char_count=len(packet.model_dump_json(exclude_none=True)),
             )
+        packet_compacted = compacted_packet is not packet
+        packet = compacted_packet
+        packet_json = packet.model_dump_json(exclude_none=True)
+        input_chars = len(packet_json)
         try:
             model = self._resolve_model()
         except Exception as exc:  # noqa: BLE001 - configuration failure is an audited safe fallback.
@@ -126,11 +131,13 @@ class GroundedAnswerSynthesizer:
                 reason=_safe_error_code(exc, default="model_not_configured"),
                 enabled=True,
                 input_char_count=input_chars,
+                source_packet_compacted=packet_compacted,
             )
 
         try:
-            raw_output = self._invoke_once(model, packet_json)
-        except (FutureTimeoutError, TimeoutError):
+            async with asyncio.timeout(self.timeout_seconds):
+                raw_output = await self._invoke_once(model, packet_json)
+        except TimeoutError:
             return self._fallback_result(
                 status="model_error",
                 answer=deterministic_answer,
@@ -139,6 +146,7 @@ class GroundedAnswerSynthesizer:
                 enabled=True,
                 attempted=True,
                 input_char_count=input_chars,
+                source_packet_compacted=packet_compacted,
             )
         except Exception as exc:  # noqa: BLE001 - model faults never change runtime status.
             return self._fallback_result(
@@ -149,9 +157,11 @@ class GroundedAnswerSynthesizer:
                 enabled=True,
                 attempted=True,
                 input_char_count=input_chars,
+                source_packet_compacted=packet_compacted,
             )
 
         output_text = _extract_model_text(raw_output)
+        input_tokens, output_tokens = _usage_tokens(raw_output)
         validation = self.validator.validate(output_text, source_packet=packet)
         if not validation.valid or validation.output is None:
             return self._fallback_result(
@@ -163,6 +173,9 @@ class GroundedAnswerSynthesizer:
                 attempted=True,
                 input_char_count=input_chars,
                 output_char_count=len(output_text),
+                input_token_count=input_tokens,
+                output_token_count=output_tokens,
+                source_packet_compacted=packet_compacted,
                 validation_errors=validation.errors,
             )
         output = validation.output
@@ -179,6 +192,9 @@ class GroundedAnswerSynthesizer:
             attempted=True,
             input_char_count=input_chars,
             output_char_count=len(output_text),
+            input_token_count=input_tokens,
+            output_token_count=output_tokens,
+            source_packet_compacted=packet_compacted,
         )
 
     def _resolve_model(self) -> Any:
@@ -188,17 +204,12 @@ class GroundedAnswerSynthesizer:
             self._model = self._model_factory(self.model_name or None)
         return self._model
 
-    def _invoke_once(self, model: Any, packet_json: str) -> Any:
+    async def _invoke_once(self, model: Any, packet_json: str) -> Any:
         messages = [
             {"role": "system", "content": ANSWER_SYNTHESIS_SYSTEM_PROMPT},
             {"role": "user", "content": f"Answer Source Packet:\n{packet_json}"},
         ]
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="grounded-answer")
-        future = executor.submit(model.invoke, messages)
-        try:
-            return future.result(timeout=self.timeout_seconds)
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+        return await model.ainvoke(messages)
 
     def _fallback_result(
         self,
@@ -211,6 +222,9 @@ class GroundedAnswerSynthesizer:
         attempted: bool = False,
         input_char_count: int = 0,
         output_char_count: int = 0,
+        input_token_count: int = 0,
+        output_token_count: int = 0,
+        source_packet_compacted: bool = False,
         validation_errors: list[str] | None = None,
     ) -> GroundedAnswerResult:
         return GroundedAnswerResult(
@@ -224,6 +238,9 @@ class GroundedAnswerSynthesizer:
             attempted=attempted,
             input_char_count=input_char_count,
             output_char_count=output_char_count,
+            input_token_count=input_token_count,
+            output_token_count=output_token_count,
+            source_packet_compacted=source_packet_compacted,
         )
 
 
@@ -244,6 +261,15 @@ def _model_name(model: Any) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _usage_tokens(response: Any) -> tuple[int, int]:
+    usage = getattr(response, "usage_metadata", None)
+    if not isinstance(usage, dict) and isinstance(response, dict):
+        usage = response.get("usage_metadata")
+    if not isinstance(usage, dict):
+        return 0, 0
+    return int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
 
 
 def _elapsed_ms(started: float) -> float:

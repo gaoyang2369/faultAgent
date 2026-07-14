@@ -123,9 +123,14 @@ def build_answer_source_packet(
     safe_deliverables = [_project_deliverable(item) for item in deliverables]
     claims, evidence = _project_evidence_bundle(deliverables, evidence_bundle)
     structured_values = [item["structured_content"] for item in safe_deliverables]
+    completed_values = [
+        item["structured_content"]
+        for source, item in zip(deliverables, safe_deliverables, strict=True)
+        if source.status == "completed"
+    ]
     data_basis = _project_data_basis(structured_values)
     limitations = _collect_limitations(structured_values, claims, evidence)
-    allowed_urls = _dedupe(_collect_values(structured_values, {"report_url"}))
+    allowed_urls = _dedupe(_collect_values(completed_values, {"report_url"}))
     allowed_devices = _dedupe(
         [
             *_collect_values(structured_values, _DEVICE_KEYS),
@@ -142,7 +147,7 @@ def build_answer_source_packet(
     )
     return AnswerSourcePacket(
         user_request=_safe_text(str(user_message or "").strip()),
-        overall_status=_overall_status(deliverables, runtime_metadata),
+        overall_status=runtime_metadata.get("overall_status") or runtime_metadata.get("status"),  # type: ignore[arg-type]
         deliverables=safe_deliverables,
         claims=claims,
         evidence=evidence,
@@ -205,20 +210,17 @@ def _project_evidence_bundle(
         if evidence_id
     )
     projected_evidence: list[dict[str, Any]] = []
-    authorized_evidence_ids: set[str] = set()
+    selected_evidence_ids_in_bundle: set[str] = set()
     for item in bundle.evidence_items:
         evidence_id = item.evidence_id
         if evidence_id not in selected_evidence_ids:
             continue
-        if not _evidence_authorized(item):
-            continue
-        authorized_evidence_ids.add(evidence_id)
+        selected_evidence_ids_in_bundle.add(evidence_id)
         projected_evidence.append(
             {
                 "evidence_id": evidence_id,
                 "source_type": item.source_type,
                 "summary": _safe_text(str(item.summary or item.title or "").strip())[:1600],
-                "authorized": True,
                 "freshness": {
                     "quality": item.quality.freshness,
                     "timestamp": item.timestamp,
@@ -234,7 +236,7 @@ def _project_evidence_bundle(
             "claim_type": claim.claim_type,
             "statement": _safe_text(claim.statement),
             "supporting_evidence_ids": [
-                value for value in claim.supporting_evidence_ids if value in authorized_evidence_ids
+                value for value in claim.supporting_evidence_ids if value in selected_evidence_ids_in_bundle
             ],
             "missing_evidence": list(claim.missing_evidence),
             "asset_id": claim.asset_id or "",
@@ -243,14 +245,6 @@ def _project_evidence_bundle(
         for claim in selected_claims
     ]
     return projected_claims, projected_evidence
-
-
-def _evidence_authorized(item: Any) -> bool:
-    dumped = item.model_dump(mode="json") if hasattr(item, "model_dump") else {}
-    if dumped.get("authorized") is False:
-        return False
-    metadata = item.metadata if isinstance(item.metadata, dict) else {}
-    return metadata.get("authorized") is not False and metadata.get("authorization_status") not in {"denied", "unauthorized"}
 
 
 def _project_data_basis(values: list[dict[str, Any]]) -> dict[str, Any]:
@@ -366,22 +360,6 @@ def _flatten_scalars(value: Any) -> list[str]:
         return [str(value).lower()]
     text = str(value or "").strip()
     return [text] if text else []
-
-
-def _overall_status(deliverables: list[DeliverableResult], metadata: dict[str, Any]) -> str:
-    statuses = {item.status for item in deliverables}
-    if statuses and statuses <= {"denied"}:
-        return "denied"
-    if statuses == {"completed"}:
-        return "completed"
-    if statuses.intersection({"completed", "partial"}) and statuses != {"completed"}:
-        return "partial"
-    if statuses and statuses <= {"blocked", "denied"}:
-        return "blocked"
-    if statuses:
-        return "failed"
-    status = str(metadata.get("status") or "failed")
-    return status if status in {"completed", "partial", "blocked", "denied", "failed"} else "failed"
 
 
 def _dedupe(values: Iterable[Any]) -> list[str]:

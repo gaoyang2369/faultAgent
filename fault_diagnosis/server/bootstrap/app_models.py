@@ -40,4 +40,7 @@ def build_answer_model(model_name: str | None = None) -> ChatOpenAI:
         api_key=api_key,
         temperature=settings.ANSWER_SYNTHESIS_TEMPERATURE,
         timeout=settings.ANSWER_SYNTHESIS_TIMEOUT_SECONDS,
+        max_tokens=settings.ANSWER_SYNTHESIS_MAX_OUTPUT_TOKENS,
+        max_retries=0,
+        model_kwargs={"response_format": {"type": "json_object"}},
     )

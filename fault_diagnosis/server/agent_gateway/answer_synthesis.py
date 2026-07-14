@@ -61,15 +61,22 @@ async def synthesize_v2_answer(
             max_output_chars=settings.ANSWER_SYNTHESIS_MAX_OUTPUT_CHARS,
         )
     try:
-        return await asyncio.to_thread(
-            synthesizer.synthesize,
-            user_message=user_message,
-            deterministic_answer=output_frame.final_answer,
-            deliverables=list(output_frame.composite_output.deliverables),
-            evidence_bundle=evidence_bundle,
-            runtime_metadata={"status": runtime_status},
-            auth_safe_context={"role": auth_context.role},
-        )
+        semaphore = getattr(app.state, "answer_synthesis_semaphore", None)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(settings.ANSWER_SYNTHESIS_MAX_CONCURRENCY)
+            app.state.answer_synthesis_semaphore = semaphore
+        async with semaphore:
+            return await synthesizer.synthesize(
+                user_message=user_message,
+                deterministic_answer=output_frame.final_answer,
+                deliverables=list(output_frame.composite_output.deliverables),
+                evidence_bundle=evidence_bundle,
+                runtime_metadata={
+                    "status": runtime_status,
+                    "overall_status": output_frame.composite_output.overall_status,
+                },
+                auth_safe_context={"role": auth_context.role},
+            )
     except Exception as exc:  # noqa: BLE001 - injected adapters must also fail closed.
         _log.warning("Grounded answer synthesis failed closed", error=type(exc).__name__)
         return GroundedAnswerResult(

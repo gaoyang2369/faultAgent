@@ -14,6 +14,7 @@ from fault_diagnosis.domain.security.permissions import build_auth_context
 from fault_diagnosis.platform import settings
 from fault_diagnosis.platform.observability import TraceRecorder
 from fault_diagnosis.server.agent_gateway.answer_synthesis import synthesize_v2_answer
+from fault_diagnosis.server.agent_gateway import streaming
 from fault_diagnosis.server.bootstrap import app_models
 from fault_diagnosis.server.use_cases.chat_service import ChatService
 
@@ -23,7 +24,7 @@ class _Model:
         self.content = content
         self.calls = 0
 
-    def invoke(self, messages):
+    async def ainvoke(self, messages):
         self.calls += 1
         return SimpleNamespace(content=self.content)
 
@@ -155,7 +156,117 @@ def test_answer_model_builder_is_low_temperature_timed_and_cached(monkeypatch) -
     assert len(calls) == 1
     assert calls[0]["temperature"] == 0.0
     assert calls[0]["timeout"] == 20.0
+    assert calls[0]["max_tokens"] == settings.ANSWER_SYNTHESIS_MAX_OUTPUT_TOKENS
+    assert calls[0]["max_retries"] == 0
+    assert calls[0]["model_kwargs"] == {"response_format": {"type": "json_object"}}
+    for index in range(12):
+        app_models.build_answer_model(f"answer-model-{index}")
+    assert app_models.build_answer_model.cache_info().maxsize == 8
+    assert app_models.build_answer_model.cache_info().currsize == 8
     app_models.build_answer_model.cache_clear()
+
+
+def test_concurrent_answer_calls_are_bounded_without_blocking_event_loop(monkeypatch) -> None:
+    frame, bundle = _frame()
+    output = json.dumps(
+        {
+            "schema_version": "grounded_answer.v1",
+            "answer": "G120电机1状态需关注。",
+            "used_claim_ids": ["claim_status"],
+            "used_evidence_ids": ["ev_status"],
+            "limitations_disclosed": False,
+            "data_basis_disclosed": False,
+        },
+        ensure_ascii=False,
+    )
+
+    class _SlowModel:
+        model_name = "slow-async-model"
+
+        def __init__(self) -> None:
+            self.active = 0
+            self.peak = 0
+
+        async def ainvoke(self, messages):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            try:
+                await asyncio.sleep(0.05)
+                return SimpleNamespace(content=output)
+            finally:
+                self.active -= 1
+
+    async def run() -> tuple[list, int]:
+        app = FastAPI()
+        model = _SlowModel()
+        app.state.grounded_answer_synthesizer = GroundedAnswerSynthesizer(model=model, enabled=True)
+        ticks = 0
+        done = False
+
+        async def heartbeat() -> None:
+            nonlocal ticks
+            while not done:
+                ticks += 1
+                await asyncio.sleep(0.005)
+
+        pulse = asyncio.create_task(heartbeat())
+        results = await asyncio.gather(
+            *[
+                synthesize_v2_answer(
+                    app=app,
+                    user_message="状态",
+                    output_frame=frame,
+                    evidence_bundle=bundle,
+                    runtime_status="completed",
+                    auth_context=build_auth_context(role="engineer"),
+                )
+                for _ in range(5)
+            ]
+        )
+        done = True
+        await pulse
+        assert model.peak == 2
+        return results, ticks
+
+    monkeypatch.setattr(settings, "ENABLE_GROUNDED_ANSWER_SYNTHESIS", True)
+    monkeypatch.setattr(settings, "ANSWER_SYNTHESIS_MAX_CONCURRENCY", 2)
+    results, ticks = asyncio.run(run())
+    assert all(item.status == "generated" for item in results)
+    assert ticks >= 10
+
+
+def test_async_timeout_cancels_the_underlying_model_coroutine() -> None:
+    class _NeverModel:
+        model_name = "never-model"
+
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        async def ainvoke(self, messages):
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    async def run():
+        frame, bundle = _frame()
+        model = _NeverModel()
+        synth = GroundedAnswerSynthesizer(model=model, enabled=True, timeout_seconds=0.1)
+        result = await synth.synthesize(
+            user_message="状态",
+            deterministic_answer=frame.final_answer,
+            deliverables=list(frame.composite_output.deliverables),
+            evidence_bundle=bundle,
+            runtime_metadata={"overall_status": "completed"},
+            auth_safe_context={},
+        )
+        return result, model.cancelled
+
+    result, cancelled = asyncio.run(run())
+    assert result.status == "model_error"
+    assert result.fallback_reason == "model_timeout"
+    assert cancelled is True
 
 
 def test_trace_records_safe_answer_synthesis_span_only() -> None:
@@ -169,6 +280,8 @@ def test_trace_records_safe_answer_synthesis_span_only() -> None:
             "duration_ms": 12.3,
             "input_char_count": 100,
             "output_char_count": 50,
+            "input_token_count": 80,
+            "output_token_count": 20,
             "used_claim_count": 0,
             "used_evidence_count": 0,
             "validation_errors": ["unallowed_url"],
@@ -180,8 +293,43 @@ def test_trace_records_safe_answer_synthesis_span_only() -> None:
     trace = recorder.finish().model_dump(mode="json")
     span = next(item for item in trace["spans"] if item["name"] == "answer_synthesis")
     assert span["attributes"]["status"] == "validation_failed"
+    assert span["attributes"]["input_token_count"] == 80
+    assert span["attributes"]["output_token_count"] == 20
     assert "api_key" not in span["attributes"]
     assert "source_packet" not in span["attributes"]
+
+
+def test_exported_canonical_trace_contains_answer_synthesis_span(monkeypatch) -> None:
+    captured: dict = {}
+
+    def capture(trace_payload, **kwargs):
+        captured.update(trace_payload)
+
+    monkeypatch.setattr(streaming, "export_trace_snapshot", capture)
+    recorder = TraceRecorder(trace_id="trace", request_id="request", thread_id="thread")
+    recorder.add_answer_synthesis(
+        {
+            "enabled": True,
+            "attempted": True,
+            "status": "model_error",
+            "model_name": "answer-model",
+            "duration_ms": 20,
+            "fallback_reason": "model_timeout",
+        }
+    )
+    canonical = recorder.finish(status="completed")
+    streaming._export_canonical_trace(
+        canonical,
+        trace_id="trace",
+        thread_id="thread",
+        request_id="request",
+        stream_id="stream",
+        user_identity="user",
+        user_message="状态",
+    )
+    span = next(item for item in captured["spans"] if item["name"] == "answer_synthesis")
+    assert span["attributes"]["status"] == "model_error"
+    assert span["attributes"]["fallback_reason"] == "model_timeout"
 
 
 def test_chat_stream_edit_and_agent_chat_share_the_same_turn_stream_boundary() -> None:

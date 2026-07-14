@@ -9,6 +9,7 @@ from .artifact_manifest import build_artifact_manifests, latest_focus_from_manif
 from .answer_contracts import AnswerSourcePacket, GroundedAnswerModelOutput, GroundedAnswerResult
 from .answer_projection import effective_answer_frame, project_answer_complete_payload
 from .answer_source import build_answer_source_packet
+from .answer_source_budget import compact_answer_source_packet
 from .answer_validator import GroundedAnswerValidator
 from .grounded_answer import GroundedAnswerSynthesizer
 from .report import build_reportable_payload
@@ -32,6 +33,7 @@ __all__ = [
     "GroundedAnswerSynthesizer",
     "GroundedAnswerValidator",
     "build_answer_source_packet",
+    "compact_answer_source_packet",
     "effective_answer_frame",
     "project_answer_complete_payload",
     "project_legacy_deliverable",

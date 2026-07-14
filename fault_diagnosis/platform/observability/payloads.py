@@ -27,7 +27,10 @@ _GENERIC_TOKEN_RE = re.compile(
 
 
 def _looks_sensitive_key(key: Any) -> bool:
-    return bool(_SENSITIVE_KEY_RE.search(str(key or "")))
+    normalized = str(key or "").lower()
+    if re.fullmatch(r"(?:input|output|total)_token_count", normalized):
+        return False
+    return bool(_SENSITIVE_KEY_RE.search(normalized))
 
 
 def _short_hash(text: str) -> str:
@@ -145,4 +148,3 @@ def sanitize_trace_value(
             "sha256_12": _short_hash(rendered),
         }
     return _truncate_text(_redact_string(rendered), preview_chars)
-

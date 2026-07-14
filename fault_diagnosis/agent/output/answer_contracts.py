@@ -85,6 +85,9 @@ class GroundedAnswerResult(_StrictContract):
     attempted: bool = False
     input_char_count: int = 0
     output_char_count: int = 0
+    input_token_count: int = 0
+    output_token_count: int = 0
+    source_packet_compacted: bool = False
 
     def audit_summary(self) -> dict[str, Any]:
         """Return the safe subset allowed in traces and complete payloads."""
@@ -97,6 +100,9 @@ class GroundedAnswerResult(_StrictContract):
             "duration_ms": round(self.duration_ms, 1),
             "input_char_count": self.input_char_count,
             "output_char_count": self.output_char_count,
+            "input_token_count": self.input_token_count,
+            "output_token_count": self.output_token_count,
+            "source_packet_compacted": self.source_packet_compacted,
             "used_claim_count": len(self.used_claim_ids),
             "used_evidence_count": len(self.used_evidence_ids),
             "validation_errors": list(self.validation_errors),
@@ -104,12 +110,21 @@ class GroundedAnswerResult(_StrictContract):
         }
 
     def complete_summary(self) -> dict[str, Any]:
-        """Return the intentionally smaller public audit projection."""
+        """Return safe call metadata without prompt, packet, IDs, or answer content."""
 
         return {
             "enabled": self.enabled,
+            "attempted": self.attempted,
             "status": self.status,
             "model_name": self.model_name,
             "duration_ms": round(self.duration_ms, 1),
+            "input_char_count": self.input_char_count,
+            "output_char_count": self.output_char_count,
+            "input_token_count": self.input_token_count,
+            "output_token_count": self.output_token_count,
+            "source_packet_compacted": self.source_packet_compacted,
+            "used_claim_count": len(self.used_claim_ids),
+            "used_evidence_count": len(self.used_evidence_ids),
+            "validation_errors": list(self.validation_errors),
             "fallback_reason": self.fallback_reason,
         }

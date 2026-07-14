@@ -9,6 +9,8 @@ def test_sanitize_trace_value_redacts_sensitive_fields() -> None:
         "api_key": "sk-test-secret",
         "password": "super-secret",
         "nested": {"token": "token-abc"},
+        "input_token_count": 80,
+        "output_token_count": 20,
     }
 
     sanitized = sanitize_trace_value(payload, capture_content=True, preview_chars=80)
@@ -16,6 +18,8 @@ def test_sanitize_trace_value_redacts_sensitive_fields() -> None:
     assert sanitized["api_key"] == "[REDACTED]"
     assert sanitized["password"] == "[REDACTED]"
     assert sanitized["nested"]["token"] == "[REDACTED]"
+    assert sanitized["input_token_count"] == 80
+    assert sanitized["output_token_count"] == 20
 
 
 def test_noop_trace_run_lifecycle_is_safe() -> None:

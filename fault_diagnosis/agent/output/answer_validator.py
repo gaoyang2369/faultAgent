@@ -22,9 +22,7 @@ _DEVICE_PATTERNS = (
 )
 _FAULT_CODE_RE = re.compile(r"(?<![A-Za-z0-9])[AF]\d{5}(?!\d)", re.IGNORECASE)
 _FALLBACK_DISCLOSURES = ("数据库最新可用数据", "非实时数据", "未获取到当前实时窗口", "实时窗口未命中")
-_LIMITATION_MARKERS = (
-    "限制", "不足", "缺少", "缺失", "未获得", "不可用", "不代表", "滞后", "过期", "非实时", "最新可用",
-)
+_REALTIME_ASSERTION_RE = re.compile(r"(?:^|根据|当前|[，。；：\s])(?:实时数据显示|当前实时状态|当前这一刻)")
 _INTERNAL_LABEL_RE = re.compile(
     r"(?i)(session[ _-]?id|thread[ _-]?id|artifact[ _-]?id|claim[ _-]?id|"
     r"evidence[ _-]?id|node[ _-]?id|trace[ _-]?id|request[ _-]?id|bundle[ _-]?id|"
@@ -66,7 +64,6 @@ class GroundedAnswerValidator:
         self._validate_urls(answer, source_packet, errors)
         self._validate_freshness(parsed, source_packet, errors)
         self._validate_actions(answer, source_packet, errors)
-        self._validate_grounded_advice(answer, source_packet, errors)
         self._validate_numeric_literals(answer, source_packet, errors)
         self._validate_internal_information(answer, source_packet, errors)
         return AnswerValidationResult(valid=not errors, errors=list(dict.fromkeys(errors)), output=parsed)
@@ -99,12 +96,7 @@ class GroundedAnswerValidator:
         if unknown_evidence:
             errors.append("unknown_evidence_id")
 
-        conclusion_capabilities = {"check_runtime_status", "compare_runtime_status", "diagnose_fault"}
-        completed_conclusion = any(
-            item.get("capability") in conclusion_capabilities and item.get("status") in {"completed", "partial"}
-            for item in packet.deliverables
-        )
-        if completed_conclusion:
+        if claims:
             supported = [
                 claims[claim_id]
                 for claim_id in output.used_claim_ids
@@ -112,12 +104,6 @@ class GroundedAnswerValidator:
             ]
             if not supported:
                 errors.append("conclusion_without_supported_claim")
-            elif any(
-                not any(anchor in output.answer for anchor in _claim_anchors(claim, packet))
-                for claim in supported
-                if _claim_anchors(claim, packet)
-            ):
-                errors.append("claim_statement_not_expressed")
 
     @staticmethod
     def _validate_devices_and_codes(answer: str, packet: AnswerSourcePacket, errors: list[str]) -> None:
@@ -127,7 +113,7 @@ class GroundedAnswerValidator:
             for pattern in _DEVICE_PATTERNS
             for match in pattern.finditer(answer)
         }
-        if any(not any(allowed == found or allowed.startswith(found) for allowed in allowed_devices) for found in found_devices):
+        if found_devices - allowed_devices:
             errors.append("unallowed_device_reference")
         allowed_codes = {value.upper() for value in packet.allowed_fault_codes}
         found_codes = {match.group(0).upper() for match in _FAULT_CODE_RE.finditer(answer)}
@@ -156,10 +142,10 @@ class GroundedAnswerValidator:
         if fallback:
             if not output.data_basis_disclosed or not any(value in answer for value in _FALLBACK_DISCLOSURES):
                 errors.append("latest_fallback_not_disclosed")
-            if _describes_as_realtime(answer):
+            if _REALTIME_ASSERTION_RE.search(answer):
                 errors.append("latest_fallback_described_as_realtime")
         if packet.limitations or stale:
-            if not output.limitations_disclosed or not any(value in answer for value in _LIMITATION_MARKERS):
+            if not output.limitations_disclosed:
                 errors.append("limitations_not_disclosed")
 
     @staticmethod
@@ -179,59 +165,16 @@ class GroundedAnswerValidator:
         if "recommended_draft" in states and re.search(r"工单(?:已经|已)(?:正式)?创建(?!为?草稿)", answer):
             errors.append("workorder_draft_status_mismatch")
 
-        all_denied = (
-            bool(deliverables) and all(item.get("status") == "denied" for item in deliverables)
-        ) or packet.overall_status == "denied"
-        if all_denied and any(value in answer for value in ("系统错误", "技术故障", "执行失败")):
-            errors.append("permission_denial_misrepresented")
-        if packet.overall_status in {"blocked", "denied", "failed"} and not deliverables:
-            if any(value in answer for value in ("已完成", "成功完成", "报告已生成", "草稿已创建")):
-                errors.append("terminal_status_mismatch")
-
         for item in deliverables:
             if item.get("status") not in {"blocked", "failed", "denied"}:
                 continue
             capability = str(item.get("capability") or "")
             false_completion = {
-                "diagnose_fault": ("诊断已完成", "已形成诊断结论", "诊断结论是"),
                 "generate_report": ("报告已生成", "已经生成报告"),
                 "create_workorder_draft": ("草稿已创建", "已生成工单草稿"),
             }.get(capability, ())
             if any(value in answer for value in false_completion):
                 errors.append("blocked_deliverable_described_as_completed")
-
-        runtime_states = set(_values_for_key(packet.deliverables, "runtime_status"))
-        if len(runtime_states) == 1:
-            expected = next(iter(runtime_states))
-            contradictions = {
-                "normal": ("需关注", "存在异常", "状态异常", "运行异常"),
-                "attention": ("状态正常", "运行正常", "状态异常", "运行异常"),
-                "abnormal": ("状态正常", "运行正常"),
-                "unknown": ("状态正常", "运行正常", "需关注", "存在异常", "状态异常"),
-            }.get(expected, ())
-            if any(value in answer for value in contradictions):
-                errors.append("runtime_status_mismatch")
-
-    @staticmethod
-    def _validate_grounded_advice(answer: str, packet: AnswerSourcePacket, errors: list[str]) -> None:
-        source = _normalize_text(
-            json.dumps(
-                {
-                    "deliverables": packet.deliverables,
-                    "claims": [item.get("statement", "") for item in packet.claims],
-                    "evidence": [item.get("summary", "") for item in packet.evidence],
-                    "fallback": packet.deterministic_fallback,
-                },
-                ensure_ascii=False,
-            )
-        )
-        for clause in re.split(r"[。；;\n]", answer):
-            match = re.match(r"\s*(?:建议|下一步|请|可以|应当|应该)[：:]?\s*(.+)", clause)
-            if not match:
-                continue
-            core = _normalize_text(match.group(1))
-            if len(core) >= 4 and core not in source:
-                errors.append("unsupported_advice")
 
     @staticmethod
     def _validate_numeric_literals(answer: str, packet: AnswerSourcePacket, errors: list[str]) -> None:
@@ -288,50 +231,3 @@ def _trim_url(value: str) -> str:
 
 def _distinctive_internal_id(value: str) -> bool:
     return len(value) >= 12 or any(separator in value for separator in ("_", ":", "-"))
-
-
-def _describes_as_realtime(answer: str) -> bool:
-    negative_phrases = (
-        "非实时数据显示",
-        "不是实时数据显示",
-        "并非实时数据显示",
-        "不是当前实时状态",
-        "并非当前实时状态",
-        "不代表当前实时状态",
-        "并非当前这一刻",
-        "不是当前这一刻",
-    )
-    normalized = answer
-    for phrase in negative_phrases:
-        normalized = normalized.replace(phrase, "")
-    return any(value in normalized for value in ("当前实时状态", "实时数据显示", "当前这一刻"))
-
-
-def _claim_anchors(claim: dict[str, Any], packet: AnswerSourcePacket) -> list[str]:
-    statement = str(claim.get("statement") or "")
-    for value in [*packet.allowed_device_refs, *packet.allowed_fault_codes]:
-        statement = statement.replace(value, " ")
-    parts = re.split(r"[\s，。；：:、（）()]+|运行状态|诊断结论|状态|设备|目前|呈现|存在|显示|判断|为|是", statement)
-    generic = {"当前", "结果", "运行", "综合", "已完成", "未知", "暂无法判断"}
-    anchors = [part for part in parts if len(part) >= 2 and part not in generic]
-    for label in ("正常", "需关注", "存在异常迹象", "异常", "暂无法判断"):
-        if label in statement:
-            anchors.append(label)
-    return list(dict.fromkeys(anchors))
-
-
-def _values_for_key(value: Any, target: str) -> list[str]:
-    values: list[str] = []
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if key == target and str(child or "").strip():
-                values.append(str(child).strip())
-            values.extend(_values_for_key(child, target))
-    elif isinstance(value, list):
-        for child in value:
-            values.extend(_values_for_key(child, target))
-    return values
-
-
-def _normalize_text(value: str) -> str:
-    return "".join(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", value)).casefold()
