@@ -1,4 +1,4 @@
-"""Optional structured-model boundary for current-utterance clauses."""
+"""Structured-model contract and validation for current-message clauses."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fault_diagnosis.agent.canonical_turn.entity_extractor import compile_rule, rules_for
 from fault_diagnosis.domain.canonical_turn import (
+    CAPABILITY_ALLOWLIST,
+    STRUCTURED_CLAUSE_CAPABILITY_ALLOWLIST,
     ClauseAction,
     ClauseSource,
     EntitySpan,
@@ -23,11 +25,28 @@ class ClauseModelRequest:
     deterministic_entities: tuple[dict[str, Any], ...]
     temperature: Literal[0] = 0
     response_schema: str = "model_clause_parse.v1"
+    schema_version: str = "intent_shadow_request.v1"
+    allowed_capabilities: tuple[str, ...] = tuple(sorted(STRUCTURED_CLAUSE_CAPABILITY_ALLOWLIST))
+    allowed_source_kinds: tuple[str, ...] = ("artifact", "prior_result", "current_message")
 
 
 class StructuredClauseModel(Protocol):
     def parse(self, request: ClauseModelRequest) -> dict[str, Any]:
         """Return a JSON-like payload conforming to ``model_clause_parse.v1``."""
+
+
+class ModelClauseShadowMetadata(BaseModel):
+    """Evaluation-only semantics; never copied into canonical production objects."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requested: bool = True
+    negated: bool = False
+    conditional: bool = False
+    sequence_index: int | None = Field(default=None, ge=0)
+    depends_on: list[int] = Field(default_factory=list)
+    relation: str = "requested_action"
+    unsupported_by_deterministic_action: bool = False
 
 
 class _ModelAction(BaseModel):
@@ -58,6 +77,7 @@ class _ModelClause(BaseModel):
     source: _ModelSource | None = None
     slot: dict[str, list[str]] = Field(default_factory=dict)
     linker: str | None = None
+    shadow_metadata: ModelClauseShadowMetadata = Field(default_factory=ModelClauseShadowMetadata)
 
 
 class _ModelClauseParse(BaseModel):
@@ -65,6 +85,13 @@ class _ModelClauseParse(BaseModel):
 
     schema_version: Literal["model_clause_parse.v1"]
     clauses: list[_ModelClause]
+
+
+@dataclass(frozen=True)
+class ModelClauseValidation:
+    clauses: tuple[StructuredClause, ...]
+    metadata: tuple[ModelClauseShadowMetadata, ...]
+    unsupported_model_capabilities: tuple[str, ...]
 
 
 class ModelClauseParser:
@@ -79,12 +106,41 @@ class ModelClauseParser:
         *,
         detect_action: Callable[[str, list[EntitySpan]], ClauseAction | None],
     ) -> list[StructuredClause]:
+        """Execution-compatible validation: deterministic action evidence is required."""
+
+        return list(
+            self._validate(text, entities, payload, detect_action=detect_action, mode="execution").clauses
+        )
+
+    def validate_for_shadow(
+        self,
+        text: str,
+        entities: list[EntitySpan],
+        payload: dict[str, Any],
+        *,
+        detect_action: Callable[[str, list[EntitySpan]], ClauseAction | None],
+    ) -> ModelClauseValidation:
+        """Hard-safe validation that retains novel allowlisted semantic candidates."""
+
+        return self._validate(text, entities, payload, detect_action=detect_action, mode="shadow")
+
+    def _validate(
+        self,
+        text: str,
+        entities: list[EntitySpan],
+        payload: dict[str, Any],
+        *,
+        detect_action: Callable[[str, list[EntitySpan]], ClauseAction | None],
+        mode: Literal["execution", "shadow"],
+    ) -> ModelClauseValidation:
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         if any(compile_rule(rule).search(serialized) for rule in self._forbidden_rules):
             raise ValueError("model payload contains forbidden execution or authorization content")
         parsed = _ModelClauseParse.model_validate(payload)
         entity_ids = {entity.entity_id for entity in entities}
         clauses: list[StructuredClause] = []
+        metadata: list[ModelClauseShadowMetadata] = []
+        unsupported: list[str] = []
         for expected_index, model_clause in enumerate(parsed.clauses):
             if model_clause.clause_index != expected_index:
                 raise ValueError("model clause indexes must be contiguous and ordered")
@@ -98,9 +154,19 @@ class ModelClauseParser:
                 raise ValueError("model clause references an entity not extracted deterministically")
             overlapping = [entity for entity in entities if entity.start < model_clause.end and entity.end > model_clause.start]
             deterministic_action = detect_action(model_clause.text, overlapping)
+            shadow_metadata = model_clause.shadow_metadata.model_copy(deep=True)
+            if any(dependency >= expected_index for dependency in shadow_metadata.depends_on):
+                raise ValueError("model clause dependencies must reference earlier clauses")
             if model_clause.action is not None:
-                if deterministic_action is None or deterministic_action.capability != model_clause.action.capability:
+                capability = model_clause.action.capability
+                if capability not in STRUCTURED_CLAUSE_CAPABILITY_ALLOWLIST:
+                    raise ValueError(f"capability is not allowlisted: {capability}")
+                supported = deterministic_action is not None and deterministic_action.capability == capability
+                if mode == "execution" and (not supported or capability not in CAPABILITY_ALLOWLIST):
                     raise ValueError("model action is not supported by deterministic action evidence")
+                if not supported:
+                    shadow_metadata.unsupported_by_deterministic_action = True
+                    unsupported.append(capability)
             action = ClauseAction.model_validate(model_clause.action.model_dump()) if model_clause.action else None
             source = ClauseSource.model_validate(model_clause.source.model_dump()) if model_clause.source else None
             clauses.append(
@@ -116,4 +182,9 @@ class ModelClauseParser:
                     parser_source="model",
                 )
             )
-        return clauses
+            metadata.append(shadow_metadata)
+        return ModelClauseValidation(
+            clauses=tuple(clauses),
+            metadata=tuple(metadata),
+            unsupported_model_capabilities=tuple(dict.fromkeys(unsupported)),
+        )

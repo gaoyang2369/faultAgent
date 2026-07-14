@@ -2,6 +2,7 @@
 
 from .contracts import (
     CAPABILITY_ALLOWLIST,
+    STRUCTURED_CLAUSE_CAPABILITY_ALLOWLIST,
     CanonicalGoal,
     CanonicalTurnRequest,
     ClauseAction,
@@ -24,6 +25,7 @@ from .contracts import (
 
 __all__ = [
     "CAPABILITY_ALLOWLIST",
+    "STRUCTURED_CLAUSE_CAPABILITY_ALLOWLIST",
     "CanonicalGoal",
     "CanonicalTurnRequest",
     "ClauseAction",

@@ -19,6 +19,12 @@ CAPABILITY_ALLOWLIST = frozenset(
         "resolution_recommendation",
     }
 )
+# Structured-clause candidates may express non-executable semantics during
+# intent shadow evaluation. CanonicalGoal deliberately keeps the narrower
+# production allowlist above.
+STRUCTURED_CLAUSE_CAPABILITY_ALLOWLIST = CAPABILITY_ALLOWLIST | frozenset(
+    {"evaluate_workorder_need", "meta", "unsupported_high_risk_action"}
+)
 
 GoalOrigin = Literal["explicit", "inferred", "dependency"]
 PendingStatus = Literal["waiting", "resumed", "consumed", "expired", "cancelled"]
@@ -82,7 +88,7 @@ class ClauseAction(CanonicalContract):
     @field_validator("capability")
     @classmethod
     def capability_is_allowlisted(cls, value: str) -> str:
-        if value not in CAPABILITY_ALLOWLIST:
+        if value not in STRUCTURED_CLAUSE_CAPABILITY_ALLOWLIST:
             raise ValueError(f"capability is not allowlisted: {value}")
         return value
 
