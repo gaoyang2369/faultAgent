@@ -1,7 +1,7 @@
 import argparse
 import sys
 
-from fault_diagnosis.knowledge.base import rebuild_knowledge_base
+from fault_diagnosis.platform.knowledge.base import rebuild_knowledge_base
 
 
 def parse_args() -> argparse.Namespace:
