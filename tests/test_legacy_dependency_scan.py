@@ -43,13 +43,13 @@ def test_legacy_authority_debt_is_precise_and_grouped_by_component() -> None:
         }.issubset(item)
         for item in entries
     )
-    assert {item["component"] for item in entries} == {"Runtime", "Output"}
-    assert len(entries) == 29
+    assert {item["component"] for item in entries} == {"Output"}
+    assert len(entries) == 15
     assert payload["summary"]["authority_debt_by_component"] == {
         "Router": 0,
         "Compiler": 0,
         "Validator": 0,
-        "Runtime": 14,
+        "Runtime": 0,
         "Output": 15,
         "Transport": 0,
     }

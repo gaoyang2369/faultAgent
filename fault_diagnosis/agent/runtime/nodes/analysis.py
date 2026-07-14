@@ -10,7 +10,8 @@ from fault_diagnosis.domain.diagnosis.contracts import KnowledgeStepArtifact
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
 from .base import build_request, model_to_dict, models_to_dicts
-from ...artifacts import ArtifactPayloadError, hydrate_artifact_lineage, require_payload, source_envelopes
+from ...artifacts import ArtifactPayloadError, load_bound_artifacts, require_payload
+from ...report_snapshot import build_report_input_snapshot
 
 
 class AnalysisNode:
@@ -18,23 +19,15 @@ class AnalysisNode:
 
     def run(self, *, node: dict[str, Any], state: RuntimeState) -> NodeExecutionOutput:
         inputs = dict(node.get("inputs") or {})
-        access_error = str(inputs.get("artifact_access_error") or "")
-        if access_error:
+        try:
+            sql_sources = load_bound_artifacts(node=node, state=state, roles=("runtime_sql_source",))
+            knowledge_sources = load_bound_artifacts(node=node, state=state, roles=("knowledge_source",))
+        except ArtifactPayloadError as exc:
             return NodeExecutionOutput(
                 status="blocked",
-                output={"success": False, "artifact_access_error": access_error},
-                error={"code": access_error, "message": "目标 Artifact 精确读取或 lineage 校验失败。"},
+                output={"success": False, "artifact_access_error": exc.code},
+                error={"code": exc.code, "message": exc.message},
             )
-        for key in ("source_artifact_id", "target_artifact_id"):
-            source_id = str(inputs.get(key) or "")
-            if source_id and not hydrate_artifact_lineage(state, source_id):
-                return NodeExecutionOutput(
-                    status="blocked",
-                    output={"success": False, "artifact_access_error": "artifact_payload_invalid"},
-                    error={"code": "artifact_payload_invalid", "message": "目标 Artifact typed payload 无法加载。"},
-                )
-        sources = source_envelopes("analysis", node=node, state=state)
-        sql_sources = [item for item in sources if item.artifact_type == "sql_artifact"]
         if len(sql_sources) != 1:
             return NodeExecutionOutput(
                 status="blocked",
@@ -46,7 +39,6 @@ class AnalysisNode:
             )
         try:
             sql_artifact = require_payload(sql_sources[0], SqlArtifactPayload).sql_artifact
-            knowledge_sources = [item for item in sources if item.artifact_type == "knowledge_artifact"]
             knowledge_artifact = (
                 require_payload(knowledge_sources[0], KnowledgeArtifactPayload).knowledge_artifact
                 if len(knowledge_sources) == 1
@@ -61,6 +53,11 @@ class AnalysisNode:
         request = build_request(state, node, goal="DCMA 运行诊断分析")
         structured = diagnose_dcma_runtime(sql_artifact, knowledge_artifact, request)
         structured.analysis_artifact.artifact_id = str(inputs.get("artifact_id") or node.get("artifact_id") or "")
+        snapshot = build_report_input_snapshot(
+            structured_analysis=structured,
+            sql_source=sql_sources[0],
+            knowledge_source=knowledge_sources[0] if len(knowledge_sources) == 1 else None,
+        )
         return NodeExecutionOutput(
             output={
                 "success": structured.analysis_artifact.success,
@@ -69,5 +66,8 @@ class AnalysisNode:
             },
             proposed_evidence=models_to_dicts(structured.evidence_items),
             proposed_claims=models_to_dicts(structured.claims),
-            artifact_payload=AnalysisArtifactPayload(structured_analysis=structured),
+            artifact_payload=AnalysisArtifactPayload(
+                structured_analysis=structured,
+                report_input_snapshot=snapshot,
+            ),
         )

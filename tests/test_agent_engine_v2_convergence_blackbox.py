@@ -20,10 +20,16 @@ from fault_diagnosis.server.http.routers.chat import router as chat_router
 
 
 class _ExternalAdapters:
+    def __init__(self) -> None:
+        self.sql_call_count = 0
+        self.analysis_call_count = 0
+        self.report_call_count = 0
+
     def invoke_sql_tool(self, tool_name: str, payload):  # noqa: ANN001
         assert tool_name in {"sql_db_query", "sql_db_query_checker"}
         if tool_name == "sql_db_query_checker":
             return payload
+        self.sql_call_count += 1
         text = str(payload)
         device = "J1号机" if "J1" in text or "real_data_02" in text else "G120电机1"
         return [_runtime_row(device)]
@@ -40,6 +46,7 @@ class _ExternalAdapters:
         )
 
     def save_report(self, **kwargs):  # noqa: ANN003
+        self.report_call_count += 1
         return "报告已保存至：/reports/convergence-report.html"
 
 
@@ -128,11 +135,19 @@ def test_e01_three_turn_analysis_id_is_exact_and_third_turn_runs_report_only(mon
         assert stored is not None and stored.readback_verified and stored.persistence_status == "committed"
         assert stored.artifact_id == stored.manifest.artifact_id == analysis_ref["manifest"]["artifact_id"]
 
+        adapters = client.app.state.agent_engine_v2_tool_runtime
+        sql_calls_before = adapters.sql_call_count
+        report_calls_before = adapters.report_call_count
         third_events, third = _turn(client, "基于诊断生成报告", thread_id)
         node_types = [item["node_type"] for item in third["node_results"]]
         assert node_types == ["report"]
         report_ref = next(item for item in third["produced_artifacts"] if item["artifact_type"] == "report_artifact")
         assert report_ref["manifest"]["lineage"]["source_artifact_ids"] == [analysis_id]
+        assert stored.payload.report_input_snapshot.tabular_source_sql_artifact_id is None
+        assert report_ref["manifest"]["freshness"] == stored.payload.report_input_snapshot.freshness_status
+        assert adapters.sql_call_count == sql_calls_before
+        assert adapters.analysis_call_count == 0
+        assert adapters.report_call_count == report_calls_before + 1
         assert not any(item.get("stage") in {"sql", "analysis"} for item in third_events if item.get("type") == "tool_start")
     finally:
         client.close()

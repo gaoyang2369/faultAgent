@@ -11,11 +11,47 @@ from fault_diagnosis.agent.runtime.tool_runtime import ToolRuntime
 
 
 def _plan(nodes: list[dict[str, Any]], *, edges: list[dict[str, Any]] | None = None, approvals: list[dict[str, Any]] | None = None) -> ExecutionPlan:
+    edges = edges or []
+    artifact_types = {"sql": "sql_artifact", "rag": "knowledge_artifact", "analysis": "analysis_artifact", "report": "report_artifact", "workorder": "workorder_artifact"}
+    by_id = {str(node["node_id"]): node for node in nodes}
+    for node in nodes:
+        node_type = str(node.get("node_type") or "")
+        if node_type in artifact_types:
+            node["planned_output_artifact_id"] = f"art_{node_type}_{node['node_id']}"
+        inputs = dict(node.get("inputs") or {})
+        inputs.update(goal_id="goal_test", node_id=node["node_id"], goal_ids=["goal_test"])
+        bindings = []
+        for edge in edges:
+            if edge["to"] != node["node_id"]:
+                continue
+            producer = by_id[edge["from"]]
+            producer_type = producer.get("node_type")
+            role = (
+                "runtime_sql_source" if node_type == "analysis" and producer_type == "sql"
+                else "knowledge_source" if node_type == "analysis" and producer_type == "rag"
+                else "workorder_source" if node_type == "workorder" and producer_type in {"analysis", "report"}
+                else None
+            )
+            if role:
+                bindings.append(
+                    {
+                        "goal_id": "goal_test",
+                        "node_id": node["node_id"],
+                        "role": role,
+                        "artifact_id": producer["planned_output_artifact_id"],
+                        "artifact_type": artifact_types[producer_type],
+                        "producer_goal_id": "goal_test",
+                        "producer_node_id": producer["node_id"],
+                        "required": role != "knowledge_source",
+                    }
+                )
+        inputs["artifact_role_bindings"] = bindings
+        node["inputs"] = inputs
     return ExecutionPlan(
         plan_id="plan.phase6.validated",
         plan_version="v2.phase6.validated",
         nodes=nodes,
-        edges=edges or [],
+        edges=edges,
         allowed_tools=["sql.read", "kb.search", "report.write_draft", "workorder.propose_draft"],
         required_evidence=["latest_runtime_status"],
         approval_requirements=approvals or [],
@@ -276,7 +312,7 @@ def test_analysis_node_consumes_sql_and_rag_artifacts_and_commits_evidence_and_c
                 {"node_id": "rag_1", "node_type": "rag", "inputs": {"query": "A07089"}},
                 {"node_id": "analysis_1", "node_type": "analysis", "inputs": {"device_refs": ["J1号机"]}},
             ],
-            edges=[{"from": "sql_1", "to": "rag_1"}, {"from": "rag_1", "to": "analysis_1"}],
+            edges=[{"from": "sql_1", "to": "analysis_1"}, {"from": "rag_1", "to": "analysis_1"}],
         ),
         auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
     )
@@ -289,7 +325,7 @@ def test_analysis_node_consumes_sql_and_rag_artifacts_and_commits_evidence_and_c
     assert result.evidence_ledger.claims
 
 
-def test_report_node_writes_private_report_and_returns_reports_url(tmp_path, monkeypatch) -> None:
+def test_report_node_rejects_unbound_operation_payload(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(report_tools, "REPORTS_DIR", str(tmp_path))
 
     result = _runtime().execute(
@@ -308,11 +344,9 @@ def test_report_node_writes_private_report_and_returns_reports_url(tmp_path, mon
         auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
     )
 
-    assert result.status == "completed"
-    artifact = result.node_results[0].output["artifact"]
-    assert artifact["report_url"] == "/reports/phase6_report.html"
-    assert (tmp_path / "phase6_report.html").exists()
-    assert (tmp_path / "phase6_report.html.access.json").exists()
+    assert result.status == "blocked"
+    assert result.node_results[0].error["code"] == "report_source_cardinality"
+    assert not (tmp_path / "phase6_report.html").exists()
 
 
 def test_workorder_node_generates_suggestion_or_draft_but_never_dispatches() -> None:

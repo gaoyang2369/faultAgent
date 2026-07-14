@@ -3,24 +3,28 @@
 from __future__ import annotations
 
 import re
-import json
 from typing import Any
 
 from fault_diagnosis.domain.artifacts import (
     AnalysisArtifactPayload,
-    ComparisonArtifactPayload,
-    KnowledgeArtifactPayload,
     ReportArtifactPayload,
+    ReportInputSnapshot,
     SqlArtifactPayload,
 )
-from fault_diagnosis.domain.diagnosis.contracts import AnalysisStepArtifact, KnowledgeStepArtifact, ReportStepArtifact, SqlStepArtifact
+from fault_diagnosis.domain.diagnosis.contracts import (
+    AnalysisStepArtifact,
+    DiagnosisRequest,
+    KnowledgeStepArtifact,
+    ReportStepArtifact,
+    SqlStepArtifact,
+)
 from ...output.report import build_reportable_payload
 from fault_diagnosis.domain.security.runtime_context import reset_current_auth_context, set_current_auth_context
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
 from ..tool_runtime import ToolRuntime
-from .base import auth_context, build_request, input_value, model_to_dict, timestamp_for_filename
-from ...artifacts import ArtifactPayloadError, hydrate_artifact_lineage, require_payload, source_envelopes
+from .base import auth_context, input_value, model_to_dict, timestamp_for_filename
+from ...artifacts import ArtifactPayloadError, load_bound_artifacts, require_payload
 
 _REPORT_URL_RE = re.compile(r"(/reports/[A-Za-z0-9_.-]+)")
 
@@ -38,35 +42,24 @@ class ReportNode:
             or f"v2_runtime_report_{state.thread_id or state.trace_id or timestamp_for_filename()}"
         )
         chart_payload = input_value(node, "chart_payload", None)
-        operation_report_payload = str(input_value(node, "operation_report_payload", "") or "")
-        if operation_report_payload == "__runtime_artifacts__":
-            operation_report_payload = ""
-        if not operation_report_payload:
-            target_id = str(input_value(node, "target_artifact_id", "") or input_value(node, "source_artifact_id", "") or "")
-            if target_id and not hydrate_artifact_lineage(state, target_id):
-                return _missing_report_source(artifact_id, node, "artifact_payload_invalid")
-            sources = source_envelopes("report", node=node, state=state)
-            if not sources:
-                artifact = ReportStepArtifact(
-                    artifact_id=artifact_id,
-                    success=False,
-                    report_title=str(input_value(node, "title", "") or "DCMA 运行诊断报告"),
-                    error="missing_reportable_artifact",
-                )
-                return NodeExecutionOutput(
-                    status="failed",
-                    output={"success": False, "artifact": model_to_dict(artifact), "error": artifact.error},
-                    error={
-                        "code": "missing_reportable_artifact",
-                        "message": "Report generation requires a referenced artifact or current structured diagnosis payload.",
-                    },
-                )
-            try:
-                operation_report_payload = _build_operation_payload(state, node, sources)
-            except ArtifactPayloadError as exc:
-                return _missing_report_source(artifact_id, node, exc.code)
-            except ValueError as exc:
-                return _missing_report_source(artifact_id, node, str(exc) or "artifact_payload_invalid")
+        try:
+            report_sources = load_bound_artifacts(node=node, state=state, roles=("report_source",))
+            tabular_sources = load_bound_artifacts(node=node, state=state, roles=("tabular_source",))
+            if len(report_sources) != 1:
+                raise ValueError("report_source_cardinality")
+            analysis_payload = require_payload(report_sources[0], AnalysisArtifactPayload)
+            snapshot = analysis_payload.report_input_snapshot
+            if snapshot is None:
+                raise ValueError("legacy_analysis_missing_report_input_snapshot")
+            operation_report_payload = _build_operation_payload(
+                node=node,
+                snapshot=snapshot,
+                tabular_sources=tabular_sources,
+            )
+        except ArtifactPayloadError as exc:
+            return _missing_report_source(artifact_id, node, exc.code)
+        except ValueError as exc:
+            return _missing_report_source(artifact_id, node, str(exc) or "artifact_payload_invalid")
 
         auth = auth_context(state)
         token = set_current_auth_context(auth)
@@ -95,53 +88,71 @@ class ReportNode:
             status="completed" if success else "failed",
             output={"success": success, "artifact": model_to_dict(artifact), "report_url": report_url},
             tool_call_refs=["save_report"],
-            artifact_payload=ReportArtifactPayload(report_artifact=artifact),
+            artifact_payload=ReportArtifactPayload(
+                report_artifact=artifact,
+                report_input_snapshot=snapshot,
+            ),
             error=None if success else {"code": "report_save_failed", "message": artifact.error or "Report save failed."},
         )
 
 
-def _build_operation_payload(state: RuntimeState, node: dict[str, Any], sources: list[Any]) -> str:
-    request = build_request(state, node, goal="DCMA 运行诊断报告")
-    comparison_sources = [item for item in sources if item.artifact_type == "comparison_artifact"]
-    if comparison_sources:
-        if len(comparison_sources) != 1:
-            raise ValueError("artifact_source_ambiguous")
-        comparison = require_payload(comparison_sources[0], ComparisonArtifactPayload).comparison_artifact
-        return json.dumps(
-            {
-                "title": str(input_value(node, "title", "") or "DCMA 运行比较报告"),
-                "diagnosis_type": "运行比较",
-                "conclusion": comparison.conclusion,
-                "devices": comparison.devices,
-                "comparison_dimensions": [item.model_dump(mode="json") for item in comparison.comparison_dimensions],
-            },
-            ensure_ascii=False,
-        )
-    sql_sources = [item for item in sources if item.artifact_type == "sql_artifact"]
-    if len(sql_sources) != 1:
-        raise ValueError("artifact_payload_invalid" if not sql_sources else "artifact_source_ambiguous")
-    sql_payload = require_payload(sql_sources[0], SqlArtifactPayload)
-    knowledge_sources = [item for item in sources if item.artifact_type == "knowledge_artifact"]
-    knowledge_artifact = (
-        require_payload(knowledge_sources[0], KnowledgeArtifactPayload).knowledge_artifact
-        if len(knowledge_sources) == 1
-        else KnowledgeStepArtifact(success=False, query="", error="missing_knowledge_artifact")
+def _build_operation_payload(
+    *,
+    node: dict[str, Any],
+    snapshot: ReportInputSnapshot,
+    tabular_sources: list[Any],
+) -> str:
+    if len(tabular_sources) > 1:
+        raise ValueError("report_tabular_source_cardinality")
+    expected_tabular = snapshot.tabular_source_sql_artifact_id
+    actual_tabular = tabular_sources[0].artifact_id if tabular_sources else None
+    if actual_tabular != expected_tabular:
+        raise ValueError("report_tabular_source_snapshot_mismatch")
+    sql_payload = require_payload(tabular_sources[0], SqlArtifactPayload) if tabular_sources else None
+    request = DiagnosisRequest(
+        user_message=snapshot.diagnosis_summary,
+        user_identity="canonical_report_snapshot",
+        equipment_hint=snapshot.device_refs[0] if len(snapshot.device_refs) == 1 else None,
+        fault_code_hint=snapshot.fault_codes[0] if len(snapshot.fault_codes) == 1 else None,
+        needs_report=True,
+        report_format="html",
+        analysis_goal=snapshot.diagnosis_summary,
     )
-    analysis_sources = [item for item in sources if item.artifact_type == "analysis_artifact"]
-    analysis_artifact = (
-        require_payload(analysis_sources[0], AnalysisArtifactPayload).structured_analysis.analysis_artifact
-        if len(analysis_sources) == 1
-        else AnalysisStepArtifact(success=False, conclusion="缺少分析产物", error="missing_analysis_artifact")
+    sql_artifact = (
+        sql_payload.sql_artifact
+        if sql_payload is not None
+        else SqlStepArtifact(
+            success=True,
+            summary="ReportInputSnapshot",
+            query_status="success",
+            source_table=str(snapshot.runtime_summary.get("source_table") or ""),
+            row_count=snapshot.sample_count,
+            sample_count=snapshot.sample_count or 0,
+            requested_window=dict(snapshot.requested_window or {}),
+            resolved_window=dict(snapshot.resolved_window or {}),
+            latest_sample_time=snapshot.latest_sample_time or "",
+            runtime_status=str(snapshot.runtime_summary.get("runtime_status") or "unknown"),
+            status_reasons=[str(item) for item in snapshot.runtime_summary.get("status_reasons", [])],
+            key_findings=[str(item) for item in snapshot.runtime_summary.get("key_findings", [])],
+            supporting_evidence_ids=list(snapshot.supporting_evidence_ids),
+        )
+    )
+    analysis_artifact = AnalysisStepArtifact(
+        success=True,
+        conclusion=snapshot.diagnosis_summary,
+        basis=[str(item.get("summary") or "") for item in snapshot.structured_findings if item.get("summary")],
+        recommendations=list(snapshot.recommendations),
     )
     payload = build_reportable_payload(
         request=request,
-        sql_artifact=sql_payload.sql_artifact,
-        knowledge_artifact=knowledge_artifact,
+        sql_artifact=sql_artifact,
+        knowledge_artifact=KnowledgeStepArtifact(success=False, query="", error="not_in_report_snapshot"),
         analysis_artifact=analysis_artifact,
-        normalized_rows=sql_payload.normalized_rows,
+        normalized_rows=sql_payload.normalized_rows if sql_payload is not None else [],
         title=str(input_value(node, "title", "") or "DCMA 运行诊断报告"),
         diagnosis_type=str(input_value(node, "diagnosis_type", "") or "运行诊断"),
         workorder_suggestion=None,
+        report_time=snapshot.generated_at,
     )
     return str(payload["operation_report_payload"])
 

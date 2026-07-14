@@ -12,7 +12,7 @@ from fault_diagnosis.agent.evidence.claims import build_v2_claim
 
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
-from ...artifacts import ArtifactPayloadError, require_payload, source_envelopes
+from ...artifacts import ArtifactPayloadError, load_bound_artifacts, require_payload
 from .base import model_to_dict
 
 
@@ -20,12 +20,8 @@ class ComparisonNode:
     node_type = "comparison"
 
     def run(self, *, node: dict[str, Any], state: RuntimeState) -> NodeExecutionOutput:
-        sql_sources = [
-            envelope
-            for envelope in source_envelopes("comparison", node=node, state=state)
-            if envelope.artifact_type == "sql_artifact"
-        ]
         try:
+            sql_sources = load_bound_artifacts(node=node, state=state, roles=("comparison_member",))
             assessments = [require_payload(envelope, SqlArtifactPayload).runtime_status_assessment for envelope in sql_sources]
         except ArtifactPayloadError as exc:
             return NodeExecutionOutput(

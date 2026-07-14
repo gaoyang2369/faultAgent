@@ -62,6 +62,12 @@ def _manifest(
         source_table="real_data_01",
         evidence_refs=[f"evidence:{artifact_id}"],
         freshness="fresh",
+        report_input_snapshot_schema_version=(
+            "report_input_snapshot.v1" if artifact_type == "analysis_artifact" else ""
+        ),
+        report_tabular_source_sql_artifact_id=(
+            (sources or [""])[0] if artifact_type == "analysis_artifact" else ""
+        ),
         lineage=ArtifactLineage(
             lineage_status="complete",
             artifact_id=artifact_id,
@@ -226,7 +232,8 @@ def test_case_a_reuses_exact_analysis_without_sql_or_analysis_nodes() -> None:
 
     assert [node.node_type for node in snapshot.execution_plan.nodes] == ["report"]
     report = snapshot.execution_plan.nodes[0]
-    assert report.inputs.get("target_artifact_id") == ANALYSIS_ID
+    binding = next(item for item in report.inputs["artifact_role_bindings"] if item["role"] == "report_source")
+    assert binding["artifact_id"] == ANALYSIS_ID
 
 
 def test_case_a_report_input_discloses_inherited_source_freshness() -> None:

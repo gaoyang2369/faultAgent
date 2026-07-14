@@ -45,9 +45,36 @@ class KnowledgeArtifactPayload(_ArtifactContract):
     knowledge_artifact: KnowledgeStepArtifact
 
 
+class ReportInputSnapshot(BaseModel):
+    """Immutable, versioned analysis projection consumed by report/workorder nodes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["report_input_snapshot.v1"] = "report_input_snapshot.v1"
+    device_refs: list[str] = Field(default_factory=list)
+    fault_codes: list[str] = Field(default_factory=list)
+    requested_window: dict[str, Any] | None = None
+    resolved_window: dict[str, Any] | None = None
+    latest_sample_time: str | None = None
+    sample_count: int | None = None
+    freshness_status: str = "unknown"
+    freshness_reason: str | None = None
+    runtime_summary: dict[str, Any] = Field(default_factory=dict)
+    structured_findings: list[dict[str, Any]] = Field(default_factory=list)
+    diagnosis_summary: str
+    severity: str | None = None
+    recommendations: list[str] = Field(default_factory=list)
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    source_sql_artifact_id: str
+    source_knowledge_artifact_id: str | None = None
+    tabular_source_sql_artifact_id: str | None = None
+    generated_at: str
+
+
 class AnalysisArtifactPayload(_ArtifactContract):
     payload_type: Literal["analysis_artifact"] = "analysis_artifact"
     structured_analysis: StructuredAnalysisArtifact
+    report_input_snapshot: ReportInputSnapshot | None = None
 
 
 class ComparisonArtifactPayload(_ArtifactContract):
@@ -58,6 +85,7 @@ class ComparisonArtifactPayload(_ArtifactContract):
 class ReportArtifactPayload(_ArtifactContract):
     payload_type: Literal["report_artifact"] = "report_artifact"
     report_artifact: ReportStepArtifact
+    report_input_snapshot: ReportInputSnapshot | None = None
 
 
 class WorkorderArtifactPayload(_ArtifactContract):
@@ -96,6 +124,8 @@ class ArtifactLineage(_ArtifactContract):
     subject_device_refs: list[str] = Field(default_factory=list)
     fault_code_refs: list[str] = Field(default_factory=list)
     source_artifact_ids: list[str] = Field(default_factory=list)
+    direct_source_artifact_ids: list[str] = Field(default_factory=list)
+    provenance_ancestor_artifact_ids: list[str] = Field(default_factory=list)
     source_evidence_bundle_ids: list[str] = Field(default_factory=list)
     data_basis: list[dict[str, Any]] = Field(default_factory=list)
     source_tables: list[str] = Field(default_factory=list)
@@ -149,6 +179,11 @@ class ArtifactManifest(_ArtifactContract):
     linked_analysis_artifact_id: str = ""
     linked_sql_artifact_id: str = ""
     linked_evidence_bundle_id: str = ""
+    report_input_snapshot_schema_version: str = ""
+    report_tabular_source_sql_artifact_id: str = ""
+    migrated_from_artifact_id: str = ""
+    migration_tool_version: str = ""
+    migration_timestamp: str = ""
     source_file: str = ""
     source_page: str = ""
     parsed_manual_fields: dict[str, Any] = Field(default_factory=dict)

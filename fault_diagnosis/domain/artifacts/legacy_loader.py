@@ -67,11 +67,17 @@ def upgrade_legacy_payload(artifact_type: str, value: Any) -> ArtifactPayload | 
         if artifact_type == "knowledge_artifact":
             return KnowledgeArtifactPayload(knowledge_artifact=value["knowledge_artifact"])
         if artifact_type in {"analysis_artifact", "structured_analysis_artifact"}:
-            return AnalysisArtifactPayload(structured_analysis=value["structured_analysis"])
+            return AnalysisArtifactPayload(
+                structured_analysis=value["structured_analysis"],
+                report_input_snapshot=value.get("report_input_snapshot"),
+            )
         if artifact_type == "comparison_artifact":
             return ComparisonArtifactPayload(comparison_artifact=value["comparison_artifact"])
         if artifact_type == "report_artifact":
-            return ReportArtifactPayload(report_artifact=value["report_artifact"])
+            return ReportArtifactPayload(
+                report_artifact=value["report_artifact"],
+                report_input_snapshot=value.get("report_input_snapshot"),
+            )
         if artifact_type == "workorder_artifact":
             return WorkorderArtifactPayload(
                 workorder_suggestion=value.get("workorder_suggestion"),

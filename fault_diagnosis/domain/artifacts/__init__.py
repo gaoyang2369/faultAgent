@@ -11,6 +11,7 @@ from .contracts import (
     ComparisonArtifactPayload,
     KnowledgeArtifactPayload,
     ReportArtifactPayload,
+    ReportInputSnapshot,
     SqlArtifactPayload,
     WorkorderArtifactPayload,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "ComparisonArtifactPayload",
     "KnowledgeArtifactPayload",
     "ReportArtifactPayload",
+    "ReportInputSnapshot",
     "SqlArtifactPayload",
     "WorkorderArtifactPayload",
     "load_artifact_envelope",

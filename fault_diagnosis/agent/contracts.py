@@ -20,6 +20,15 @@ FailurePolicy = Literal[
     "block_dependents",
     "block_all",
 ]
+ArtifactInputRole = Literal[
+    "runtime_sql_source",
+    "knowledge_source",
+    "comparison_member",
+    "analysis_source",
+    "report_source",
+    "tabular_source",
+    "workorder_source",
+]
 
 
 class AgentEngineContract(BaseModel):
@@ -299,10 +308,33 @@ class PlanEdge(_DictCompatContract):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+class ArtifactRoleBinding(AgentEngineContract):
+    schema_version: Literal["artifact_role_binding.v1"] = "artifact_role_binding.v1"
+    goal_id: str
+    node_id: str
+    role: ArtifactInputRole
+    artifact_id: str
+    artifact_type: str
+    producer_goal_id: str | None = None
+    producer_node_id: str | None = None
+    required: bool = True
+    device_ref: str | None = None
+    member_order: int | None = Field(default=None, ge=0)
+
+
 class GoalScopedNodeInputs(AgentEngineContract):
+    goal_id: str = ""
+    node_id: str = ""
     goal_ids: list[str] = Field(default_factory=list)
     query_spec_id: str = ""
     target_scope_id: str = ""
+    artifact_role_bindings: list[ArtifactRoleBinding] = Field(default_factory=list)
+    preparation_error: str = ""
+    artifact_id: str = ""
+    canonical_capability: str = ""
+    canonical_raw_message: str = ""
+    canonical_resolved_slots: dict[str, Any] = Field(default_factory=dict)
+    source_freshness: str = "unknown"
 
 
 class SqlNodeInputs(GoalScopedNodeInputs):
@@ -323,6 +355,7 @@ class SqlNodeInputs(GoalScopedNodeInputs):
     target_evidence_bundle_id: str | None = None
     target_report_id: str | None = None
     stale_evidence_disclosure_required: bool = False
+    compatibility_only: bool = True
 
 
 class RagNodeInputs(GoalScopedNodeInputs):
@@ -341,6 +374,21 @@ class RagNodeInputs(GoalScopedNodeInputs):
     target_evidence_bundle_id: str | None = None
     target_report_id: str | None = None
     stale_evidence_disclosure_required: bool = False
+    compatibility_only: bool = True
+
+
+class AnalysisNodeInputs(GoalScopedNodeInputs):
+    device_refs: list[str] = Field(default_factory=list)
+    fault_code_refs: list[str] = Field(default_factory=list)
+    context_relation: str = "canonical_turn"
+    requested_output_mode: str = "concise"
+
+
+class ComparisonNodeInputs(GoalScopedNodeInputs):
+    device_refs: list[str] = Field(default_factory=list)
+    fault_code_refs: list[str] = Field(default_factory=list)
+    context_relation: str = "canonical_turn"
+    requested_output_mode: str = "concise"
 
 
 class ReportNodeInputs(GoalScopedNodeInputs):
@@ -360,6 +408,7 @@ class ReportNodeInputs(GoalScopedNodeInputs):
     target_evidence_bundle_id: str | None = None
     target_report_id: str | None = None
     stale_evidence_disclosure_required: bool = False
+    compatibility_only: bool = True
 
 
 class WorkorderNodeInputs(GoalScopedNodeInputs):
@@ -390,7 +439,7 @@ class WorkorderNodeInputs(GoalScopedNodeInputs):
     idempotency_key: str = ""
     source_policy: str = ""
     source_selection_reason: str = ""
-    artifact_id: str = ""
+    compatibility_only: bool = True
 
 
 class ApprovalNodeInputs(GoalScopedNodeInputs):
@@ -407,6 +456,7 @@ class ApprovalNodeInputs(GoalScopedNodeInputs):
     target_evidence_bundle_id: str | None = None
     target_report_id: str | None = None
     stale_evidence_disclosure_required: bool = False
+    compatibility_only: bool = True
 
 
 class PlanNode(_DictCompatContract):
@@ -426,6 +476,7 @@ class PlanNode(_DictCompatContract):
     query_spec_id: str = ""
     target_scope_id: str = ""
     failure_policy: FailurePolicy = "block_all"
+    planned_output_artifact_id: str = ""
 
 
 class ExecutionPlan(AgentEngineContract):

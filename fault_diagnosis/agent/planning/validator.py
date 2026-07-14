@@ -13,7 +13,7 @@ from fault_diagnosis.domain.canonical_turn import (
     GoalSourceResolution,
 )
 
-from ..contracts import ExecutionPlan
+from ..contracts import ArtifactRoleBinding, ExecutionPlan
 from .policy_bridge import BLOCKING_FORBIDDEN_TOOLS, GLOBAL_FORBIDDEN_TOOLS
 
 
@@ -100,6 +100,7 @@ class PlanValidator:
                 if source[goal_id].status not in {"requires_execution", "source_for_execution"}:
                     issues.append(_error("source_status_not_executable", f"Goal {goal_id} source state is not executable.", node_id=node.node_id))
             _validate_runtime_inputs(node, issues, required=require_runtime_inputs)
+            _validate_role_bindings(node, candidate_plan, issues)
             for tool in node.required_tools:
                 if tool in GLOBAL_FORBIDDEN_TOOLS:
                     issues.append(_error("forbidden_tool_requested", f"Forbidden tool requested: {tool}", node_id=node.node_id, tool=tool))
@@ -107,6 +108,7 @@ class PlanValidator:
         for tool in candidate_plan.allowed_tools:
             if tool in GLOBAL_FORBIDDEN_TOOLS:
                 issues.append(_error("forbidden_tool_requested", f"Forbidden tool requested: {tool}", tool=tool))
+        _validate_planned_outputs(candidate_plan, issues)
         if _has_cycle(candidate_plan):
             issues.append(_error("dependency_cycle", "Plan dependencies must be acyclic."))
 
@@ -127,12 +129,89 @@ def _validate_runtime_inputs(node, issues: list[PlanValidationIssue], *, require
     if not required:
         return
     inputs = node.inputs
+    if str(inputs.get("preparation_error") or ""):
+        issues.append(
+            _error(
+                str(inputs["preparation_error"]),
+                "Runtime input preparation failed before node execution.",
+                node_id=node.node_id,
+            )
+        )
     if node.node_type == "sql" and not str(inputs.get("sql_query") or "").strip():
         issues.append(_error("missing_sql_query", "SQL node requires sql_query before runtime.", node_id=node.node_id))
     if node.node_type == "rag" and not str(inputs.get("query") or "").strip():
         issues.append(_error("missing_rag_query", "RAG node requires query before runtime.", node_id=node.node_id))
-    if node.node_type == "report" and not any(str(inputs.get(key) or "").strip() for key in ("operation_report_payload", "target_artifact_id")):
-        issues.append(_error("missing_report_source", "Report node requires a canonical source.", node_id=node.node_id))
+
+
+def _validate_role_bindings(node, plan: ExecutionPlan, issues: list[PlanValidationIssue]) -> None:
+    inputs = node.inputs
+    if str(inputs.get("goal_id") or "") != node.goal_id or str(inputs.get("node_id") or "") != node.node_id:
+        issues.append(_error("node_input_identity_mismatch", "Runtime input must preserve its exact goal_id and node_id.", node_id=node.node_id))
+    bindings: list[ArtifactRoleBinding] = []
+    for raw in inputs.get("artifact_role_bindings", []) or []:
+        try:
+            binding = ArtifactRoleBinding.model_validate(raw)
+        except Exception:
+            issues.append(_error("invalid_artifact_role_binding", "Artifact role binding is invalid.", node_id=node.node_id))
+            continue
+        bindings.append(binding)
+        if binding.goal_id != node.goal_id or binding.node_id != node.node_id:
+            issues.append(_error("artifact_binding_scope_mismatch", "Artifact binding must belong to the runtime node Goal.", node_id=node.node_id))
+        if not binding.artifact_id or not binding.artifact_type:
+            issues.append(_error("artifact_binding_identity_missing", "Artifact binding requires an exact ID and type.", node_id=node.node_id))
+        expected_type = {
+            "runtime_sql_source": "sql_artifact",
+            "knowledge_source": "knowledge_artifact",
+            "comparison_member": "sql_artifact",
+            "analysis_source": "analysis_artifact",
+            "report_source": "analysis_artifact",
+            "tabular_source": "sql_artifact",
+        }.get(binding.role)
+        if binding.role == "workorder_source":
+            if binding.artifact_type not in {"analysis_artifact", "report_artifact"}:
+                issues.append(_error("artifact_role_type_mismatch", "Workorder source must be Analysis or Report.", node_id=node.node_id))
+        elif expected_type and binding.artifact_type != expected_type:
+            issues.append(_error("artifact_role_type_mismatch", f"{binding.role} requires {expected_type}.", node_id=node.node_id))
+        if binding.producer_node_id:
+            producer = next((item for item in plan.nodes if item.node_id == binding.producer_node_id), None)
+            dependency = any(edge.source == binding.producer_node_id and edge.target == node.node_id for edge in plan.edges)
+            if producer is None or not dependency or producer.planned_output_artifact_id != binding.artifact_id:
+                issues.append(_error("artifact_binding_not_from_dependency", "Planned input Artifact must come from a real DAG dependency.", node_id=node.node_id))
+
+    counts = {role: sum(item.role == role for item in bindings) for role in {
+        "runtime_sql_source", "knowledge_source", "comparison_member", "report_source", "tabular_source", "workorder_source"
+    }}
+    if node.node_type == "sql" and bindings:
+        issues.append(_error("sql_artifact_input_forbidden", "SQL nodes accept zero Artifact inputs.", node_id=node.node_id))
+    elif node.node_type == "analysis":
+        if counts["runtime_sql_source"] != 1:
+            issues.append(_error("analysis_sql_source_cardinality", "Analysis requires exactly one runtime_sql_source.", node_id=node.node_id))
+        if counts["knowledge_source"] > 1:
+            issues.append(_error("analysis_knowledge_source_cardinality", "Analysis accepts at most one knowledge_source.", node_id=node.node_id))
+    elif node.node_type == "comparison":
+        members = [item for item in bindings if item.role == "comparison_member"]
+        if len(members) < 2:
+            issues.append(_error("comparison_member_cardinality", "Comparison requires at least two comparison_member bindings.", node_id=node.node_id))
+        devices = [item.device_ref for item in members]
+        orders = [item.member_order for item in members]
+        if any(not item for item in devices) or len(set(devices)) != len(devices):
+            issues.append(_error("comparison_member_device_mapping", "Every comparison member requires one unique device identity.", node_id=node.node_id))
+        if any(item is None for item in orders) or orders != list(range(len(members))):
+            issues.append(_error("comparison_member_order", "Comparison member order must be explicit and stable.", node_id=node.node_id))
+    elif node.node_type == "report":
+        if counts["report_source"] != 1:
+            issues.append(_error("report_source_cardinality", "Report requires exactly one report_source.", node_id=node.node_id))
+        if counts["tabular_source"] > 1:
+            issues.append(_error("report_tabular_source_cardinality", "Report accepts at most one tabular_source.", node_id=node.node_id))
+    elif node.node_type == "workorder" and counts["workorder_source"] != 1:
+        issues.append(_error("workorder_source_cardinality", "Workorder requires exactly one workorder_source.", node_id=node.node_id))
+
+
+def _validate_planned_outputs(plan: ExecutionPlan, issues: list[PlanValidationIssue]) -> None:
+    producing = {"sql", "rag", "analysis", "comparison", "report", "workorder"}
+    ids = [node.planned_output_artifact_id for node in plan.nodes if node.node_type in producing]
+    if any(not artifact_id for artifact_id in ids) or len(ids) != len(set(ids)):
+        issues.append(_error("planned_output_artifact_identity", "Every producing node requires one unique planned output Artifact ID."))
 
 
 def _has_cycle(plan: ExecutionPlan) -> bool:

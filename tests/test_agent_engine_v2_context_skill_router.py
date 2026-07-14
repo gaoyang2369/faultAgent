@@ -14,7 +14,8 @@ from fault_diagnosis.agent import (
 )
 from fault_diagnosis.agent.contracts import ArtifactEnvelope, ArtifactLineage, ArtifactManifest
 from fault_diagnosis.domain.context import ArtifactBackedCaseStore, ContextManager
-from fault_diagnosis.domain.artifacts import AnalysisArtifactPayload, KnowledgeArtifactPayload, ReportArtifactPayload
+from fault_diagnosis.domain.artifacts import AnalysisArtifactPayload, KnowledgeArtifactPayload, ReportArtifactPayload, ReportInputSnapshot
+from fault_diagnosis.domain.diagnosis.runtime_status import DataBasis, RuntimeStatusAssessment
 from fault_diagnosis.domain.diagnosis.analysis.contracts import DiagnosticAssessment, StructuredAnalysisArtifact
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.backends.memory import MemoryArtifactStoreBackend
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import commit_artifact, configure_artifact_store_backend, save_thread_artifact
@@ -76,6 +77,7 @@ def _artifact(
                     "followupable": True,
                     "reportable": True,
                     "actionable": True,
+                    "report_input_snapshot_schema_version": "report_input_snapshot.v1",
                     "device_refs": [asset],
                     "fault_code_refs": [fault_code],
                     "available_followups": ["generate_report", "create_workorder_draft"],
@@ -197,7 +199,8 @@ def _typed_payload(manifest: ArtifactManifest):
                 success=True,
                 report_filename=manifest.report_filename or "fixture.html",
                 report_url=manifest.report_url or "/reports/fixture.html",
-            )
+            ),
+            report_input_snapshot=_report_snapshot(manifest),
         )
     if manifest.artifact_type == "knowledge_artifact":
         code = (manifest.fault_code_refs or ["A07089"])[0]
@@ -223,7 +226,32 @@ def _typed_payload(manifest: ArtifactManifest):
                 success=True,
                 conclusion=manifest.diagnosis_summary or "fixture analysis",
             ),
-        )
+        ),
+        report_input_snapshot=_report_snapshot(manifest),
+    )
+
+
+def _report_snapshot(manifest: ArtifactManifest) -> ReportInputSnapshot:
+    device = (manifest.device_refs or ["fixture"])[0]
+    code = (manifest.fault_code_refs or ["A07089"])[0]
+    runtime = RuntimeStatusAssessment(
+        device=device,
+        query_status="success",
+        runtime_status="attention",
+        data_basis=DataBasis(freshness="recent", usable_for_report=True, usable_for_workorder_draft=True),
+        sample_count=1,
+        event_codes=[code],
+    )
+    return ReportInputSnapshot(
+        device_refs=[device],
+        fault_codes=[code],
+        sample_count=1,
+        freshness_status="recent",
+        runtime_summary=runtime.model_dump(mode="json"),
+        diagnosis_summary=manifest.diagnosis_summary or "fixture analysis",
+        recommendations=["复核现场状态"],
+        source_sql_artifact_id="sql:fixture",
+        generated_at="2026-06-24T10:00:00+00:00",
     )
 
 
@@ -427,7 +455,8 @@ def test_followup_detail_inherits_latest_knowledge_artifact_fault_code() -> None
     assert rag_inputs["query"] != "详细点"
     assert rag_inputs["retrieval_strategy"] == "fault_code_exact_then_semantic"
     assert rag_inputs["top_k"] >= 3
-    assert rag_inputs["source_artifact_refs"][0]["artifact_id"] == "knowledge:trace.detail:A07089"
+    assert rag_inputs["source_artifact_refs"] == []
+    assert rag_inputs["artifact_role_bindings"] == []
 
 
 def test_effective_request_cannot_override_ambiguous_context_even_with_target() -> None:

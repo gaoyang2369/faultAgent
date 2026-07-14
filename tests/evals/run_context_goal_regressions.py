@@ -78,6 +78,7 @@ def analysis_context() -> dict:
         persistence_status="committed",
         readback_verified=True,
         device_refs=["G120电机1"],
+        report_input_snapshot_schema_version="report_input_snapshot.v1",
         lineage=ArtifactLineage(
             lineage_status="complete",
             artifact_id="analysis:context-eval",

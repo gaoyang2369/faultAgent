@@ -1,23 +1,36 @@
-"""V2 runtime plan preparation helpers."""
+"""Prepare canonical plans without consulting legacy request authority."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
-from fault_diagnosis.domain.diagnosis.contracts import DiagnosisRequest
-from fault_diagnosis.domain.security.sql_safety import SourceTableResolutionError, build_fallback_sql_query
-from fault_diagnosis.domain.security.permissions import build_auth_context
-from ..context.artifact_access import resolve_target_artifact
-
-from ..contracts import ExecutionPlan, PlanSnapshotV2
-from ..planning import PlanValidationResult, PlanValidator
+from fault_diagnosis.agent.context.artifact_access import resolve_target_artifact
+from fault_diagnosis.domain.artifacts import AnalysisArtifactPayload
 from fault_diagnosis.domain.canonical_turn import (
+    CanonicalGoal,
     CanonicalTurnRequest,
     GoalAuthorizationDecision,
     GoalReadinessDecision,
     GoalSourceResolution,
 )
+from fault_diagnosis.domain.diagnosis.contracts import DiagnosisRequest
+from fault_diagnosis.domain.security.permissions import build_auth_context
+from fault_diagnosis.domain.security.sql_safety import SourceTableResolutionError, build_fallback_sql_query
+
+from ..contracts import (
+    AnalysisNodeInputs,
+    ApprovalNodeInputs,
+    ArtifactRoleBinding,
+    ComparisonNodeInputs,
+    ExecutionPlan,
+    PlanSnapshotV2,
+    RagNodeInputs,
+    ReportNodeInputs,
+    SqlNodeInputs,
+    WorkorderNodeInputs,
+)
+from ..planning import PlanValidationResult, PlanValidator
 
 
 @dataclass(frozen=True)
@@ -29,7 +42,9 @@ class V2ExecutionDecision:
     fallback_reason: str = ""
 
 
-def prepare_v2_execution_plan(*, snapshot: PlanSnapshotV2, thread_id: str, auth_context: Any | None = None) -> ExecutionPlan:
+def prepare_v2_execution_plan(
+    *, snapshot: PlanSnapshotV2, thread_id: str, auth_context: Any | None = None
+) -> ExecutionPlan:
     return prepare_v2_execution_validation(
         snapshot=snapshot,
         thread_id=thread_id,
@@ -38,15 +53,18 @@ def prepare_v2_execution_plan(*, snapshot: PlanSnapshotV2, thread_id: str, auth_
 
 
 def prepare_v2_execution_validation(
-    *,
-    snapshot: PlanSnapshotV2,
-    thread_id: str,
-    auth_context: Any | None = None,
+    *, snapshot: PlanSnapshotV2, thread_id: str, auth_context: Any | None = None
 ) -> PlanValidationResult:
-    prepared = _prepare_plan(snapshot.execution_plan, snapshot=snapshot, thread_id=thread_id, auth_context=auth_context)
+    request = CanonicalTurnRequest.model_validate(snapshot.metadata["canonical_request"])
+    prepared = _prepare_plan(
+        snapshot.execution_plan,
+        request=request,
+        thread_id=thread_id,
+        auth_context=auth_context,
+    )
     return PlanValidator().validate(
         candidate_plan=prepared,
-        request=CanonicalTurnRequest.model_validate(snapshot.metadata["canonical_request"]),
+        request=request,
         authorization=[GoalAuthorizationDecision.model_validate(item) for item in snapshot.metadata["goal_authorization"]],
         readiness=[GoalReadinessDecision.model_validate(item) for item in snapshot.metadata["goal_readiness"]],
         sources=[GoalSourceResolution.model_validate(item) for item in snapshot.metadata["goal_source_resolution"]],
@@ -58,250 +76,152 @@ def decide_v2_execution(
     *,
     snapshot: PlanSnapshotV2,
     thread_id: str,
-    flags: Any | None = None,  # noqa: ARG001 - retained for offline eval compatibility.
+    flags: Any | None = None,  # noqa: ARG001 - public compatibility argument.
 ) -> V2ExecutionDecision:
-    skill_name = snapshot.skill_route.primary_skill or "clarification"
     prepared = prepare_v2_execution_plan(snapshot=snapshot, thread_id=thread_id)
-    reason = _readiness_blocker(skill_name, prepared, snapshot=snapshot)
-    return V2ExecutionDecision(True, skill_name, "v2", prepared, reason)
+    skill_name = next((node.skill for node in prepared.nodes if node.skill), "clarification")
+    return V2ExecutionDecision(True, skill_name, "v2", prepared, _readiness_blocker(prepared))
 
 
-def _prepare_plan(plan: ExecutionPlan, *, snapshot: PlanSnapshotV2, thread_id: str, auth_context: Any | None = None) -> ExecutionPlan:
+def _prepare_plan(
+    plan: ExecutionPlan,
+    *,
+    request: CanonicalTurnRequest,
+    thread_id: str,
+    auth_context: Any | None,
+) -> ExecutionPlan:
     prepared = plan.model_copy(deep=True)
-    auth = auth_context or build_auth_context(role="guest")
-    planned_node_types = {str(node.get("node_type") or "") for node in prepared.nodes}
+    auth = auth_context or build_auth_context(user_id=request.user_id, role="guest")
+    goals = {goal.goal_id: goal for goal in request.goals}
     for node in prepared.nodes:
-        node_type = str(node.get("node_type") or "")
-        inputs = dict(node.get("inputs") or {})
-        if node_type == "rag":
-            query = _rag_query(snapshot, node)
-            if query:
-                inputs["query"] = query
-            inputs.setdefault("retrieval_strategy", _rag_retrieval_strategy(snapshot))
-            if snapshot.effective_request_frame.requested_output_mode == "detailed":
-                inputs["top_k"] = max(int(inputs.get("top_k") or 1), 5)
-            refs = _rag_source_artifact_refs(snapshot)
-            if refs:
-                inputs.setdefault("source_artifact_refs", refs)
-        elif node_type == "sql":
-            node_devices = [str(item) for item in inputs.get("device_refs", []) if str(item)]
-            request = _diagnosis_request(snapshot, devices=node_devices)
+        inputs = dict(node.inputs)
+        goal = goals.get(node.goal_id)
+        if goal is None:
+            inputs["preparation_error"] = "canonical_goal_not_found"
+        elif node.node_type == "rag":
+            inputs["query"] = _rag_query(request, goal)
+            inputs.setdefault("retrieval_strategy", "fault_code_exact_then_semantic" if _fault_codes(goal) else "semantic_search")
+            inputs.setdefault("top_k", 5 if _fault_codes(goal) else 3)
+        elif node.node_type == "sql":
+            diagnosis_request = _diagnosis_request(request, goal, devices=_node_devices(inputs))
             try:
-                query = build_fallback_sql_query(request, asset_filters=node_devices)
+                query = build_fallback_sql_query(diagnosis_request, asset_filters=_node_devices(inputs))
             except SourceTableResolutionError as exc:
-                query = ""
-                inputs["source_table_error"] = exc.code
-            if query:
-                inputs.setdefault("sql_query", query)
-            inputs.setdefault("use_checker", False)
-            inputs.setdefault("equipment_hint", request.equipment_hint or "")
-            inputs.setdefault("fault_code_hint", request.fault_code_hint or "")
-        elif node_type == "report":
-            target_id = str(inputs.get("target_artifact_id") or snapshot.effective_request_frame.target_artifact_id or "")
-            if target_id:
-                inputs["target_artifact_id"] = target_id
-            elif not inputs.get("operation_report_payload") and "analysis" in planned_node_types:
-                inputs.setdefault("operation_report_payload", "__runtime_artifacts__")
-        elif node_type == "analysis" and snapshot.effective_request_frame.target_artifact_id:
-            access = resolve_target_artifact(
-                thread_id=thread_id,
-                artifact_id=snapshot.effective_request_frame.target_artifact_id,
-                auth=auth,
-                expected_types={"sql_artifact", "analysis_artifact"},
-                expected_devices=_effective_devices(snapshot),
-                require_complete_lineage=True,
-            )
-            if access.allowed and access.record is not None:
-                inputs["source_artifact_id"] = snapshot.effective_request_frame.target_artifact_id
-                inputs["source_artifact_type"] = str(access.record.manifest.get("artifact_type") or "")
+                inputs["preparation_error"] = exc.code
             else:
-                inputs["artifact_access_error"] = access.code
-        if node_type == "workorder":
-            confirming = snapshot.effective_request_frame.semantic_intent == "confirm_workorder_draft"
-            inputs.setdefault("create_draft", not confirming)
-            if confirming:
-                inputs["action_type"] = "confirm_workorder_draft"
-            inputs.setdefault("manual_confirmation_required", True)
-            inputs.setdefault("draft_only", True)
-            inputs.update(_workorder_manifest_inputs(thread_id, snapshot=snapshot, inputs=inputs, auth_context=auth))
-        if inputs:
-            node["inputs"] = inputs
+                inputs["sql_query"] = query
+                inputs.setdefault("use_checker", False)
+                inputs["equipment_hint"] = diagnosis_request.equipment_hint or ""
+                inputs["fault_code_hint"] = diagnosis_request.fault_code_hint or ""
+        access_error = _verify_external_bindings(
+            node=node,
+            inputs=inputs,
+            thread_id=thread_id,
+            auth_context=auth,
+        )
+        if access_error:
+            inputs["preparation_error"] = access_error
+        input_model = {
+            "sql": SqlNodeInputs,
+            "rag": RagNodeInputs,
+            "analysis": AnalysisNodeInputs,
+            "comparison": ComparisonNodeInputs,
+            "report": ReportNodeInputs,
+            "workorder": WorkorderNodeInputs,
+            "approval": ApprovalNodeInputs,
+        }.get(node.node_type)
+        bindings = [ArtifactRoleBinding.model_validate(item) for item in inputs.get("artifact_role_bindings", [])]
+        if input_model is not None and "source_artifact_refs" in input_model.model_fields:
+            inputs["source_artifact_refs"] = [
+                {"artifact_id": item.artifact_id, "artifact_type": item.artifact_type}
+                for item in bindings
+            ]
+        node.inputs = (
+            input_model.model_validate(inputs).model_dump(mode="json")
+            if input_model is not None
+            else inputs
+        )
     return prepared
 
 
-def _readiness_blocker(skill_name: str, plan: ExecutionPlan, *, snapshot: PlanSnapshotV2) -> str:
-    node_types = [str(node.get("node_type") or "") for node in plan.nodes]
-    if skill_name == "fault_code_explain":
-        has_query = any(str((node.get("inputs") or {}).get("query") or "").strip() for node in plan.nodes if node.get("node_type") == "rag")
-        return "" if "rag" in node_types and has_query else "fault_code_explain_missing_rag_query"
-    if skill_name == "runtime_status":
-        has_device = bool(_effective_devices(snapshot))
-        has_sql = any(str((node.get("inputs") or {}).get("sql_query") or "").strip() for node in plan.nodes if node.get("node_type") == "sql")
-        if not has_device:
-            return "runtime_status_missing_device"
-        return "" if "sql" in node_types and has_sql else "runtime_status_missing_sql_query"
-    if skill_name == "report_generation":
-        has_report_source = any(
-            any(
-                str((node.get("inputs") or {}).get(key) or "").strip()
-                for key in ("operation_report_payload", "source_artifact_id", "target_artifact_id")
-            )
-            for node in plan.nodes
-            if node.get("node_type") == "report"
+def _verify_external_bindings(*, node, inputs: dict[str, Any], thread_id: str, auth_context: Any) -> str:
+    bindings = [ArtifactRoleBinding.model_validate(item) for item in inputs.get("artifact_role_bindings", [])]
+    loaded: dict[str, Any] = {}
+    for binding in bindings:
+        if binding.producer_node_id:
+            continue
+        expected_devices = [binding.device_ref] if binding.device_ref else _node_devices(inputs)
+        access = resolve_target_artifact(
+            thread_id=thread_id,
+            artifact_id=binding.artifact_id,
+            auth=auth_context,
+            expected_types={binding.artifact_type},
+            expected_devices=expected_devices if len(expected_devices) == 1 else [],
+            require_complete_lineage=True,
         )
-        return "" if has_report_source else "report_generation_missing_reportable_artifact"
-    if skill_name in {"alarm_triage", "root_cause"}:
-        has_device = bool(_effective_devices(snapshot))
-        has_sql = any(str((node.get("inputs") or {}).get("sql_query") or "").strip() for node in plan.nodes if node.get("node_type") == "sql")
-        if "sql" in node_types and not has_device:
-            return f"{skill_name}_missing_device"
-        return "" if "sql" not in node_types or has_sql else f"{skill_name}_missing_sql_query"
-    if skill_name == "workorder_decision":
-        return ""
+        if not access.allowed or access.record is None or access.record.artifact_envelope is None:
+            return access.code
+        loaded[binding.role] = access.record.artifact_envelope
+    if node.node_type == "report" and "report_source" in loaded:
+        source = loaded["report_source"]
+        if not isinstance(source.payload, AnalysisArtifactPayload) or source.payload.report_input_snapshot is None:
+            return "legacy_analysis_missing_report_input_snapshot"
+        tabular = next((item for item in bindings if item.role == "tabular_source"), None)
+        expected_tabular = source.payload.report_input_snapshot.tabular_source_sql_artifact_id
+        if (tabular.artifact_id if tabular is not None else None) != expected_tabular:
+            return "report_tabular_source_snapshot_mismatch"
     return ""
 
 
-def _rag_query(snapshot: PlanSnapshotV2, node: Any | None = None) -> str:
-    effective = snapshot.effective_request_frame
-    codes = [item for item in _effective_fault_codes(snapshot) if str(item).strip()]
-    if (
-        effective.semantic_intent in {"expand_previous_answer", "show_manual_fields"}
-        and len(codes) == 1
-    ):
-        return f"{codes[0]} 故障原因 触发条件 处理措施 检查步骤 复位方法 详细说明"
-    query_spec_id = str((node.get("query_spec_id") if node is not None else "") or "")
-    for spec in effective.goal_query_specs:
-        if spec.query_spec_id == query_spec_id and spec.rag_query:
-            return spec.rag_query
-    queries = [item for item in snapshot.rewrite_frame.retrieval_queries if str(item).strip()]
-    if queries:
-        return str(queries[0])
-    if codes:
-        suffix = " 故障原因 处理措施 检查步骤 详细说明" if snapshot.effective_request_frame.requested_output_mode == "detailed" else ""
-        return f"{' '.join(codes)}{suffix}".strip()
-    return snapshot.rewrite_frame.user_rewrite or snapshot.intent_frame.normalized_message
-
-
-def _rag_retrieval_strategy(snapshot: PlanSnapshotV2) -> str:
-    if _effective_fault_codes(snapshot):
-        return "fault_code_exact_then_semantic"
-    return "semantic_search"
-
-
-def _rag_source_artifact_refs(snapshot: PlanSnapshotV2) -> list[dict[str, str]]:
-    target_id = snapshot.effective_request_frame.target_artifact_id
-    target_type = snapshot.effective_request_frame.target_artifact_type
-    if not target_id:
-        return []
-    return [{"artifact_id": target_id, "artifact_type": target_type or ""}]
-
-
-def _diagnosis_request(snapshot: PlanSnapshotV2, *, devices: list[str] | None = None) -> DiagnosisRequest:
-    devices = list(devices if devices is not None else _effective_devices(snapshot))
-    codes = _effective_fault_codes(snapshot)
+def _diagnosis_request(
+    request: CanonicalTurnRequest,
+    goal: CanonicalGoal,
+    *,
+    devices: list[str],
+) -> DiagnosisRequest:
+    codes = _fault_codes(goal) or [
+        entity.value for entity in request.current_parse.entities if entity.kind == "fault_code"
+    ]
+    window = goal.resolved_slots.get("time_window")
     return DiagnosisRequest(
-        user_message=snapshot.intent_frame.raw_message or snapshot.intent_frame.normalized_message,
-        user_identity="agent_engine_v2",
+        user_message=request.raw_message,
+        user_identity=request.user_id,
         equipment_hint=devices[0] if devices else None,
         fault_code_hint=codes[0] if codes else None,
         metric_hint=None,
-        time_range_hint=str(snapshot.intent_frame.time_window or "") or None,
-        needs_report="report" in snapshot.intent_frame.requested_outputs,
+        time_range_hint=str(window) if window else None,
+        needs_report=goal.capability == "generate_report",
         report_format="html",
-        analysis_goal=snapshot.rewrite_frame.user_rewrite or snapshot.intent_frame.normalized_message,
+        analysis_goal=goal.capability,
     )
 
 
-def _effective_devices(snapshot: PlanSnapshotV2) -> list[str]:
-    return list(snapshot.effective_request_frame.effective_device_refs or snapshot.intent_frame.device_refs)
+def _rag_query(request: CanonicalTurnRequest, goal: CanonicalGoal) -> str:
+    codes = _fault_codes(goal) or [
+        entity.value for entity in request.current_parse.entities if entity.kind == "fault_code"
+    ]
+    detail = " 详细说明" if any(marker in request.raw_message for marker in ("详细", "展开", "字段")) else ""
+    return f"{' '.join(codes)} 故障原因 触发条件 处理措施 检查步骤 复位方法{detail}" if codes else request.raw_message
 
 
-def _effective_fault_codes(snapshot: PlanSnapshotV2) -> list[str]:
-    return list(snapshot.effective_request_frame.effective_fault_code_refs or snapshot.intent_frame.fault_code_refs)
-
-
-def _workorder_manifest_inputs(
-    thread_id: str,
-    *,
-    snapshot: PlanSnapshotV2,
-    inputs: dict[str, Any],
-    auth_context: Any,
-) -> dict[str, Any]:
-    target_id = str(
-        inputs.get("target_artifact_id")
-        or snapshot.effective_request_frame.target_artifact_id
-        or ""
-    )
-    selected: dict[str, Any] = {}
-    if target_id:
-        confirming = snapshot.effective_request_frame.semantic_intent == "confirm_workorder_draft"
-        access = resolve_target_artifact(
-            thread_id=thread_id,
-            artifact_id=target_id,
-            auth=auth_context,
-            expected_types={"workorder_artifact"} if confirming else {"report_artifact", "analysis_artifact"},
-            expected_devices=_effective_devices(snapshot),
-            require_complete_lineage=True,
-        )
-        if not access.allowed or access.record is None:
-            return {"artifact_access_error": access.code}
-        selected = dict(access.record.manifest)
-    refs = _source_artifact_refs(selected, target_id=target_id, target_type=str(inputs.get("target_artifact_type") or ""))
-    result: dict[str, Any] = {}
-    if refs:
-        result["source_artifact_refs"] = refs
-    if selected:
-        result["selected_findings_summary"] = _as_text_list(selected.get("findings"))[:6]
-        result["risk_level"] = str(selected.get("risk_level") or selected.get("severity") or "")
-        result["diagnosis_summary"] = str(selected.get("diagnosis_summary") or "")
-        result["evidence_freshness"] = str(selected.get("freshness") or "")
-        result["report_url"] = str(selected.get("report_url") or selected.get("report_filename") or "")
-        if str(selected.get("freshness") or "") == "stale":
-            result["stale_evidence_disclosure_required"] = True
-    reuse_id = str(inputs.get("reuse_existing_artifact_id") or "")
-    if reuse_id:
-        reuse_access = resolve_target_artifact(
-            thread_id=thread_id,
-            artifact_id=reuse_id,
-            auth=auth_context,
-            expected_types={"workorder_artifact"},
-            expected_devices=_effective_devices(snapshot),
-            require_complete_lineage=True,
-        )
-        reuse_lineage = (
-            reuse_access.record.manifest.get("lineage")
-            if reuse_access.allowed and reuse_access.record is not None
-            else {}
-        )
-        reuse_sources = reuse_lineage.get("source_artifact_ids", []) if isinstance(reuse_lineage, dict) else []
-        if not reuse_access.allowed or reuse_access.record is None or target_id not in reuse_sources:
-            return {"artifact_access_error": reuse_access.code if not reuse_access.allowed else "workorder_idempotency_source_mismatch"}
-        result["reuse_existing_artifact_id"] = reuse_id
-        result["idempotency_key"] = str(inputs.get("idempotency_key") or "")
-    if snapshot.effective_request_frame.stale_evidence_disclosure_required:
-        result["stale_evidence_disclosure_required"] = True
-    return result
-
-
-def _source_artifact_refs(selected: dict[str, Any], *, target_id: str, target_type: str) -> list[dict[str, str]]:
-    refs: list[dict[str, str]] = []
-    artifact_id = str(selected.get("artifact_id") or target_id or "")
-    artifact_type = str(selected.get("artifact_type") or target_type or "")
-    if artifact_id:
-        refs.append({"artifact_id": artifact_id, "artifact_type": artifact_type})
-    for key, artifact_type in (
-        ("linked_analysis_artifact_id", "analysis_artifact"),
-        ("linked_sql_artifact_id", "sql_artifact"),
-    ):
-        value = str(selected.get(key) or "")
-        if value:
-            refs.append({"artifact_id": value, "artifact_type": artifact_type})
-    return refs
-
-
-def _as_text_list(value: Any) -> list[str]:
-    if value is None:
-        return []
+def _fault_codes(goal: CanonicalGoal) -> list[str]:
+    value = goal.resolved_slots.get("fault_code")
     if isinstance(value, list):
-        return [str(item) for item in value if str(item).strip()]
-    return [str(value)] if str(value).strip() else []
+        return [str(item) for item in value if str(item)]
+    return [str(value)] if value else []
+
+
+def _node_devices(inputs: dict[str, Any]) -> list[str]:
+    return [str(item) for item in inputs.get("device_refs", []) if str(item)]
+
+
+def _readiness_blocker(plan: ExecutionPlan) -> str:
+    for node in plan.nodes:
+        error = str(node.inputs.get("preparation_error") or "")
+        if error:
+            return error
+        if node.node_type == "sql" and not str(node.inputs.get("sql_query") or "").strip():
+            return "runtime_status_missing_sql_query"
+        if node.node_type == "rag" and not str(node.inputs.get("query") or "").strip():
+            return "fault_code_explain_missing_rag_query"
+    return ""

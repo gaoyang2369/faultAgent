@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from uuid import uuid4
 from typing import Any
 
@@ -12,7 +13,7 @@ from fault_diagnosis.domain.canonical_turn import (
     GoalSourceResolution,
 )
 
-from ..contracts import ExecutionPlan
+from ..contracts import ArtifactRoleBinding, ExecutionPlan
 from ..skills.router import skill_for_capability
 from .policy_bridge import NODE_REQUIRED_TOOL, PlanPolicyBridge, tables_for_assets
 
@@ -99,6 +100,7 @@ class PlanCompiler:
             for spec in node_specs
         ]
         edges = _compile_edges(nodes, request)
+        _bind_artifact_roles(nodes, edges=edges, source_by_goal=source)
         selected_skills = list(dict.fromkeys(node.skill for node in nodes if node.skill))
         metadata = self.bridge.skill_metadata(selected_skills)
         allowed_tools = list(dict.fromkeys(tool for item in metadata for tool in item.allowed_tools))
@@ -113,7 +115,7 @@ class PlanCompiler:
         approvals = _approval_requirements(nodes)
         return ExecutionPlan(
             plan_id=f"candidate_{uuid4().hex[:12]}",
-            plan_version="v2.canonical-phase2.validated",
+            plan_version="v2.canonical-phase3.validated",
             goals=plan_goals,
             nodes=nodes,
             edges=edges,
@@ -181,32 +183,29 @@ def _compile_node(spec: dict, *, request: CanonicalTurnRequest, source_by_goal: 
     primary = next(goal for goal in request.goals if goal.goal_id == goal_ids[0])
     source = next((source_by_goal[goal_id] for goal_id in goal_ids if source_by_goal[goal_id].artifact_id), None)
     devices = [spec["device"]] if spec["device"] else list(dict.fromkeys(device for goal_id in goal_ids for device in _goal_devices(request, goal_id, source_by_goal[goal_id])))
+    node_id = f"{node_type}_{spec['ordinal']}"
+    planned_output_artifact_id = _planned_artifact_id(request.request_id, node_id, node_type)
     inputs = {
+        "goal_id": primary.goal_id,
+        "node_id": node_id,
         "goal_ids": goal_ids,
         "query_spec_id": f"query_{primary.goal_id}",
         "target_scope_id": "scope_current",
+        "artifact_role_bindings": [],
         "device_refs": devices,
         "fault_code_refs": _fault_codes(request),
         "context_relation": "canonical_turn",
         "requested_output_mode": "report" if primary.capability == "generate_report" else "concise",
-        "requested_action": primary.capability if node_type in {"workorder", "approval"} else "",
-        "semantic_intent": primary.capability,
-        "stale_evidence_disclosure_required": bool(source and source.status == "stale"),
+        "canonical_capability": primary.capability,
+        "canonical_raw_message": request.raw_message,
+        "canonical_resolved_slots": dict(primary.resolved_slots),
+        "source_freshness": source.source_freshness if source is not None else "unknown",
+        "artifact_id": planned_output_artifact_id,
     }
-    if source is not None:
-        inputs.update(
-            target_artifact_id=source.artifact_id,
-            target_artifact_type=source.artifact_type,
-            source_freshness=source.source_freshness,
-        )
-        if node_type in {"rag", "workorder"}:
-            inputs["source_artifact_refs"] = [{"artifact_id": source.artifact_id, "artifact_type": source.artifact_type}]
     if node_type == "sql":
         inputs["requested_tables"] = tables_for_assets(devices)
     if node_type == "rag":
         inputs["query"] = request.raw_message
-    if node_type == "report" and source is None:
-        inputs["operation_report_payload"] = "__runtime_artifacts__"
     if node_type == "workorder":
         inputs.update(create_draft=True, draft_only=True, manual_confirmation_required=True)
         if source is not None:
@@ -215,24 +214,132 @@ def _compile_node(spec: dict, *, request: CanonicalTurnRequest, source_by_goal: 
                 source_selection_reason=source.reason,
                 idempotency_key=source.idempotency_key or "",
                 reuse_existing_artifact_id=source.reusable_result_artifact_id or "",
-                artifact_id=source.reusable_result_artifact_id or "",
             )
     if node_type == "approval":
         inputs["approval_requirements"] = []
     required_tool = NODE_REQUIRED_TOOL.get(node_type)
     return PlanNode(
-        node_id=f"{node_type}_{spec['ordinal']}",
+        node_id=node_id,
         node_type=node_type,
         skill=skill_for_capability(primary.capability),
         goal_id=primary.goal_id,
         goal_ids=goal_ids,
         query_spec_id=f"query_{primary.goal_id}",
         target_scope_id="scope_current",
-        failure_policy="continue_degraded" if node_type == "rag" else "block_all" if node_type in {"workorder", "approval"} else "block_dependents",
+        failure_policy="continue_degraded" if node_type == "rag" else "block_all" if node_type == "approval" else "block_dependents",
         inputs=inputs,
         required_tools=[required_tool] if required_tool else [],
         requested_tables=tables_for_assets(devices) if node_type == "sql" else [],
+        planned_output_artifact_id=planned_output_artifact_id,
     )
+
+
+def _planned_artifact_id(request_id: str, node_id: str, node_type: str) -> str:
+    digest = hashlib.sha256(f"{request_id}|{node_id}|{node_type}".encode("utf-8")).hexdigest()[:32]
+    return f"art_{node_type}_{digest}"
+
+
+def _bind_artifact_roles(nodes, *, edges: list[dict], source_by_goal: dict[str, GoalSourceResolution]) -> None:
+    """Bind exact external or planned dependency artifacts before runtime starts."""
+
+    by_id = {node.node_id: node for node in nodes}
+    incoming: dict[str, list] = {node.node_id: [] for node in nodes}
+    for edge in edges:
+        source = by_id.get(str(edge.get("from") or ""))
+        target = by_id.get(str(edge.get("to") or ""))
+        if source is not None and target is not None:
+            incoming[target.node_id].append(source)
+
+    for node in nodes:
+        bindings: list[ArtifactRoleBinding] = []
+        external = next(
+            (
+                source_by_goal[goal_id]
+                for goal_id in node.goal_ids
+                if source_by_goal[goal_id].artifact_id
+            ),
+            None,
+        )
+        if node.node_type == "analysis":
+            for producer in incoming[node.node_id]:
+                role = "runtime_sql_source" if producer.node_type == "sql" else "knowledge_source" if producer.node_type == "rag" else None
+                if role:
+                    bindings.append(_producer_binding(node, producer, role=role, required=role == "runtime_sql_source"))
+            if external is not None and external.artifact_type in {"sql_artifact", "knowledge_artifact"}:
+                role = "runtime_sql_source" if external.artifact_type == "sql_artifact" else "knowledge_source"
+                bindings.append(_external_binding(node, external, role=role, required=role == "runtime_sql_source"))
+        elif node.node_type == "comparison":
+            device_order = [str(item) for item in node.inputs.get("device_refs", [])]
+            for producer in incoming[node.node_id]:
+                if producer.node_type != "sql":
+                    continue
+                producer_devices = [str(item) for item in producer.inputs.get("device_refs", [])]
+                device = producer_devices[0] if len(producer_devices) == 1 else ""
+                order = device_order.index(device) if device in device_order else len(bindings)
+                binding = _producer_binding(node, producer, role="comparison_member", required=True)
+                bindings.append(binding.model_copy(update={"device_ref": device or None, "member_order": order}))
+        elif node.node_type == "report":
+            analysis = next((item for item in incoming[node.node_id] if item.node_type == "analysis"), None)
+            if analysis is not None:
+                bindings.append(_producer_binding(node, analysis, role="report_source", required=True))
+            elif external is not None and external.artifact_type == "analysis_artifact":
+                bindings.append(_external_binding(node, external, role="report_source", required=True))
+                if external.tabular_source_artifact_id:
+                    bindings.append(
+                        ArtifactRoleBinding(
+                            goal_id=node.goal_id,
+                            node_id=node.node_id,
+                            role="tabular_source",
+                            artifact_id=external.tabular_source_artifact_id,
+                            artifact_type="sql_artifact",
+                            required=False,
+                        )
+                    )
+        elif node.node_type == "workorder":
+            producer = next(
+                (item for item in incoming[node.node_id] if item.node_type == "report"),
+                next((item for item in incoming[node.node_id] if item.node_type == "analysis"), None),
+            )
+            if producer is not None:
+                bindings.append(_producer_binding(node, producer, role="workorder_source", required=True))
+            elif external is not None and external.artifact_type in {"analysis_artifact", "report_artifact"}:
+                bindings.append(_external_binding(node, external, role="workorder_source", required=True))
+        node.inputs["artifact_role_bindings"] = [item.model_dump(mode="json") for item in bindings]
+
+
+def _producer_binding(node, producer, *, role: str, required: bool) -> ArtifactRoleBinding:
+    return ArtifactRoleBinding(
+        goal_id=node.goal_id,
+        node_id=node.node_id,
+        role=role,
+        artifact_id=producer.planned_output_artifact_id,
+        artifact_type=_artifact_type_for_node(producer.node_type),
+        producer_goal_id=producer.goal_id,
+        producer_node_id=producer.node_id,
+        required=required,
+    )
+
+
+def _external_binding(node, source: GoalSourceResolution, *, role: str, required: bool) -> ArtifactRoleBinding:
+    return ArtifactRoleBinding(
+        goal_id=node.goal_id,
+        node_id=node.node_id,
+        role=role,
+        artifact_id=str(source.artifact_id or ""),
+        artifact_type=str(source.artifact_type or ""),
+        required=required,
+    )
+
+
+def _artifact_type_for_node(node_type: str) -> str:
+    return {
+        "sql": "sql_artifact",
+        "rag": "knowledge_artifact",
+        "analysis": "analysis_artifact",
+        "comparison": "comparison_artifact",
+        "report": "report_artifact",
+        "workorder": "workorder_artifact",
+    }.get(node_type, "")
 
 
 def _compile_edges(nodes, request: CanonicalTurnRequest) -> list[dict]:
@@ -249,6 +356,7 @@ def _compile_edges(nodes, request: CanonicalTurnRequest) -> list[dict]:
         connect(upstream, "analysis")
     connect("sql", "comparison")
     connect("analysis", "report")
+    connect("sql", "report")
     connect("analysis", "workorder")
     connect("report", "workorder")
     connect("workorder", "approval")
@@ -262,6 +370,13 @@ def _compile_edges(nodes, request: CanonicalTurnRequest) -> list[dict]:
                 edge = {"from": nodes_by_goal[dependency][-1].node_id, "to": nodes_by_goal[goal.goal_id][0].node_id}
                 if edge not in edges:
                     edges.append(edge)
+                if goal.capability == "generate_report":
+                    for producer in nodes_by_goal[dependency]:
+                        if producer.node_type != "sql":
+                            continue
+                        tabular_edge = {"from": producer.node_id, "to": nodes_by_goal[goal.goal_id][0].node_id}
+                        if tabular_edge not in edges:
+                            edges.append(tabular_edge)
     return edges
 
 

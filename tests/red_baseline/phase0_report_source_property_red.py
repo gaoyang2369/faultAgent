@@ -40,6 +40,8 @@ def _context() -> dict:
         owner_user_id="admin-phase0",
         owner_session_id="session-phase0",
         freshness="fresh",
+        report_input_snapshot_schema_version="report_input_snapshot.v1",
+        report_tabular_source_sql_artifact_id="sql:report-source",
         lineage=ArtifactLineage(
             lineage_status="complete",
             artifact_id=ANALYSIS_ID,
@@ -97,4 +99,3 @@ def test_report_source_binding_belongs_only_to_report_goal() -> None:
             violations[message] = observed
 
     assert not violations, json.dumps(violations, ensure_ascii=False, indent=2)
-

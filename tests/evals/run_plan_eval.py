@@ -28,6 +28,7 @@ from fault_diagnosis.domain.artifacts import (
     AnalysisArtifactPayload,
     KnowledgeArtifactPayload,
     ReportArtifactPayload,
+    ReportInputSnapshot,
     SqlArtifactPayload,
 )
 from fault_diagnosis.domain.diagnosis.analysis.contracts import DiagnosticAssessment, StructuredAnalysisArtifact
@@ -117,6 +118,12 @@ def install_artifact_fixture(thread_id: str, fixture_name: str | None) -> None:
                     "artifact_status": "complete",
                     "evidence_refs": list(manifest.evidence_refs or [f"eval:{manifest.artifact_id}"]),
                     "lineage": lineage,
+                    "report_input_snapshot_schema_version": (
+                        "report_input_snapshot.v1" if manifest.artifact_type == "analysis_artifact" else manifest.report_input_snapshot_schema_version
+                    ),
+                    "report_tabular_source_sql_artifact_id": (
+                        ids_by_type.get("sql_artifact", "") if manifest.artifact_type == "analysis_artifact" else manifest.report_tabular_source_sql_artifact_id
+                    ),
                 },
                 deep=True,
             )
@@ -162,6 +169,15 @@ def _fixture_payload(manifest: ArtifactManifest, legacy_payload: dict[str, Any])
         )
     if manifest.artifact_type == "analysis_artifact":
         analysis = AnalysisStepArtifact.model_validate(legacy_payload["analysis_artifact"])
+        device = (manifest.device_refs or ["J1"])[0]
+        runtime = RuntimeStatusAssessment(
+            device=device,
+            query_status="success",
+            runtime_status="attention",
+            data_basis=DataBasis(freshness="recent", usable_for_report=True, usable_for_workorder_draft=True),
+            sample_count=1,
+            event_codes=list(manifest.fault_code_refs),
+        )
         return AnalysisArtifactPayload(
             structured_analysis=StructuredAnalysisArtifact(
                 assessment=DiagnosticAssessment(
@@ -173,7 +189,19 @@ def _fixture_payload(manifest: ArtifactManifest, legacy_payload: dict[str, Any])
                     confidence="medium" if analysis.confidence == "medium" else "low",
                 ),
                 analysis_artifact=analysis,
-            )
+            ),
+            report_input_snapshot=ReportInputSnapshot(
+                device_refs=[device],
+                fault_codes=list(manifest.fault_code_refs),
+                sample_count=runtime.sample_count,
+                freshness_status=runtime.data_basis.freshness,
+                runtime_summary=runtime.model_dump(mode="json"),
+                diagnosis_summary=analysis.conclusion,
+                recommendations=list(analysis.recommendations),
+                source_sql_artifact_id=manifest.report_tabular_source_sql_artifact_id,
+                tabular_source_sql_artifact_id=manifest.report_tabular_source_sql_artifact_id,
+                generated_at="2026-07-14T10:00:00+00:00",
+            ),
         )
     if manifest.artifact_type == "report_artifact":
         raw_report = legacy_payload.get("report_artifact")

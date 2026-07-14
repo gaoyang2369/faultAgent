@@ -23,7 +23,7 @@ _SOURCE_TYPES = {
     "explain_fault_code": {"knowledge_artifact"},
     "diagnose_fault": {"analysis_artifact", "sql_artifact"},
     "resolution_recommendation": {"analysis_artifact", "sql_artifact"},
-    "generate_report": {"analysis_artifact", "comparison_artifact", "sql_artifact"},
+    "generate_report": {"analysis_artifact"},
     "create_workorder_draft": {"report_artifact", "analysis_artifact"},
 }
 
@@ -131,6 +131,20 @@ def resolve_goal_sources(
         if freshness == "stale":
             results.append(GoalSourceResolution(goal_id=goal.goal_id, status="stale", artifact_id=selected.artifact_id, artifact_type=selected.artifact_type, source_freshness=freshness, reason="explicit source is stale", candidate_artifact_ids=candidate_ids))
             continue
+        if goal.capability == "generate_report" and not selected.report_input_snapshot_schema_version:
+            results.append(
+                GoalSourceResolution(
+                    goal_id=goal.goal_id,
+                    status="blocked",
+                    artifact_id=selected.artifact_id,
+                    artifact_type=selected.artifact_type,
+                    source_freshness=freshness,
+                    reason="legacy Analysis Artifact has no immutable ReportInputSnapshot",
+                    reason_code="legacy_analysis_missing_report_input_snapshot",
+                    candidate_artifact_ids=candidate_ids,
+                )
+            )
+            continue
         satisfied = (
             goal.capability in {"diagnose_fault", "resolution_recommendation"}
             and selected.artifact_type == "analysis_artifact"
@@ -163,6 +177,11 @@ def resolve_goal_sources(
                 },
                 reusable_result_artifact_id=reusable_id,
                 idempotency_key=operation_key,
+                tabular_source_artifact_id=(
+                    selected.report_tabular_source_sql_artifact_id or None
+                    if goal.capability == "generate_report"
+                    else None
+                ),
             )
         )
     return results
@@ -190,8 +209,14 @@ def decide_goal_readiness(
             results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="blocked_missing_slot", blockers=unresolved))
         elif source.status == "satisfied_by_artifact":
             results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="satisfied_by_artifact"))
-        elif source.status in {"ambiguous", "unresolved", "incompatible", "stale"}:
-            results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="blocked_source", blockers=[source.status]))
+        elif source.status in {"ambiguous", "unresolved", "incompatible", "stale", "blocked"}:
+            results.append(
+                GoalReadinessDecision(
+                    goal_id=goal.goal_id,
+                    status="blocked_source",
+                    blockers=[source.reason_code or source.status],
+                )
+            )
         else:
             results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="ready"))
     return results

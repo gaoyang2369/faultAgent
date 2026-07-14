@@ -39,6 +39,7 @@ SourceResolutionStatus = Literal[
     "unresolved",
     "incompatible",
     "stale",
+    "blocked",
 ]
 GoalTerminalStatus = Literal["pending", "completed", "failed", "blocked", "denied", "satisfied"]
 
@@ -287,10 +288,12 @@ class GoalSourceResolution(CanonicalContract):
     artifact_type: str | None = None
     source_freshness: str = "unknown"
     reason: str = ""
+    reason_code: str = ""
     candidate_artifact_ids: list[str] = Field(default_factory=list)
     resolved_slots: dict[str, Any] = Field(default_factory=dict)
     reusable_result_artifact_id: str | None = None
     idempotency_key: str | None = None
+    tabular_source_artifact_id: str | None = None
 
 
 class GoalReadinessDecision(CanonicalContract):

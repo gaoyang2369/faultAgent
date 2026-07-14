@@ -196,6 +196,35 @@ class WorkflowRuntimeExecutor:
                 )
                 continue
 
+            preparation_error = str((node.get("inputs") or {}).get("preparation_error") or "")
+            if preparation_error:
+                error = {
+                    "code": preparation_error,
+                    "message": "Runtime node input preparation failed before business execution.",
+                }
+                result = node_result(
+                    node=node,
+                    status="blocked",
+                    input_summary=input_summary,
+                    output={"success": False, "preparation_error": preparation_error},
+                    error=error,
+                )
+                state.append_node_result(result)
+                state.errors.append(error)
+                node_status[node_id] = "blocked"
+                state.add_trace(
+                    "node_status",
+                    node_id=node_id,
+                    node_type=result.node_type,
+                    status="blocked",
+                    input_summary=input_summary,
+                    output_summary=_summarize_output(result.output),
+                    error=error,
+                )
+                if str(node.get("failure_policy") or "block_all") == "block_all":
+                    return self._finish_blocked(state, code=preparation_error, message=error["message"])
+                continue
+
             typed_node = self.node_registry.get(_node_type(node))
             if typed_node is None:
                 result = node_result(

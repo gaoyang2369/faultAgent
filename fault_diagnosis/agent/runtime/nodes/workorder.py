@@ -6,21 +6,26 @@ from typing import Any
 
 from fault_diagnosis.domain.artifacts import (
     AnalysisArtifactPayload,
-    KnowledgeArtifactPayload,
-    SqlArtifactPayload,
+    ReportArtifactPayload,
     WorkorderArtifactPayload,
 )
-from fault_diagnosis.domain.diagnosis.contracts import AnalysisStepArtifact, KnowledgeStepArtifact, WorkOrderSuggestion
+from fault_diagnosis.domain.diagnosis.contracts import WorkOrderSuggestion
+from fault_diagnosis.domain.diagnosis.runtime_status import RuntimeStatusAssessment
 from fault_diagnosis.domain.diagnosis.workorder.drafts import (
     build_pending_workorder_draft_action,
     build_workorder_draft_artifact,
     validate_pending_workorder_draft_action,
 )
-from fault_diagnosis.domain.diagnosis.workorder.suggestions import build_workorder_suggestion
 from ..executor import NodeExecutionOutput
 from ..state import RuntimeState
-from .base import auth_context, build_request, input_value, model_to_dict
-from ...artifacts import ArtifactPayloadError, hydrate_artifact_lineage, require_payload, source_envelopes
+from .base import auth_context, input_value, model_to_dict
+from ...artifacts import (
+    ArtifactPayloadError,
+    artifact_role_bindings,
+    load_bound_artifacts,
+    load_exact_artifact,
+    require_payload,
+)
 
 
 class WorkorderNode:
@@ -40,39 +45,37 @@ class WorkorderNode:
                 output=output,
                 error={"code": "workorder_dispatch_forbidden", "message": output["reason"]},
             )
-        access_error = str(input_value(node, "artifact_access_error", "") or "")
         devices = [str(item) for item in (input_value(node, "device_refs", []) or []) if str(item)]
-        if access_error:
-            return NodeExecutionOutput(
-                status="blocked",
-                output={"success": False, "artifact_access_error": access_error},
-                error={"code": access_error, "message": "目标 Artifact 精确读取或 lineage 校验失败。"},
-            )
         if len(devices) != 1:
             return NodeExecutionOutput(
                 status="blocked",
                 output={"success": False, "device_refs": devices},
                 error={"code": "workorder_requires_exactly_one_device", "message": "工单草稿必须明确绑定一台设备。"},
             )
-        target_id = str(input_value(node, "target_artifact_id", "") or "")
-        if action_type == "confirm_workorder_draft":
-            return _confirm_draft(node=node, state=state, target_id=target_id, devices=devices)
+        try:
+            sources = load_bound_artifacts(node=node, state=state, roles=("workorder_source",))
+        except ArtifactPayloadError as exc:
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"success": False, "artifact_access_error": exc.code},
+                error={"code": exc.code, "message": exc.message},
+            )
+        if len(sources) != 1:
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"success": False, "source_count": len(sources)},
+                error={"code": "workorder_source_cardinality", "message": "工单需要唯一的 Analysis 或 Report 来源。"},
+            )
+        source_id = sources[0].artifact_id
         reuse_id = str(input_value(node, "reuse_existing_artifact_id", "") or "")
         if reuse_id:
             return _reuse_existing_draft(
                 node=node,
                 state=state,
                 reuse_id=reuse_id,
-                source_id=target_id,
+                source_id=source_id,
                 devices=devices,
             )
-        if target_id and not hydrate_artifact_lineage(state, target_id):
-            return NodeExecutionOutput(
-                status="blocked",
-                output={"success": False, "artifact_access_error": "artifact_payload_invalid"},
-                error={"code": "artifact_payload_invalid", "message": "目标 Artifact typed payload 无法加载。"},
-            )
-        sources = source_envelopes("workorder", node=node, state=state)
         try:
             suggestion = _build_typed_suggestion(node=node, state=state, sources=sources)
         except ArtifactPayloadError as exc:
@@ -155,13 +158,19 @@ def _is_forbidden_action(action_type: str, node: dict[str, Any]) -> bool:
 
 
 def _confirm_draft(*, node: dict[str, Any], state: RuntimeState, target_id: str, devices: list[str]) -> NodeExecutionOutput:
-    if not hydrate_artifact_lineage(state, target_id):
+    try:
+        envelope = load_exact_artifact(
+            state=state,
+            artifact_id=target_id,
+            expected_type="workorder_artifact",
+            expected_devices=devices,
+        )
+    except ArtifactPayloadError as exc:
         return NodeExecutionOutput(
             status="blocked",
-            output={"success": False, "artifact_access_error": "artifact_payload_invalid"},
-            error={"code": "artifact_payload_invalid", "message": "工单草稿必须按 thread_id + artifact_id 精确读取。"},
+            output={"success": False, "artifact_access_error": exc.code},
+            error={"code": exc.code, "message": exc.message},
         )
-    envelope = state.artifact_registry.get(target_id)
     if envelope is None or envelope.artifact_type != "workorder_artifact" or set(envelope.lineage.subject_device_refs) != set(devices):
         return NodeExecutionOutput(
             status="blocked",
@@ -210,13 +219,19 @@ def _reuse_existing_draft(
     source_id: str,
     devices: list[str],
 ) -> NodeExecutionOutput:
-    if not hydrate_artifact_lineage(state, reuse_id):
+    try:
+        envelope = load_exact_artifact(
+            state=state,
+            artifact_id=reuse_id,
+            expected_type="workorder_artifact",
+            expected_devices=devices,
+        )
+    except ArtifactPayloadError as exc:
         return NodeExecutionOutput(
             status="blocked",
-            output={"success": False, "artifact_access_error": "artifact_payload_invalid"},
-            error={"code": "artifact_payload_invalid", "message": "既有工单草稿无法按精确 Artifact ID 读取。"},
+            output={"success": False, "artifact_access_error": exc.code},
+            error={"code": exc.code, "message": exc.message},
         )
-    envelope = state.artifact_registry.get(reuse_id)
     if envelope is None or envelope.artifact_type != "workorder_artifact" or set(envelope.lineage.subject_device_refs) != set(devices):
         return NodeExecutionOutput(
             status="blocked",
@@ -262,29 +277,55 @@ def _reuse_existing_draft(
 
 
 def _build_typed_suggestion(*, node: dict[str, Any], state: RuntimeState, sources: list[Any]) -> WorkOrderSuggestion:
-    sql_sources = [item for item in sources if item.artifact_type == "sql_artifact"]
-    if len(sql_sources) != 1:
-        raise ValueError("artifact_payload_invalid" if not sql_sources else "artifact_source_ambiguous")
-    sql_artifact = require_payload(sql_sources[0], SqlArtifactPayload).sql_artifact
-    analysis_sources = [item for item in sources if item.artifact_type == "analysis_artifact"]
-    if len(analysis_sources) > 1:
-        raise ValueError("artifact_source_ambiguous")
-    analysis_artifact = (
-        require_payload(analysis_sources[0], AnalysisArtifactPayload).structured_analysis.analysis_artifact
-        if analysis_sources
-        else AnalysisStepArtifact(success=False, conclusion="缺少分析产物", error="missing_analysis_artifact")
+    if len(sources) != 1:
+        raise ValueError("workorder_source_cardinality")
+    source = sources[0]
+    if source.artifact_type == "analysis_artifact":
+        payload = require_payload(source, AnalysisArtifactPayload)
+        snapshot = payload.report_input_snapshot
+    elif source.artifact_type == "report_artifact":
+        payload = require_payload(source, ReportArtifactPayload)
+        snapshot = payload.report_input_snapshot
+    else:
+        raise ValueError("artifact_role_type_mismatch")
+    if snapshot is None:
+        raise ValueError("legacy_analysis_missing_report_input_snapshot")
+    runtime = RuntimeStatusAssessment.model_validate(
+        {
+            key: value
+            for key, value in snapshot.runtime_summary.items()
+            if key in RuntimeStatusAssessment.model_fields
+        }
     )
-    knowledge_sources = [item for item in sources if item.artifact_type == "knowledge_artifact"]
-    knowledge_artifact = (
-        require_payload(knowledge_sources[0], KnowledgeArtifactPayload).knowledge_artifact
-        if len(knowledge_sources) == 1
-        else KnowledgeStepArtifact(success=False, query="", error="missing_knowledge_artifact")
+    severity_rank = {"unknown": 0, "normal": 1, "notice": 2, "warning": 3, "high": 4, "critical": 5}
+    needs_draft = bool(
+        runtime.runtime_status in {"attention", "abnormal"}
+        or snapshot.fault_codes
+        or severity_rank.get(str(snapshot.severity or "unknown"), 0) >= 3
     )
-    return build_workorder_suggestion(
-        request=build_request(state, node, goal="工单建议"),
-        sql_artifact=sql_artifact,
-        knowledge_artifact=knowledge_artifact,
-        analysis_artifact=analysis_artifact,
+    device = snapshot.device_refs[0] if len(snapshot.device_refs) == 1 else ""
+    code = snapshot.fault_codes[0] if snapshot.fault_codes else None
+    recommendations = list(snapshot.recommendations) or ["复核现场状态并确认异常是否持续"]
+    return WorkOrderSuggestion(
+        lifecycle_status="recommended_draft" if needs_draft else "not_recommended",
+        need_workorder=needs_draft,
+        reason="ReportInputSnapshot 显示需进一步处置。" if needs_draft else "ReportInputSnapshot 未达到工单建议条件。",
+        workorder_type="运行异常排查" if needs_draft else "",
+        priority="P1" if runtime.runtime_status == "abnormal" or snapshot.severity in {"high", "critical"} else "P2",
+        priority_label="高优先级" if runtime.runtime_status == "abnormal" or snapshot.severity in {"high", "critical"} else "中优先级",
+        risk_level="高" if runtime.runtime_status == "abnormal" or snapshot.severity in {"high", "critical"} else "中" if needs_draft else "低",
+        assignee_role="电气维护人员" if needs_draft else "",
+        suggested_completion_window="4小时内" if runtime.runtime_status == "abnormal" else "24小时内" if needs_draft else "",
+        diagnosis_conclusion=snapshot.diagnosis_summary,
+        key_evidence=[str(item.get("summary") or "") for item in snapshot.structured_findings if item.get("summary")][:6],
+        processing_steps=recommendations,
+        acceptance_criteria=[f"{code} 不再持续出现" if code else "运行状态恢复正常", "复测结果已记录"],
+        task_mappings=[{"evidence": snapshot.diagnosis_summary, "tasks": recommendations}],
+        equipment_object=device,
+        fault_code=code,
+        title=f"{device} {code or '运行异常'} 排查" if needs_draft else "",
+        trigger_source="故障诊断 Agent",
+        status="待确认" if needs_draft else "不建议",
     )
 
 
@@ -302,27 +343,21 @@ def _report_artifact_id(sources: list[Any]) -> str | None:
 
 
 def _source_projection(*, node: dict[str, Any], state: RuntimeState, suggestion: WorkOrderSuggestion) -> dict[str, Any]:
-    target_evidence_bundle_id = str(input_value(node, "target_evidence_bundle_id", "") or "").strip()
-    source_refs = input_value(node, "source_artifact_refs", []) or []
-    if not isinstance(source_refs, list):
-        source_refs = []
-    supporting_refs = input_value(node, "supporting_evidence_refs", []) or []
-    if not isinstance(supporting_refs, list):
-        supporting_refs = []
-    stale_required = bool(
-        input_value(node, "stale_evidence_disclosure_required", False)
-    )
-    evidence_freshness = str(input_value(node, "evidence_freshness", "") or ("stale" if stale_required else "unknown"))
+    bindings = artifact_role_bindings(node, "workorder_source")
+    source_refs = [
+        {"artifact_id": item.artifact_id, "artifact_type": item.artifact_type}
+        for item in bindings
+    ]
+    evidence_freshness = str(input_value(node, "source_freshness", "") or "unknown")
     manual_confirmation_required = bool(
         suggestion.lifecycle_status == "recommended_draft" or suggestion.need_workorder is True
     )
     return {
         "source_artifact_refs": list(source_refs),
-        "target_evidence_bundle_id": target_evidence_bundle_id,
-        "supporting_evidence_refs": list(supporting_refs),
-        "stale_evidence_disclosure_required": stale_required,
+        "supporting_evidence_refs": [],
+        "stale_evidence_disclosure_required": evidence_freshness == "stale",
         "evidence_freshness": evidence_freshness,
-        "generated_from_previous_artifact": bool(target_evidence_bundle_id or source_refs),
+        "generated_from_previous_artifact": bool(source_refs),
         "manual_confirmation_required": manual_confirmation_required,
         "draft_only": manual_confirmation_required,
         "dispatch_forbidden": True,
