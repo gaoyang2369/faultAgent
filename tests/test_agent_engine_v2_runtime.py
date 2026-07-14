@@ -10,12 +10,13 @@ from fault_diagnosis.agent import (
     WorkflowRuntimeExecutor,
 )
 from fault_diagnosis.agent.runtime import NodeExecutionOutput
+from fault_diagnosis.agent.planning import CANONICAL_PLAN_VERSION
 
 
 def _plan(
     *,
     plan_id: str = "plan.validated",
-    plan_version: str = "v2.candidate.phase4.validated",
+    plan_version: str = CANONICAL_PLAN_VERSION,
     nodes: list[dict[str, Any]] | None = None,
     edges: list[dict[str, Any]] | None = None,
     approval_requirements: list[dict[str, Any]] | None = None,
@@ -61,7 +62,7 @@ def test_runtime_executes_validated_runtime_status_plan_with_fake_sql_node() -> 
 
 def test_runtime_rejects_unvalidated_candidate_plan_without_node_execution() -> None:
     result = WorkflowRuntimeExecutor().execute(
-        _plan(plan_version="v2.candidate.phase4"),
+        _plan(plan_version="v2.unknown.candidate"),
         trace_id="trace.runtime",
     )
 
@@ -71,7 +72,7 @@ def test_runtime_rejects_unvalidated_candidate_plan_without_node_execution() -> 
     assert result.complete_payload["status"] == "blocked"
     assert result.trace["errors"][0]["code"] == "validated_plan_required"
 
-    blocked_result = WorkflowRuntimeExecutor().execute(_plan(plan_version="v2.candidate.phase4.validated.blocked"))
+    blocked_result = WorkflowRuntimeExecutor().execute(_plan(plan_version="v2.unknown.validated"))
     assert blocked_result.status == "blocked"
     assert blocked_result.node_results == []
 

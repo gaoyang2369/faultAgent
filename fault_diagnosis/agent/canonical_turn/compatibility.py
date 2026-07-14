@@ -1,4 +1,4 @@
-"""One-way Phase 2 projection from canonical authority to legacy runtime frames."""
+"""One-way projection from canonical authority to deprecated debug frames."""
 
 from __future__ import annotations
 

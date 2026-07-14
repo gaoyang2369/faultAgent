@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fault_diagnosis.agent import ExecutionPlan, PlanGoal, WorkflowRuntimeExecutor
 from fault_diagnosis.agent.output.answer import build_output_frame
+from fault_diagnosis.agent.planning import CANONICAL_PLAN_VERSION
 from fault_diagnosis.agent.evidence import (
     EvidenceLedgerWriter,
     build_v2_claim,
@@ -256,7 +257,7 @@ def test_runtime_uses_v2_ledger_writer_for_real_tool_node_evidence() -> None:
 
     plan = ExecutionPlan(
         plan_id="plan.ledger.runtime",
-        plan_version="v2.phase7.validated",
+        plan_version=CANONICAL_PLAN_VERSION,
         nodes=[
             {
                 "node_id": "sql_1",

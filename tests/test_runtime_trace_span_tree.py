@@ -4,6 +4,7 @@ from typing import Any
 
 from fault_diagnosis.agent import ExecutionPlan, WorkflowRuntimeExecutor
 from fault_diagnosis.agent.runtime import NodeExecutionOutput
+from fault_diagnosis.agent.planning import CANONICAL_PLAN_VERSION
 from fault_diagnosis.platform.observability import TraceRecorder
 
 
@@ -17,7 +18,7 @@ class SkippedKg:
 def test_runtime_lifecycle_events_merge_into_node_spans() -> None:
     plan = ExecutionPlan(
         plan_id="plan.runtime.trace",
-        plan_version="v2.test.validated",
+        plan_version=CANONICAL_PLAN_VERSION,
         nodes=[
             {"node_id": "sql_1", "node_type": "sql"},
             {"node_id": "kg_1", "node_type": "kg"},
@@ -37,4 +38,3 @@ def test_runtime_lifecycle_events_merge_into_node_spans() -> None:
     assert kg_span.attributes["reason"] == "not_configured"
     assert any(event.name == "node.running" for span in node_spans for event in span.events)
     assert envelope.metadata["executed_nodes"] == ["sql_1"]
-

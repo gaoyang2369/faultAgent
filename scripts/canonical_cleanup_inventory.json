@@ -1,0 +1,366 @@
+{
+  "schema_version": "canonical_cleanup_inventory.v1",
+  "generated_for": "refactor/v2 phase 5 canonical cutover",
+  "baseline_commit": "cc2f6413f060e8b99769bb99aaec7de49b21d125",
+  "categories": {
+    "A": "production internal dead code; safe to delete after tests",
+    "B": "test or fixture compatibility; migrate before deletion",
+    "C": "public API or persisted-data compatibility; retain at an explicit boundary",
+    "D": "debug or trace serialization only; retain but never use for decisions",
+    "E": "unconfirmed; stop before changing"
+  },
+  "items": [
+    {
+      "path": "fault_diagnosis/agent/output/answer.py",
+      "symbol": "build_output_frame.requested_variant",
+      "line": 30,
+      "category": "A",
+      "reason": "The parameter is never read and therefore cannot affect canonical answer selection.",
+      "public_contract": false,
+      "persisted_data_impact": "none",
+      "planned_action": "remove parameter and all internal callers"
+    },
+    {
+      "path": "fault_diagnosis/server/agent_gateway/streaming.py",
+      "symbol": "requested_variant keyword argument",
+      "line": 278,
+      "category": "A",
+      "reason": "The blocked-stream caller passes a value that build_output_frame ignores.",
+      "public_contract": false,
+      "persisted_data_impact": "none",
+      "planned_action": "remove keyword argument; preserve variant derived from canonical status and deliverables"
+    },
+    {
+      "path": "tests/test_agent_engine_v2_output_projection.py",
+      "symbol": "requested_variant compatibility case",
+      "line": 235,
+      "category": "B",
+      "reason": "A test fixture passes the ignored internal argument.",
+      "public_contract": false,
+      "persisted_data_impact": "none",
+      "planned_action": "replace with an explicit invariance and signature-removal regression"
+    },
+    {
+      "path": "scripts/legacy_authority_scan.py",
+      "symbol": "OUTPUT_AUTHORITY_NAMES.requested_variant/compatibility_call",
+      "line": 56,
+      "category": "D",
+      "reason": "Scanner vocabulary is a ratchet, not runtime authority.",
+      "public_contract": false,
+      "persisted_data_impact": "none",
+      "planned_action": "retain so reintroduction fails strict scanning"
+    },
+    {
+      "path": "fault_diagnosis/agent/contracts.py",
+      "symbol": "DeliverableResult.deliverable_type/payload/source_artifact_ids",
+      "line": 586,
+      "category": "C",
+      "reason": "Legacy SSE and stored complete payloads may contain these names, but keeping them writable on the canonical model creates two states.",
+      "public_contract": true,
+      "persisted_data_impact": "historical complete payload readers may observe these fields",
+      "planned_action": "remove from canonical model and move to one-way LegacyDeliverableProjection at serialization boundaries"
+    },
+    {
+      "path": "fault_diagnosis/agent/contracts.py",
+      "symbol": "DeliverableResult.project_compatibility_fields",
+      "line": 602,
+      "category": "A",
+      "reason": "The two-way validator lets legacy aliases populate canonical state and vice versa.",
+      "public_contract": false,
+      "persisted_data_impact": "model validation behavior only",
+      "planned_action": "delete after adding explicit boundary projection"
+    },
+    {
+      "path": "fault_diagnosis/agent/output/deliverables.py",
+      "symbol": "DeliverableAssembler legacy alias writes",
+      "line": 173,
+      "category": "A",
+      "reason": "Canonical assembler already writes capability, structured_content and artifact_ids.",
+      "public_contract": false,
+      "persisted_data_impact": "none when boundary projection is preserved",
+      "planned_action": "stop constructing legacy fields"
+    },
+    {
+      "path": "fault_diagnosis/agent/output/presenter.py",
+      "symbol": "CompositePresenter legacy deliverable reads",
+      "line": 97,
+      "category": "A",
+      "reason": "Presenter decisions currently read deliverable_type and payload despite canonical capability and structured_content being present.",
+      "public_contract": false,
+      "persisted_data_impact": "none",
+      "planned_action": "switch all decisions to capability and structured_content"
+    },
+    {
+      "path": "fault_diagnosis/agent/runtime/executor.py",
+      "symbol": "deliverable_statuses.deliverable_type",
+      "line": 501,
+      "category": "D",
+      "reason": "Trace summary is serialized for diagnostics and must not drive execution.",
+      "public_contract": false,
+      "persisted_data_impact": "trace consumers may expect the legacy label",
+      "planned_action": "derive the label through boundary projection while recording canonical capability"
+    },
+    {
+      "path": "fault_diagnosis/agent/observability/cutover_observation.py",
+      "symbol": "deliverable_type observation",
+      "line": 86,
+      "category": "D",
+      "reason": "Observation output is diagnostics-only but currently reads the legacy field from the canonical object.",
+      "public_contract": false,
+      "persisted_data_impact": "trace observation shape",
+      "planned_action": "derive compatibility label from canonical capability"
+    },
+    {
+      "path": "fault_diagnosis/agent/output/sse_projection.py",
+      "symbol": "composite_output serialization",
+      "line": 139,
+      "category": "C",
+      "reason": "This is the existing external chat_complete serialization boundary.",
+      "public_contract": true,
+      "persisted_data_impact": "complete payload is persisted and consumed by clients",
+      "planned_action": "emit canonical fields plus explicit compatibility projection only here"
+    },
+    {
+      "path": "tests/test_agent_engine_v2_golden_outputs.py",
+      "symbol": "legacy DeliverableResult fixture constructor",
+      "line": 15,
+      "category": "B",
+      "reason": "Golden fixtures instantiate the canonical model through legacy aliases.",
+      "public_contract": false,
+      "persisted_data_impact": "none",
+      "planned_action": "migrate fixtures to capability and structured_content without changing goldens"
+    },
+    {
+      "path": "tests/test_agent_engine_v2_convergence_blackbox.py",
+      "symbol": "legacy deliverable payload assertions",
+      "line": 186,
+      "category": "C",
+      "reason": "Black-box tests represent external complete-payload consumers.",
+      "public_contract": true,
+      "persisted_data_impact": "asserts serialized compatibility schema",
+      "planned_action": "retain as boundary contract and add canonical schema assertions"
+    },
+    {
+      "path": "fault_diagnosis/agent/runtime/executor.py",
+      "symbol": "_output_goals",
+      "line": 576,
+      "category": "A",
+      "reason": "Runtime silently invents missing goal IDs and capabilities for pre-canonical fixtures.",
+      "public_contract": false,
+      "persisted_data_impact": "none; execution plans should already be canonical",
+      "planned_action": "delete and pass validated plan.goals directly"
+    },
+    {
+      "path": "fault_diagnosis/agent/output/deliverables.py",
+      "symbol": "_canonical_goal_projection",
+      "line": 325,
+      "category": "A",
+      "reason": "Output layer performs a second implicit upgrade of incomplete PlanGoal fixtures.",
+      "public_contract": false,
+      "persisted_data_impact": "none",
+      "planned_action": "replace with strict canonical goal validation"
+    },
+    {
+      "path": "tests/test_agent_engine_v2_output_projection.py",
+      "symbol": "pre-canonical ExecutionPlan goals fixtures",
+      "line": 91,
+      "category": "B",
+      "reason": "Fixture omits canonical goal_id and capability and relies on runtime upgrade.",
+      "public_contract": false,
+      "persisted_data_impact": "none",
+      "planned_action": "migrate fixture to PlanGoal canonical fields"
+    },
+    {
+      "path": "tests/test_agent_engine_v2_engineer_admin_contracts.py",
+      "symbol": "PlanGoal fixtures missing capability",
+      "line": 282,
+      "category": "B",
+      "reason": "Fixtures rely on requested_deliverables to infer capability.",
+      "public_contract": false,
+      "persisted_data_impact": "none",
+      "planned_action": "add explicit canonical capability"
+    },
+    {
+      "path": "fault_diagnosis/agent/planning/compiler.py",
+      "symbol": "v2.canonical-phase3.validated writer",
+      "line": 121,
+      "category": "A",
+      "reason": "New plans still write a temporary implementation-phase version.",
+      "public_contract": true,
+      "persisted_data_impact": "new plan snapshots and trace policy IDs",
+      "planned_action": "write centralized stable v2.canonical.validated"
+    },
+    {
+      "path": "tests/test_canonical_turn_phase3_loader_migration.py",
+      "symbol": "v2.canonical-phase3.validated historical fixture",
+      "line": 149,
+      "category": "B",
+      "reason": "Fixture represents a historical accepted plan version.",
+      "public_contract": false,
+      "persisted_data_impact": "models historical persisted plan input",
+      "planned_action": "retain as read-compatibility test and assert normalization metadata"
+    },
+    {
+      "path": "fault_diagnosis/agent/runtime/executor.py",
+      "symbol": "_is_executable_validated_plan",
+      "line": 631,
+      "category": "C",
+      "reason": "Runtime reads persisted or caller-provided plan versions but only checks for a substring.",
+      "public_contract": true,
+      "persisted_data_impact": "historical plans must remain readable while unknown versions must not execute",
+      "planned_action": "use centralized version classifier; accept stable and known historical versions, reject unknown"
+    },
+    {
+      "path": "fault_diagnosis/agent/runtime/state.py",
+      "symbol": "runtime trace plan version",
+      "line": 115,
+      "category": "D",
+      "reason": "Trace currently omits actual and normalized read versions.",
+      "public_contract": false,
+      "persisted_data_impact": "adds diagnostics fields without rewriting history",
+      "planned_action": "record actual plan_version, normalized stable version and compatibility mode"
+    },
+    {
+      "path": "fault_diagnosis/agent/canonical_turn/compatibility.py",
+      "symbol": "LegacyFrameProjection",
+      "line": 39,
+      "category": "C",
+      "reason": "The projection is still used by PlanSnapshotV2 public exports, devtools and trace compatibility.",
+      "public_contract": true,
+      "persisted_data_impact": "historical plan/debug payloads contain these frames",
+      "planned_action": "retain one-way projection, mark compatibility-only and keep it outside canonical decision inputs"
+    },
+    {
+      "path": "fault_diagnosis/agent/engine.py",
+      "symbol": "IntentFrame/RewriteFrame/EffectiveRequestFrame snapshot fields",
+      "line": 120,
+      "category": "D",
+      "reason": "They are generated after canonical decisions and used by trace/debug and compatibility clients.",
+      "public_contract": true,
+      "persisted_data_impact": "plan snapshot schema",
+      "planned_action": "retain internally; move HTTP preview serialization under compatibility_debug"
+    },
+    {
+      "path": "fault_diagnosis/server/use_cases/turn_execution.py",
+      "symbol": "plan_compat_payload.resolved_context and legacy plan fields",
+      "line": 288,
+      "category": "C",
+      "reason": "The /chat/plan endpoint exposes a legacy-compatible shape alongside canonical data.",
+      "public_contract": true,
+      "persisted_data_impact": "none because preview is read-only, but API clients may depend on it",
+      "planned_action": "make canonical structures top-level and nest compatibility fields in compatibility_debug with compatibility_only=true"
+    },
+    {
+      "path": "fault_diagnosis/server/use_cases/chat_service.py",
+      "symbol": "plan_chat snapshot.model_dump",
+      "line": 356,
+      "category": "C",
+      "reason": "Dumping the whole snapshot puts legacy frames at the same level as canonical request and decisions.",
+      "public_contract": true,
+      "persisted_data_impact": "none; endpoint is read-only",
+      "planned_action": "serialize an explicit canonical preview schema and a nested compatibility_debug projection"
+    },
+    {
+      "path": "fault_diagnosis/agent/contracts.py",
+      "symbol": "IntentFrame/RewriteFrame/EffectiveRequestFrame",
+      "line": 40,
+      "category": "C",
+      "reason": "Types are exported publicly and used by older unit-level component APIs and trace serialization.",
+      "public_contract": true,
+      "persisted_data_impact": "historical snapshots may contain their schemas",
+      "planned_action": "retain deprecated types for this compatibility cycle; never use them as production authority"
+    },
+    {
+      "path": "fault_diagnosis/agent/__init__.py",
+      "symbol": "legacy frame and builder exports",
+      "line": 6,
+      "category": "C",
+      "reason": "Tests and potential external imports consume these package-level names.",
+      "public_contract": true,
+      "persisted_data_impact": "none",
+      "planned_action": "retain with deprecation documentation; candidate for a later compatibility cycle"
+    },
+    {
+      "path": "fault_diagnosis/agent/understanding/intent_frame.py",
+      "symbol": "IntentFrameBuilder",
+      "line": 36,
+      "category": "B",
+      "reason": "No production entrypoint calls it, but multiple component tests cover historical understanding behavior.",
+      "public_contract": true,
+      "persisted_data_impact": "none",
+      "planned_action": "retain deprecated for this cycle; do not reconnect to production"
+    },
+    {
+      "path": "fault_diagnosis/agent/understanding/rewrite.py",
+      "symbol": "RewriteFrameBuilder",
+      "line": 11,
+      "category": "B",
+      "reason": "No production entrypoint calls it, but historical component tests and exports still consume it.",
+      "public_contract": true,
+      "persisted_data_impact": "none",
+      "planned_action": "retain deprecated for this cycle; do not reconnect to production"
+    },
+    {
+      "path": "fault_diagnosis/agent/context/effective_request.py",
+      "symbol": "EffectiveRequestBuilder and executed_semantic_intent",
+      "line": 122,
+      "category": "B",
+      "reason": "Legacy context tests still use the builder; production planning uses CanonicalTurnRequest instead.",
+      "public_contract": true,
+      "persisted_data_impact": "none",
+      "planned_action": "retain deprecated for this cycle; ensure strict scan proves no authority read in production components"
+    },
+    {
+      "path": "fault_diagnosis/platform/observability/trace_recorder.py",
+      "symbol": "primary_intent/primary_skill/executed_semantic_intent trace attributes",
+      "line": 117,
+      "category": "D",
+      "reason": "Values are emitted for diagnostics after canonical planning and are not read back for decisions.",
+      "public_contract": false,
+      "persisted_data_impact": "trace compatibility",
+      "planned_action": "retain as compatibility/debug attributes and document non-authoritative status"
+    },
+    {
+      "path": "fault_diagnosis/agent/observability/cutover_observation.py",
+      "symbol": "primary_execution_capability/compatibility_only",
+      "line": 79,
+      "category": "D",
+      "reason": "Observation summarizes canonical goals and is not an input to routing, compilation, validation or output selection.",
+      "public_contract": false,
+      "persisted_data_impact": "trace observation compatibility",
+      "planned_action": "retain diagnostics-only projection"
+    },
+    {
+      "path": "fault_diagnosis/domain/artifacts/contracts.py",
+      "symbol": "ArtifactLineage.source_artifact_ids",
+      "line": 126,
+      "category": "C",
+      "reason": "This is canonical audit lineage, not the DeliverableResult compatibility alias.",
+      "public_contract": true,
+      "persisted_data_impact": "required for historical artifact lineage",
+      "planned_action": "retain; exact runtime loading continues to use ArtifactRoleBinding instead"
+    },
+    {
+      "path": "fault_diagnosis/domain/artifacts/legacy_loader.py",
+      "symbol": "historical lineage source_artifact_ids reader",
+      "line": 98,
+      "category": "C",
+      "reason": "Historical artifact envelopes require this read compatibility.",
+      "public_contract": true,
+      "persisted_data_impact": "required to read persisted artifact_envelope.v2 data",
+      "planned_action": "retain read-only compatibility; never promote audit ancestors into runtime inputs"
+    },
+    {
+      "path": "fault_diagnosis/agent/compat/phase1_planning.py",
+      "symbol": "legacy_skill_route/validate_legacy_candidate",
+      "line": 13,
+      "category": "B",
+      "reason": "Production canonical calls do not use these adapters, but legacy component tests still enter PlanValidator without a canonical request.",
+      "public_contract": false,
+      "persisted_data_impact": "none",
+      "planned_action": "retain isolated in compat for this cycle; list as next-cycle deletion candidate"
+    }
+  ],
+  "unconfirmed_items": [],
+  "audit_conclusion": "No category E references were found. Changes may proceed only along the planned actions above."
+}

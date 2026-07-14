@@ -11,6 +11,7 @@ from ..contracts import ArtifactEnvelope, EvidenceLedger, ExecutionPlan, NodeRes
 from ..evidence import create_ledger, finalize_ledger
 from ..evidence.ledger import EvidenceLedgerWriter
 from fault_diagnosis.domain.security.contracts import AuthContext
+from ..planning.versions import resolve_plan_version
 
 RuntimeStatus = Literal["completed", "blocked", "failed", "cancelled"]
 
@@ -116,6 +117,7 @@ class RuntimeState(BaseModel):
         finalize_ledger(self.evidence_ledger, auth_context=self.auth_context, artifact_refs=artifact_refs)
 
     def trace_payload(self) -> dict[str, Any]:
+        version = resolve_plan_version(self.plan.plan_version)
         events = [event.model_dump(mode="json") for event in self.trace_events]
         requested_goals = [goal.model_dump(mode="json") for goal in self.plan.goals]
         executed_goal_ids = list(
@@ -134,6 +136,9 @@ class RuntimeState(BaseModel):
             "thread_id": self.thread_id,
             "request_id": self.request_id,
             "plan_id": self.plan.plan_id,
+            "plan_version": version.actual_version,
+            "normalized_plan_version": version.normalized_version,
+            "plan_version_mode": version.compatibility_mode,
             "node_order": [
                 event.node_id
                 for event in self.trace_events

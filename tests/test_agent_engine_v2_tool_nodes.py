@@ -8,6 +8,7 @@ from fault_diagnosis.domain.security.rag_acl import filter_kb_documents
 from fault_diagnosis.domain.security.runtime_context import get_current_auth_context
 from fault_diagnosis.platform.tools import report_tools
 from fault_diagnosis.agent.runtime.tool_runtime import ToolRuntime
+from fault_diagnosis.agent.planning import CANONICAL_PLAN_VERSION
 
 
 def _plan(nodes: list[dict[str, Any]], *, edges: list[dict[str, Any]] | None = None, approvals: list[dict[str, Any]] | None = None) -> ExecutionPlan:
@@ -67,7 +68,7 @@ def _plan(nodes: list[dict[str, Any]], *, edges: list[dict[str, Any]] | None = N
     deliverable = deliverable_by_capability.get(capability, "")
     return ExecutionPlan(
         plan_id="plan.phase6.validated",
-        plan_version="v2.phase6.validated",
+        plan_version=CANONICAL_PLAN_VERSION,
         goals=[{
             "goal_id": "goal_test",
             "capability": capability,

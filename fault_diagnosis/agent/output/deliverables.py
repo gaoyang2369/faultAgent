@@ -23,28 +23,6 @@ from .goal_results import (
 )
 
 
-_DELIVERABLE_TYPES = {
-    "fault_code_explanation",
-    "runtime_status",
-    "runtime_comparison",
-    "diagnosis",
-    "recommendations",
-    "report",
-    "workorder_draft",
-    "clarification",
-    "permission_denied",
-}
-
-_DELIVERABLE_BY_CAPABILITY = {
-    "explain_fault_code": "fault_code_explanation",
-    "check_runtime_status": "runtime_status",
-    "compare_runtime_status": "runtime_comparison",
-    "diagnose_fault": "diagnosis",
-    "resolution_recommendation": "recommendations",
-    "generate_report": "report",
-    "create_workorder_draft": "workorder_draft",
-}
-
 _TITLE_BY_CAPABILITY = {
     "explain_fault_code": "故障码解释",
     "check_runtime_status": "运行状态",
@@ -82,7 +60,7 @@ class DeliverableAssembler:
         comparison = _as_dict(artifacts.get("comparison_artifact"))
         sql = _as_dict(artifacts.get("sql_artifact"))
         sql_ids = [str(item) for item in artifacts.get("sql_artifact_ids", []) if str(item)]
-        normalized_goals = [_canonical_goal_projection(_dump(goal) or {}, index) for index, goal in enumerate(goals)]
+        normalized_goals = [_strict_canonical_goal(_dump(goal) or {}) for goal in goals]
         executions = goal_execution_results or build_goal_execution_results(
             goals=normalized_goals,
             node_results=node_results,
@@ -98,11 +76,6 @@ class DeliverableAssembler:
         for goal in ordered_user_goals(normalized_goals):
             goal_id = str(goal.get("goal_id") or "")
             capability = str(goal.get("capability") or "")
-            kinds = list(goal.get("requested_deliverables") or goal.get("expected_outputs") or [])
-            kind = _DELIVERABLE_BY_CAPABILITY.get(capability) or next(
-                (item for item in kinds if item in _DELIVERABLE_TYPES),
-                "clarification",
-            )
             execution = execution_by_goal.get(goal_id)
             terminal_status = execution.status if execution is not None else "failed"
             dependency_ids = dependency_closure(goal_id, normalized_goals)
@@ -115,7 +88,7 @@ class DeliverableAssembler:
                 terminal_status = "blocked"
             payload, available, error_code, error_message = self._content_for_goal(
                 goal=goal,
-                kind=kind,
+                capability=capability,
                 assessments=assessments,
                 comparison=comparison,
                 sql=sql,
@@ -145,7 +118,7 @@ class DeliverableAssembler:
                     title=_TITLE_BY_CAPABILITY.get(capability, "请求结果"),
                     summary=_summary(payload),
                     structured_content=payload,
-                    artifact_ids=artifact_ids or (sql_ids if kind == "runtime_status" else []),
+                    artifact_ids=artifact_ids or (sql_ids if capability == "check_runtime_status" else []),
                     evidence_ids=evidence_ids,
                     claim_ids=claim_ids,
                     dependency_goal_ids=dependency_ids,
@@ -170,9 +143,6 @@ class DeliverableAssembler:
                     blocking_goal_ids=dependency_failures or (execution.blocked_by_goal_ids if execution else []),
                     source_freshness=freshness,
                     source_generated_at=generated_at,
-                    deliverable_type=kind,
-                    payload=payload,
-                    source_artifact_ids=artifact_ids,
                 )
             )
         return results, executions
@@ -181,7 +151,7 @@ class DeliverableAssembler:
     def _content_for_goal(
         *,
         goal: dict[str, Any],
-        kind: str,
+        capability: str,
         assessments: list[Any],
         comparison: dict[str, Any],
         sql: dict[str, Any],
@@ -191,7 +161,7 @@ class DeliverableAssembler:
         workorder_payload: dict[str, Any],
         has_bound_claims: bool,
     ) -> tuple[dict[str, Any], bool, str | None, str | None]:
-        if kind == "fault_code_explanation":
+        if capability == "explain_fault_code":
             success = bool(knowledge and knowledge.success)
             payload = {
                 "fault_codes": list(getattr(knowledge, "fault_codes", []) or []),
@@ -210,25 +180,25 @@ class DeliverableAssembler:
                 None if success else str(getattr(knowledge, "error_code", "") or "knowledge_unavailable"),
                 None if success else str(getattr(knowledge, "error", "") or "知识库未返回可靠释义。"),
             )
-        if kind == "runtime_status":
+        if capability == "check_runtime_status":
             devices = {str(item) for item in goal.get("device_refs") or [] if str(item)}
             scoped = [item for item in assessments if not devices or str(_as_dict(item).get("device") or "") in devices]
             available = bool(scoped or sql)
             return {"assessments": [_dump(item) for item in scoped], "legacy_sql": sql}, available, None if available else "runtime_status_unavailable", None
-        if kind == "runtime_comparison":
+        if capability == "compare_runtime_status":
             return comparison, bool(comparison), None if comparison else "comparison_unavailable", None
-        if kind in {"diagnosis", "recommendations"}:
-            success = bool((analysis and analysis.success) or (kind == "diagnosis" and has_bound_claims))
+        if capability in {"diagnose_fault", "resolution_recommendation"}:
+            success = bool((analysis and analysis.success) or (capability == "diagnose_fault" and has_bound_claims))
             payload = (
                 _dump(analysis) or {}
-                if kind == "diagnosis"
+                if capability == "diagnose_fault"
                 else {"recommendations": list(getattr(analysis, "recommendations", []) or [])}
             )
             return payload, success, None if success else "analysis_unavailable", None
-        if kind == "report":
+        if capability == "generate_report":
             success = bool(report and report.success)
             return _dump(report) or {}, success, None if success else "report_unavailable", None
-        if kind == "workorder_draft":
+        if capability == "create_workorder_draft":
             success = bool(
                 workorder_payload.get("workorder_draft")
                 or workorder_payload.get("draft")
@@ -323,15 +293,12 @@ def _summary(payload: dict[str, Any]) -> str | None:
     return None
 
 
-def _canonical_goal_projection(goal: dict[str, Any], index: int) -> dict[str, Any]:
-    """Upgrade pre-canonical PlanGoal fixtures without consulting artifacts or nodes."""
+def _strict_canonical_goal(goal: dict[str, Any]) -> dict[str, Any]:
+    """Reject incomplete pre-canonical fixtures instead of upgrading them at runtime."""
 
-    if not goal.get("goal_id"):
-        goal["goal_id"] = f"compat_goal_{index + 1}"
-    if not goal.get("capability"):
-        kinds = list(goal.get("requested_deliverables") or goal.get("expected_outputs") or [])
-        capability_by_kind = {value: key for key, value in _DELIVERABLE_BY_CAPABILITY.items()}
-        goal["capability"] = next((capability_by_kind[item] for item in kinds if item in capability_by_kind), "")
+    missing = [field for field in ("goal_id", "capability") if not str(goal.get(field) or "").strip()]
+    if missing:
+        raise ValueError(f"canonical output goal missing required fields: {', '.join(missing)}")
     return goal
 
 

@@ -12,6 +12,7 @@ from ..evidence import project_ledger_to_evidence_bundle
 from .answer import build_output_frame
 from .artifact_projection import project_artifact_envelope
 from .artifact_view import project_runtime_artifact_view
+from .legacy_projection import serialize_composite_output
 
 if TYPE_CHECKING:
     from ..runtime.state import RuntimeState, RuntimeStatus
@@ -136,7 +137,7 @@ def project_complete(
         "decision": _decision_payload(state.plan),
         "resolved_context": {},
         "goal_set": _goal_set(state.plan),
-        "composite_output": frame.composite_output.model_dump(mode="json", exclude_none=True),
+        "composite_output": serialize_composite_output(frame.composite_output),
         "readiness": {"diagnosis": {}, "workorder_action": {}},
         "diagnosis_readiness": {},
         "workorder_action_readiness": {},

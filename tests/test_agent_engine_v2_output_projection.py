@@ -7,6 +7,7 @@ import pytest
 from fault_diagnosis.agent import ExecutionPlan, WorkflowRuntimeExecutor
 from fault_diagnosis.agent.contracts import PlanGoal
 from fault_diagnosis.agent.runtime import NodeExecutionOutput
+from fault_diagnosis.agent.planning import CANONICAL_PLAN_VERSION
 from fault_diagnosis.agent.output import (
     build_output_frame,
     build_reportable_payload,
@@ -87,8 +88,8 @@ def _goal(capability: str, *, goal_id: str = "goal_output") -> PlanGoal:
 def _plan(nodes: list[dict] | None = None) -> ExecutionPlan:
     return ExecutionPlan(
         plan_id="plan.v2.output",
-        plan_version="v2.phase8.validated",
-        goals=[{"goal": "诊断 J1 A07089"}],
+        plan_version=CANONICAL_PLAN_VERSION,
+        goals=[_goal("diagnose_fault", goal_id="goal_diagnosis")],
         nodes=nodes
         or [
             {"node_id": "sql_1", "node_type": "sql"},
@@ -227,20 +228,23 @@ def test_build_output_frame_variants_are_stable() -> None:
 
 def test_terminal_and_no_goal_compatibility_calls_use_single_presenter() -> None:
     sql = SqlStepArtifact(success=True, summary="SQL 查询完成。", data_state="ok")
+    legacy_kwargs = {"status": "blocked", "requested_variant": "permission_denied"}
+    legacy_kwargs.pop("requested_variant")
+    canonical_denied = build_output_frame(
+        **legacy_kwargs,
+        goals=[
+            PlanGoal(
+                goal_id="goal_denied",
+                capability="diagnose_fault",
+                requested_deliverables=["diagnosis"],
+                authorization_status="denied",
+            )
+        ],
+    )
     frames = [
         build_output_frame(status="blocked", error={"message": "安全边界阻止。"}),
         build_output_frame(status="failed", error={"message": "执行失败。"}),
-        build_output_frame(
-            status="blocked",
-            requested_variant="permission_denied",
-            goals=[
-                PlanGoal(
-                    goal_id="goal_denied",
-                    requested_deliverables=["diagnosis"],
-                    authorization_status="denied",
-                )
-            ],
-        ),
+        canonical_denied,
         build_output_frame(status="cancelled", cancelled=True, cancel_reason="user_stop"),
         build_output_frame(status="completed", artifacts={"sql_artifact": sql}, goals=[_goal("check_runtime_status")]),
     ]
@@ -253,6 +257,17 @@ def test_terminal_and_no_goal_compatibility_calls_use_single_presenter() -> None
         ]
         assert observation["legacy_answer_template"] == ""
         assert frame.final_answer == frame.composite_output.content
+    assert canonical_denied.answer_variant == build_output_frame(
+        status="blocked",
+        goals=[
+            PlanGoal(
+                goal_id="goal_denied",
+                capability="diagnose_fault",
+                requested_deliverables=["diagnosis"],
+                authorization_status="denied",
+            )
+        ],
+    ).answer_variant
     assert frames[2].answer_variant == "diagnosis_answer"
     assert frames[3].final_answer == ""
     assert "SQL 查询完成" in frames[4].final_answer
@@ -324,8 +339,8 @@ def test_report_to_workorder_final_answer() -> None:
 
     plan = ExecutionPlan(
         plan_id="plan.report.to.workorder",
-        plan_version="v2.phase8.validated",
-        goals=[{"goal": "基于上一轮报告生成工单草稿"}],
+        plan_version=CANONICAL_PLAN_VERSION,
+        goals=[_goal("create_workorder_draft", goal_id="goal_workorder")],
         nodes=[
             {
                 "node_id": "workorder_1",

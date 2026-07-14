@@ -283,6 +283,8 @@ def get_production_turn_coordinator(app, *, stream_events, logger) -> Production
 
 
 def plan_compat_payload(*, snapshot: Any, plan: Any) -> dict[str, Any]:
+    """Deprecated plan fields kept under compatibility_debug only."""
+
     bridge = PlanPolicyBridge()
     selected_skill = (
         snapshot.skill_route.selected_skills[0]
@@ -298,11 +300,12 @@ def plan_compat_payload(*, snapshot: Any, plan: Any) -> dict[str, Any]:
     authorization = dict((snapshot.output_frame.guardrail_result or {}).get("authorization") or {})
     resolved_context = snapshot.context_frame.model_dump(mode="json", exclude_none=True)
     return {
+        "compatibility_only": True,
         "schema_version": snapshot.schema_version,
         "engine_version": "v2",
         "task_family": task_family,
         "policy_id": policy_id,
-        "plan_mode": "canonical_turn_phase2",
+        "plan_mode": "canonical_turn",
         "context_relation": snapshot.context_frame.relation_to_previous,
         "resolved_context": resolved_context,
         "canonical_request": snapshot.metadata["canonical_request"],
@@ -323,6 +326,41 @@ def plan_compat_payload(*, snapshot: Any, plan: Any) -> dict[str, Any]:
         "readiness": {item["goal_id"]: item for item in snapshot.metadata["goal_readiness"]},
         "manual_confirmation": {},
         "authorization": authorization,
+    }
+
+
+def build_plan_preview_payload(*, snapshot: Any, plan: Any) -> dict[str, Any]:
+    """Serialize the read-only canonical preview with one explicit debug boundary."""
+
+    canonical_request = dict(snapshot.metadata["canonical_request"])
+    artifact_bindings = [
+        dict(binding)
+        for node in plan.nodes
+        for binding in (node.inputs.get("artifact_role_bindings") or [])
+        if isinstance(binding, dict)
+    ]
+    compatibility = {
+        **plan_compat_payload(snapshot=snapshot, plan=plan),
+        "intent_frame": snapshot.intent_frame.model_dump(mode="json", exclude_none=True),
+        "rewrite_frame": snapshot.rewrite_frame.model_dump(mode="json", exclude_none=True),
+        "context_frame": snapshot.context_frame.model_dump(mode="json", exclude_none=True),
+        "effective_request_frame": snapshot.effective_request_frame.model_dump(mode="json", exclude_none=True),
+        "skill_route": snapshot.skill_route.model_dump(mode="json", exclude_none=True),
+    }
+    return {
+        "schema_version": "canonical_plan_preview.v1",
+        "engine_version": "v2",
+        "status": snapshot.status,
+        "plan_mode": "canonical_turn",
+        "canonical_request": canonical_request,
+        "goals": list(canonical_request.get("goals") or []),
+        "goal_authorization": list(snapshot.metadata["goal_authorization"]),
+        "goal_readiness": list(snapshot.metadata["goal_readiness"]),
+        "goal_source_resolution": list(snapshot.metadata["goal_source_resolution"]),
+        "pending_transition": dict(snapshot.metadata["pending_transition"]),
+        "execution_plan": plan.model_dump(mode="json", exclude_none=True),
+        "artifact_role_bindings": artifact_bindings,
+        "compatibility_debug": compatibility,
     }
 
 

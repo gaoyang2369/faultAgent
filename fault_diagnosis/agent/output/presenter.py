@@ -21,26 +21,22 @@ class CompositePresenter:
     """Render terminal states and all deliverables through one content path."""
 
     _HEADINGS = {
-        "fault_code_explanation": "故障码解释",
-        "runtime_status": "运行状态",
-        "runtime_comparison": "运行比较",
-        "diagnosis": "综合诊断",
-        "recommendations": "处理建议",
-        "report": "运行报告",
-        "workorder_draft": "工单草稿",
-        "clarification": "需要确认",
-        "permission_denied": "权限限制",
+        "explain_fault_code": "故障码解释",
+        "check_runtime_status": "运行状态",
+        "compare_runtime_status": "运行比较",
+        "diagnose_fault": "综合诊断",
+        "resolution_recommendation": "处理建议",
+        "generate_report": "运行报告",
+        "create_workorder_draft": "工单草稿",
     }
     _FAILURE_TEXT = {
-        "fault_code_explanation": "知识库未获得可靠释义。",
-        "runtime_status": "未获得可用运行数据。",
-        "runtime_comparison": "比较所需的设备数据不完整。",
-        "diagnosis": "依赖的运行证据不可用，未形成诊断结论。",
-        "recommendations": "缺少可靠诊断依据，未形成处理建议。",
-        "report": "依赖来源不可用，未生成报告。",
-        "workorder_draft": "来源或设备不满足要求，未生成工单草稿。",
-        "permission_denied": "当前身份无权执行该子目标。",
-        "clarification": "请确认缺失信息后继续。",
+        "explain_fault_code": "知识库未获得可靠释义。",
+        "check_runtime_status": "未获得可用运行数据。",
+        "compare_runtime_status": "比较所需的设备数据不完整。",
+        "diagnose_fault": "依赖的运行证据不可用，未形成诊断结论。",
+        "resolution_recommendation": "缺少可靠诊断依据，未形成处理建议。",
+        "generate_report": "依赖来源不可用，未生成报告。",
+        "create_workorder_draft": "来源或设备不满足要求，未生成工单草稿。",
     }
     _VARIANT_BY_CAPABILITY = {
         "explain_fault_code": "fault_code_answer",
@@ -51,16 +47,6 @@ class CompositePresenter:
         "generate_report": "report_answer",
         "create_workorder_draft": "workorder_answer",
     }
-    _LEGACY_CAPABILITY_BY_TYPE = {
-        "fault_code_explanation": "explain_fault_code",
-        "runtime_status": "check_runtime_status",
-        "runtime_comparison": "compare_runtime_status",
-        "diagnosis": "diagnose_fault",
-        "recommendations": "resolution_recommendation",
-        "report": "generate_report",
-        "workorder_draft": "create_workorder_draft",
-    }
-
     def present(
         self,
         *,
@@ -94,7 +80,7 @@ class CompositePresenter:
         sections: list[str] = []
         for item in ordered:
             if item.status in {"failed", "blocked", "denied"}:
-                body = item.error_message or self._FAILURE_TEXT.get(item.deliverable_type, "该交付物未完成。")
+                body = item.error_message or self._FAILURE_TEXT.get(item.capability, "该交付物未完成。")
             else:
                 body = self._body(
                     item,
@@ -103,7 +89,7 @@ class CompositePresenter:
                 )
                 if item.status == "partial" and item.error_code:
                     body = f"{body}\n说明：部分证据不可用，结论已降级。".strip()
-            heading = item.title or self._HEADINGS[item.deliverable_type]
+            heading = item.title or self._HEADINGS.get(item.capability, "请求结果")
             sections.append(f"【{heading}】\n{body}".strip())
         content = "\n\n".join(sections)
         return PresentedOutput(
@@ -119,25 +105,23 @@ class CompositePresenter:
         evidence_bundle: EvidenceBundle | None,
         degraded_notice: str,
     ) -> str:
-        payload = item.payload
-        if item.deliverable_type == "fault_code_explanation":
+        payload = item.structured_content
+        if item.capability == "explain_fault_code":
             return self._fault_code_body(payload)
-        if item.deliverable_type == "runtime_status":
+        if item.capability == "check_runtime_status":
             return self._runtime_status_body(payload, degraded_notice=degraded_notice)
-        if item.deliverable_type == "runtime_comparison":
+        if item.capability == "compare_runtime_status":
             return self._comparison_body(payload)
-        if item.deliverable_type == "diagnosis":
+        if item.capability == "diagnose_fault":
             return self._diagnosis_body(payload, evidence_bundle=evidence_bundle)
-        if item.deliverable_type == "recommendations":
+        if item.capability == "resolution_recommendation":
             recommendations = _text_list(payload.get("recommendations"))
             return "\n".join(f"{index}. {value}" for index, value in enumerate(recommendations, start=1)) or "暂无额外处理建议。"
-        if item.deliverable_type == "report":
+        if item.capability == "generate_report":
             link = payload.get("report_url") or payload.get("report_filename") or ""
             return f"报告已生成：{link}" if link else "报告已生成。"
-        if item.deliverable_type == "workorder_draft":
+        if item.capability == "create_workorder_draft":
             return self._workorder_body(payload)
-        if item.deliverable_type == "clarification":
-            return str(payload.get("clarification_question") or payload.get("message") or "请确认缺失信息后继续。")
         return str(payload.get("message") or "已完成。")
 
     @staticmethod
@@ -151,9 +135,7 @@ class CompositePresenter:
             return "composite_answer"
         if not deliverables:
             return "clarification_answer" if cancelled or status in {"blocked", "cancelled"} else "meta_answer"
-        item = deliverables[0]
-        capability = item.capability or CompositePresenter._LEGACY_CAPABILITY_BY_TYPE.get(item.deliverable_type, "")
-        return CompositePresenter._VARIANT_BY_CAPABILITY.get(capability, "clarification_answer")
+        return CompositePresenter._VARIANT_BY_CAPABILITY.get(deliverables[0].capability, "clarification_answer")
 
     @staticmethod
     def _terminal_body(
@@ -332,16 +314,16 @@ class CompositePresenter:
 
     @staticmethod
     def _status_brief(deliverables: list[DeliverableResult], *, status: str) -> str:
-        status_item = next((item for item in deliverables if item.deliverable_type == "runtime_status"), None)
+        status_item = next((item for item in deliverables if item.capability == "check_runtime_status"), None)
         if status_item:
-            assessments = status_item.payload.get("assessments") or []
+            assessments = status_item.structured_content.get("assessments") or []
             if assessments and isinstance(assessments[0], dict):
                 assessment = assessments[0]
                 label = {"normal": "正常", "attention": "需关注", "abnormal": "存在异常迹象", "unknown": "暂无法判断"}.get(
                     str(assessment.get("runtime_status") or "unknown"), "暂无法判断"
                 )
                 return f"{assessment.get('device') or '设备'}：{label}。"
-            sql = status_item.payload.get("legacy_sql") or {}
+            sql = status_item.structured_content.get("legacy_sql") or {}
             if isinstance(sql, dict) and sql.get("summary"):
                 return str(sql["summary"])
         return f"V2 runtime {status}."

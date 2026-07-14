@@ -1,4 +1,4 @@
-"""Compile canonical Goals and decisions into the Phase 2 execution DAG."""
+"""Compile canonical Goals and decisions into the production execution DAG."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from fault_diagnosis.domain.canonical_turn import (
 from ..contracts import ArtifactRoleBinding, ExecutionPlan
 from ..skills.router import skill_for_capability
 from .policy_bridge import NODE_REQUIRED_TOOL, PlanPolicyBridge, tables_for_assets
+from .versions import CANONICAL_PLAN_VERSION
 
 
 _EXECUTABLE_SOURCES = {"requires_execution", "source_for_execution"}
@@ -118,7 +119,7 @@ class PlanCompiler:
         approvals = _approval_requirements(nodes)
         return ExecutionPlan(
             plan_id=f"candidate_{uuid4().hex[:12]}",
-            plan_version="v2.canonical-phase3.validated",
+            plan_version=CANONICAL_PLAN_VERSION,
             goals=plan_goals,
             nodes=nodes,
             edges=edges,

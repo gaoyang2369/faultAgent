@@ -257,7 +257,7 @@ def run_local_case(client: TestClient, case: dict[str, Any]) -> dict[str, Any]:
     )
     if response.status_code != 200:
         raise RuntimeError(f"{case['id']} plan request failed: {response.status_code} {response.text}")
-    return response.json()
+    return evaluation_view(response.json())
 
 
 def run_remote_case(base_url: str, case: dict[str, Any]) -> dict[str, Any]:
@@ -267,7 +267,14 @@ def run_remote_case(base_url: str, case: dict[str, Any]) -> dict[str, Any]:
         timeout=30,
     )
     response.raise_for_status()
-    return response.json()
+    return evaluation_view(response.json())
+
+
+def evaluation_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """Expose deprecated expectations to the eval without flattening the API schema."""
+
+    compatibility = payload.get("compatibility_debug")
+    return {**(compatibility if isinstance(compatibility, dict) else {}), **payload}
 
 
 def main() -> int:

@@ -1,4 +1,4 @@
-"""Canonical-turn plan snapshot facade used by Phase 2 runtime compatibility."""
+"""Canonical-turn plan snapshot facade used by the production runtime."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class AgentEngineV2:
         auth_context: Any | None = None,
         context_manager: Any | None = None,
         conversation_context: dict[str, Any] | None = None,
-        recent_context_signals: dict[str, Any] | None = None,  # noqa: ARG002 - Phase 3 compatibility input.
+        recent_context_signals: dict[str, Any] | None = None,  # noqa: ARG002 - deprecated compatibility input.
         llm_candidate_plan: Any | None = None,  # noqa: ARG002 - canonical compiler never accepts plan authority.
         legacy_plan: Any | None = None,  # noqa: ARG002 - retained only at the public facade boundary.
         metadata: dict[str, Any] | None = None,
@@ -127,7 +127,7 @@ class AgentEngineV2:
             output_frame=output,
             trace={
                 "engine": "agent_engine_v2",
-                "mode": "canonical_turn_phase2",
+                "mode": "canonical_turn",
                 "status": status,
                 "canonical_request": request.model_dump(mode="json"),
                 "goal_authorization": canonical_metadata["goal_authorization"],

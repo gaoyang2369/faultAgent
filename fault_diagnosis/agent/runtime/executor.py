@@ -17,9 +17,11 @@ from .state import (
     node_result,
 )
 from ..output.answer import build_output_frame
+from ..output.legacy_projection import legacy_deliverable_type
 from ..evidence import project_ledger_to_evidence_bundle
 from ..artifacts import ArtifactPayloadError, allocate_node_artifact_id, build_node_artifact_envelope, load_exact_artifact
 from ..observability.cutover_observation import summarize_runtime_artifacts
+from ..planning.versions import resolve_plan_version
 from fault_diagnosis.domain.artifacts import ArtifactEnvelope, ArtifactPayload
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import commit_artifact
 
@@ -145,13 +147,26 @@ class WorkflowRuntimeExecutor:
         state.add_trace(
             "runtime_gate",
             status="checking",
-            metadata={"validated_plan_required": True, "plan_version": plan.plan_version, "plan_id": plan.plan_id},
+            metadata={
+                "validated_plan_required": True,
+                "plan_version": plan.plan_version,
+                "normalized_plan_version": resolve_plan_version(plan.plan_version).normalized_version,
+                "plan_version_mode": resolve_plan_version(plan.plan_version).compatibility_mode,
+                "plan_id": plan.plan_id,
+            },
         )
         if not _is_executable_validated_plan(plan):
             return self._finish_blocked(
                 state,
                 code="validated_plan_required",
                 message="V2 runtime only executes validated plans.",
+            )
+        invalid_goals = [goal.goal_id or "<missing>" for goal in plan.goals if not goal.goal_id or not goal.capability]
+        if invalid_goals:
+            return self._finish_blocked(
+                state,
+                code="invalid_canonical_goal",
+                message=f"V2 runtime requires canonical goal_id and capability: {', '.join(invalid_goals)}.",
             )
         _load_satisfied_goal_artifacts(state)
         try:
@@ -498,7 +513,13 @@ class WorkflowRuntimeExecutor:
         state.add_trace("runtime_status", status="cancelled", metadata={"cancel_reason": state.cancel_token.reason})
         output_frame = _runtime_output_frame(state, status="cancelled", cancelled=True)
         state.deliverable_statuses = [
-            {"goal_id": item.goal_id, "deliverable_type": item.deliverable_type, "status": item.status}
+            {
+                "goal_id": item.goal_id,
+                "capability": item.capability,
+                "deliverable_type": legacy_deliverable_type(item.capability),
+                "status": item.status,
+                "compatibility_only": True,
+            }
             for item in output_frame.composite_output.deliverables
         ]
         complete = build_complete_payload(
@@ -526,7 +547,13 @@ def _runtime_result(state: RuntimeState, *, status: str) -> RuntimeResult:
         output_frame.guardrail_result.get("output_observation") or {}
     )
     state.deliverable_statuses = [
-        {"goal_id": item.goal_id, "deliverable_type": item.deliverable_type, "status": item.status}
+        {
+            "goal_id": item.goal_id,
+            "capability": item.capability,
+            "deliverable_type": legacy_deliverable_type(item.capability),
+            "status": item.status,
+            "compatibility_only": True,
+        }
         for item in output_frame.composite_output.deliverables
     ]
     effective_status = status
@@ -559,6 +586,7 @@ def _runtime_output_frame(state: RuntimeState, *, status: str, cancelled: bool =
         trace_id=state.trace_id,
         task={"plan_id": state.plan.plan_id},
     )
+    canonical_goals = state.plan.goals if all(goal.goal_id and goal.capability for goal in state.plan.goals) else []
     return build_output_frame(
         status=status,
         artifact_registry=state.artifact_registry,
@@ -568,37 +596,9 @@ def _runtime_output_frame(state: RuntimeState, *, status: str, cancelled: bool =
         cancelled=cancelled,
         cancel_reason=state.cancel_token.reason if cancelled else None,
         output_contract=state.plan.output_contract,
-        goals=_output_goals(state.plan),
+        goals=canonical_goals,
         plan_nodes=state.plan.nodes,
     )
-
-
-def _output_goals(plan: ExecutionPlan) -> list[dict[str, Any]]:
-    """Project old typed-plan fixtures into canonical-shaped goals upstream of Output."""
-
-    capability_by_output = {
-        "fault_code_explanation": "explain_fault_code",
-        "runtime_status": "check_runtime_status",
-        "runtime_comparison": "compare_runtime_status",
-        "diagnosis": "diagnose_fault",
-        "recommendations": "resolution_recommendation",
-        "report": "generate_report",
-        "workorder_draft": "create_workorder_draft",
-    }
-    projected: list[dict[str, Any]] = []
-    for index, raw in enumerate(plan.goals):
-        goal = raw.model_dump(mode="json", exclude_none=True)
-        if not goal.get("goal_id"):
-            goal["goal_id"] = f"compat_goal_{index + 1}"
-        if not goal.get("capability"):
-            outputs = list(goal.get("requested_deliverables") or goal.get("expected_outputs") or plan.expected_outputs)
-            goal["requested_deliverables"] = outputs
-            goal["capability"] = next(
-                (capability_by_output[value] for value in outputs if value in capability_by_output),
-                "",
-            )
-        projected.append(goal)
-    return projected
 
 
 def _load_satisfied_goal_artifacts(state: RuntimeState) -> None:
@@ -629,8 +629,7 @@ def _load_satisfied_goal_artifacts(state: RuntimeState) -> None:
 
 
 def _is_executable_validated_plan(plan: ExecutionPlan) -> bool:
-    plan_version = str(plan.plan_version or "")
-    return bool(plan.plan_id and ".validated" in plan_version and ".blocked" not in plan_version)
+    return bool(plan.plan_id and resolve_plan_version(plan.plan_version).executable)
 
 
 def _retry_limit(node: dict[str, Any]) -> int:

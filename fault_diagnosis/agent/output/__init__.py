@@ -3,6 +3,7 @@
 from .answer import build_output_frame
 from .deliverables import DeliverableAssembler
 from .presenter import CompositePresenter, PresentedOutput
+from .legacy_projection import project_legacy_deliverable, serialize_composite_output
 from .artifact_projection import project_artifact_envelope
 from .artifact_manifest import build_artifact_manifests, latest_focus_from_manifests
 from .report import build_reportable_payload
@@ -20,6 +21,8 @@ __all__ = [
     "CompositePresenter",
     "DeliverableAssembler",
     "PresentedOutput",
+    "project_legacy_deliverable",
+    "serialize_composite_output",
     "build_artifact_manifests",
     "build_reportable_payload",
     "latest_focus_from_manifests",

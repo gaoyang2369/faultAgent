@@ -72,7 +72,7 @@ class ConversationTurnCoordinator:
         self._execution_lock = asyncio.Lock()
 
     def preview(self, command: TurnCommand) -> TurnResult:
-        """Phase 1 compatibility alias for :meth:`preview_turn`."""
+        """Deprecated compatibility alias for :meth:`preview_turn`."""
 
         return self.preview_turn(command)
 

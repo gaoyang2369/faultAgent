@@ -1,4 +1,4 @@
-"""Isolated Canonical Turn Phase 1 preview components."""
+"""Canonical turn parsing, decisions and coordination components."""
 
 from .coordinator import ConversationTurnCoordinator
 from .parser import ClauseModelRequest, CurrentUtteranceParser, StructuredClauseModel

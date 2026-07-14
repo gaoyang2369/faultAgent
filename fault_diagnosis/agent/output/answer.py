@@ -27,7 +27,6 @@ def build_output_frame(
     artifact_registry: dict[str, ArtifactEnvelope] | None = None,
     evidence_bundle: EvidenceBundle | dict[str, Any] | None = None,
     node_results: list[NodeResult] | list[dict[str, Any]] | None = None,
-    requested_variant: str | None = None,
     error: dict[str, Any] | None = None,
     cancelled: bool = False,
     cancel_reason: str | None = None,

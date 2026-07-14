@@ -19,7 +19,7 @@ def project_runtime_artifact_view(
     artifact_registry: dict[str, ArtifactEnvelope],
     node_results: list[Any],
 ) -> dict[str, Any]:
-    """Serialize typed registry values into the unchanged Phase 1/SSE shape."""
+    """Serialize typed registry values into the persisted SSE compatibility shape."""
 
     ordered_ids = [str(_value(item, "artifact_id") or "") for item in node_results]
     ordered = [

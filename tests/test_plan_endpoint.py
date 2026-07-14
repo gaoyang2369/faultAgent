@@ -51,21 +51,26 @@ def test_plan_endpoint_uses_trusted_auth_not_user_identity(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["auth_context"]["role"] == "guest"
-    assert payload["authorization"]["mode"] == "deny"
-    assert payload["authorization"]["denied_reason_code"] == "diagnosis_permission_denied"
-    assert "save_report" not in payload["planned_tools"]
-    assert "relation_to_previous" in payload["resolved_context"]
-    assert "inherited_slots" in payload["resolved_context"]
-    assert "primary_goal_id" in payload["goal_set"]
+    compatibility = payload["compatibility_debug"]
+    assert compatibility["compatibility_only"] is True
+    assert compatibility["authorization"]["mode"] == "deny"
+    assert compatibility["authorization"]["denied_reason_code"] == "diagnosis_permission_denied"
+    assert "save_report" not in compatibility["planned_tools"]
+    assert "relation_to_previous" in compatibility["resolved_context"]
+    assert "inherited_slots" in compatibility["resolved_context"]
+    assert "primary_goal_id" in compatibility["goal_set"]
     assert isinstance(payload["goals"], list)
-    assert payload["task_family"] == "diagnosis"
-    assert payload["workflow_route"]["task_family"] == "diagnosis"
-    assert payload["policy_id"]
-    assert "shadow_plan" not in payload
-    assert "planning_diff" not in payload
-    assert "planner_gate" not in payload
-    assert "readiness" in payload
-    assert "manual_confirmation" in payload
+    assert compatibility["task_family"] == "diagnosis"
+    assert compatibility["workflow_route"]["task_family"] == "diagnosis"
+    assert compatibility["policy_id"]
+    assert "shadow_plan" not in compatibility
+    assert "planning_diff" not in compatibility
+    assert "planner_gate" not in compatibility
+    assert "readiness" in compatibility
+    assert "manual_confirmation" in compatibility
+    assert "intent_frame" not in payload
+    assert "effective_request_frame" not in payload
+    assert payload["canonical_request"]["goals"] == payload["goals"]
 
 
 def test_plan_endpoint_has_no_tool_llm_or_artifact_side_effects(monkeypatch) -> None:

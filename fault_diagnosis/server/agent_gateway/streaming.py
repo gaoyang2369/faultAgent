@@ -271,11 +271,8 @@ async def _stream_v2_validation_blocked(
     message = _validation_blocked_message(snapshot)
     plan = snapshot.execution_plan
     snapshot_guardrail = dict(snapshot.output_frame.guardrail_result or {})
-    snapshot_authorization = snapshot_guardrail.get("authorization") if isinstance(snapshot_guardrail.get("authorization"), dict) else {}
-    denied = snapshot_authorization.get("mode") == "deny"
     output_frame = build_output_frame(
         status="blocked",
-        requested_variant="permission_denied" if denied else "blocked",
         error={"message": message},
         goals=plan.goals,
     )

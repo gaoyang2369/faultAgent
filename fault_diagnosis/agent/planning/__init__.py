@@ -4,6 +4,12 @@ from .compiler import PlanCompiler
 from .plan_diff import diff_plans
 from .policy_bridge import PlanPolicyBridge
 from .validator import PlanValidationIssue, PlanValidationResult, PlanValidator
+from .versions import (
+    CANONICAL_PLAN_VERSION,
+    HISTORICAL_CANONICAL_PLAN_VERSIONS,
+    PlanVersionResolution,
+    resolve_plan_version,
+)
 
 __all__ = [
     "PlanCompiler",
@@ -11,5 +17,9 @@ __all__ = [
     "PlanValidationIssue",
     "PlanValidationResult",
     "PlanValidator",
+    "CANONICAL_PLAN_VERSION",
+    "HISTORICAL_CANONICAL_PLAN_VERSIONS",
+    "PlanVersionResolution",
+    "resolve_plan_version",
     "diff_plans",
 ]

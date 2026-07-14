@@ -12,7 +12,21 @@ _GOLDEN_DIR = Path(__file__).parent / "golden" / "agent_engine_v2"
 
 
 def _deliverable(goal: str, kind: str, payload: dict) -> DeliverableResult:
-    return DeliverableResult(goal_id=goal, deliverable_type=kind, status="completed", payload=payload)
+    capability = {
+        "fault_code_explanation": "explain_fault_code",
+        "runtime_status": "check_runtime_status",
+        "runtime_comparison": "compare_runtime_status",
+        "diagnosis": "diagnose_fault",
+        "recommendations": "resolution_recommendation",
+        "report": "generate_report",
+        "workorder_draft": "create_workorder_draft",
+    }[kind]
+    return DeliverableResult(
+        goal_id=goal,
+        capability=capability,
+        status="completed",
+        structured_content=payload,
+    )
 
 
 def _status() -> DeliverableResult:

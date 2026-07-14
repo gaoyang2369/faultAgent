@@ -32,7 +32,7 @@ from fault_diagnosis.server.agent_gateway.stream_control import (
 )
 from fault_diagnosis.server.agent_gateway.streaming import token_stream_events as default_token_stream_events
 from .conversation_persistence import parse_sse_payloads
-from .turn_execution import get_production_turn_coordinator, plan_compat_payload
+from .turn_execution import build_plan_preview_payload, get_production_turn_coordinator
 from fault_diagnosis.shared.utils import (
     sanitize_chat_history_messages,
     summarize_identifier_for_log,
@@ -353,8 +353,7 @@ class ChatService:
             message_preview=summarize_text_for_log(message, limit=72),
         )
         canonical, snapshot, plan = self._turn_coordinator(request.app).preview_turn(context)
-        payload = snapshot.model_dump(mode="json", exclude_none=True)
-        payload.update(plan_compat_payload(snapshot=snapshot, plan=plan))
+        payload = build_plan_preview_payload(snapshot=snapshot, plan=plan)
         payload["turn_result"] = canonical.model_dump(mode="json", exclude_none=True)
         payload["thread_id"] = context.thread_id
         payload["request_id"] = context.request_id

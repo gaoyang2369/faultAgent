@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from fault_diagnosis.domain.artifacts import ArtifactEnvelope, ArtifactLineage, ArtifactManifest, ArtifactType
+from fault_diagnosis.domain.artifacts import ArtifactEnvelope, ArtifactLineage, ArtifactManifest
 
 
 ENGINE_VERSION = "v2"
@@ -581,8 +581,16 @@ class DeliverableResult(AgentEngineContract):
     source_freshness: str | None = None
     source_generated_at: str | None = None
 
-    # Boundary-only compatibility projection. Output decisions use the fields
-    # above; these aliases remain for older SSE/front-end consumers.
+    @model_validator(mode="after")
+    def fill_deliverable_id(self) -> "DeliverableResult":
+        if not self.deliverable_id and self.goal_id:
+            self.deliverable_id = f"deliverable:{self.goal_id}"
+        return self
+
+
+class LegacyDeliverableProjection(AgentEngineContract):
+    """Deprecated one-way aliases emitted only at public serialization boundaries."""
+
     deliverable_type: Literal[
         "fault_code_explanation",
         "runtime_status",
@@ -596,21 +604,7 @@ class DeliverableResult(AgentEngineContract):
     ] = "clarification"
     payload: dict[str, Any] = Field(default_factory=dict)
     source_artifact_ids: list[str] = Field(default_factory=list)
-    compatibility_only: bool = True
-
-    @model_validator(mode="after")
-    def project_compatibility_fields(self) -> "DeliverableResult":
-        if not self.deliverable_id and self.goal_id:
-            self.deliverable_id = f"deliverable:{self.goal_id}"
-        if not self.structured_content and self.payload:
-            self.structured_content = dict(self.payload)
-        if not self.payload and self.structured_content:
-            self.payload = dict(self.structured_content)
-        if not self.artifact_ids and self.source_artifact_ids:
-            self.artifact_ids = list(self.source_artifact_ids)
-        if not self.source_artifact_ids and self.artifact_ids:
-            self.source_artifact_ids = list(self.artifact_ids)
-        return self
+    compatibility_only: Literal[True] = True
 
 
 class CompositeOutputFrame(AgentEngineContract):

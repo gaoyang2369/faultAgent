@@ -279,10 +279,10 @@ def test_composite_output_keeps_all_deliverables_in_legacy_content() -> None:
         sample_count=10,
     )
     goals = [
-        PlanGoal(goal_id="g1", requested_deliverables=["fault_code_explanation"]),
-        PlanGoal(goal_id="g2", requested_deliverables=["runtime_status"]),
-        PlanGoal(goal_id="g3", requested_deliverables=["diagnosis"]),
-        PlanGoal(goal_id="g4", requested_deliverables=["recommendations"]),
+        PlanGoal(goal_id="g1", capability="explain_fault_code", requested_deliverables=["fault_code_explanation"]),
+        PlanGoal(goal_id="g2", capability="check_runtime_status", requested_deliverables=["runtime_status"]),
+        PlanGoal(goal_id="g3", capability="diagnose_fault", requested_deliverables=["diagnosis"]),
+        PlanGoal(goal_id="g4", capability="resolution_recommendation", requested_deliverables=["recommendations"]),
     ]
     frame = build_output_frame(
         artifacts={

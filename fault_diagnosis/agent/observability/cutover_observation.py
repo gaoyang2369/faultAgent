@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from fault_diagnosis.agent.output.legacy_projection import legacy_deliverable_type
+
 
 def content_fingerprint(value: Any) -> dict[str, Any]:
     text = str(value or "")
@@ -83,8 +85,10 @@ def build_output_observation(
         "deliverables": [
             {
                 "goal_id": _value(item, "goal_id"),
-                "deliverable_type": _value(item, "deliverable_type"),
+                "capability": _value(item, "capability"),
+                "deliverable_type": legacy_deliverable_type(str(_value(item, "capability") or "")),
                 "status": _value(item, "status"),
+                "compatibility_only": True,
             }
             for item in deliverables
         ],
