@@ -1,19 +1,15 @@
-"""Compatibility facade for the Phase 1 pending clarification API.
+"""Pending clarification repository backends and stable public API."""
 
-Implementations live in the ``pending_clarification`` package. Keeping these
-exports preserves the import path used by the isolated coordinator and tests.
-"""
-
-from .pending_clarification import (
+from .errors import (
     CompareAndSetConflict,
-    DEFAULT_PENDING_TTL,
     IdempotencyConflict,
-    MemoryPendingClarificationRepository,
     PendingClarificationConflict,
-    PendingClarificationRepository,
-    SQLitePendingClarificationRepository,
     WaitingClarificationExists,
 )
+from .memory import MemoryPendingClarificationRepository
+from .protocol import PendingClarificationRepository
+from .sqlite import SQLitePendingClarificationRepository
+from .transition_service import DEFAULT_PENDING_TTL
 
 __all__ = [
     "CompareAndSetConflict",

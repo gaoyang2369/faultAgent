@@ -255,3 +255,58 @@ def test_sqlite_memory_database_keeps_schema_and_records_between_calls() -> None
     pending = _create(repository)
 
     assert repository.get_waiting("thread-1", "user-1", now=NOW).pending_id == pending.pending_id
+
+
+def test_sqlite_schema_remains_phase1_compatible(tmp_path) -> None:
+    repository = SQLitePendingClarificationRepository(tmp_path / "schema.sqlite3", clock=lambda: NOW)
+    _create(repository)
+
+    with sqlite3.connect(repository.path) as connection:
+        columns = [row[1] for row in connection.execute("PRAGMA table_info(pending_clarifications)")]
+        operation_columns = [
+            row[1] for row in connection.execute("PRAGMA table_info(pending_clarification_operations)")
+        ]
+        table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pending_clarifications'"
+        ).fetchone()[0]
+        index_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'uq_pending_clarification_waiting_scope'"
+        ).fetchone()[0]
+
+    assert columns == [
+        "pending_id",
+        "thread_id",
+        "user_id",
+        "status",
+        "version",
+        "create_idempotency_key",
+        "created_turn_id",
+        "created_message_id",
+        "resumed_turn_id",
+        "resumed_message_id",
+        "consumed_turn_id",
+        "consumed_message_id",
+        "created_at",
+        "updated_at",
+        "expires_at",
+        "original_goals_json",
+        "missing_slots_json",
+        "candidate_values_json",
+        "source_bindings_json",
+        "historical_authorization_audit_json",
+    ]
+    assert operation_columns == [
+        "operation_id",
+        "pending_id",
+        "operation_type",
+        "idempotency_key",
+        "turn_id",
+        "message_id",
+        "from_status",
+        "to_status",
+        "resulting_version",
+        "created_at",
+    ]
+    assert "'waiting','resumed','consumed','expired','cancelled'" in table_sql
+    assert "UNIQUE INDEX" in index_sql
+    assert "WHERE status = 'waiting'" in index_sql

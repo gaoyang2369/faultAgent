@@ -6,7 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from fault_diagnosis.agent.canonical_turn import CurrentUtteranceParser
+from fault_diagnosis.agent.canonical_turn.entity_extractor import compile_rule
+from fault_diagnosis.agent.canonical_turn.rule_catalog import CAPABILITY_LEXICON, RULE_CATALOG
 from fault_diagnosis.domain.canonical_turn import (
+    CAPABILITY_ALLOWLIST,
     CanonicalGoal,
     ClauseAction,
     CurrentUtteranceParse,
@@ -26,6 +29,59 @@ class _FakeClauseModel:
         if self.error:
             raise self.error
         return self.payload
+
+
+def test_rule_catalog_has_unique_auditable_metadata_and_valid_priorities() -> None:
+    required = {
+        "rule_id",
+        "category",
+        "pattern",
+        "semantic_value",
+        "priority",
+        "confidence",
+        "allowed_clause_roles",
+    }
+    rule_ids = [rule["rule_id"] for rule in RULE_CATALOG]
+
+    assert len(rule_ids) == len(set(rule_ids))
+    assert all(required.issubset(rule) for rule in RULE_CATALOG)
+    assert all(isinstance(rule["priority"], int) and 0 <= rule["priority"] <= 1000 for rule in RULE_CATALOG)
+    assert all(0.0 <= rule["confidence"] <= 1.0 for rule in RULE_CATALOG)
+
+
+def test_rule_catalog_capabilities_and_source_roles_obey_contract_boundaries() -> None:
+    rule_ids = {rule["rule_id"] for rule in RULE_CATALOG}
+    action_rules = [rule for rule in RULE_CATALOG if rule["category"] == "action_predicate"]
+    source_rules = [rule for rule in RULE_CATALOG if rule["category"] == "source_marker"]
+
+    assert {rule["semantic_value"] for rule in action_rules}.issubset(CAPABILITY_ALLOWLIST)
+    assert set(CAPABILITY_LEXICON).issubset(CAPABILITY_ALLOWLIST)
+    assert all(set(ids).issubset(rule_ids) for ids in CAPABILITY_LEXICON.values())
+    assert all("action" not in rule["allowed_clause_roles"] for rule in source_rules)
+
+
+def test_rule_catalog_forbids_empty_patterns_and_sentence_literals() -> None:
+    semantic_rules = [
+        rule
+        for rule in RULE_CATALOG
+        if rule["category"] not in {"clause_boundary", "model_validation"}
+    ]
+
+    assert all(str(rule["pattern"]).strip() for rule in RULE_CATALOG)
+    assert all(not set("。！？").intersection(str(rule["pattern"])) for rule in semantic_rules)
+    assert all(
+        any(marker in str(rule["pattern"]) for marker in ("(", "[", "\\", ".", "?", "|"))
+        for rule in semantic_rules
+    )
+
+
+@pytest.mark.parametrize("rule", RULE_CATALOG, ids=lambda rule: rule["rule_id"])
+def test_every_catalog_rule_has_an_independently_matching_example(rule) -> None:
+    pattern = compile_rule(rule)
+    example = str(rule["example"])
+    matched = pattern.fullmatch(example) if rule.get("match_mode") == "fullmatch" else pattern.search(example)
+
+    assert matched is not None
 
 
 def test_deterministic_entities_preserve_raw_spans_and_reference_types() -> None:
