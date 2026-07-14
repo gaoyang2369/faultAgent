@@ -1,4 +1,4 @@
-"""Typed contracts for the isolated Canonical Turn Phase 1 preview."""
+"""Authoritative contracts for one canonical conversation turn."""
 
 from __future__ import annotations
 
@@ -23,6 +23,24 @@ CAPABILITY_ALLOWLIST = frozenset(
 GoalOrigin = Literal["explicit", "inferred", "dependency"]
 PendingStatus = Literal["waiting", "resumed", "consumed", "expired", "cancelled"]
 BindingKind = Literal["slot_only", "mixed", "new_action", "unrelated", "no_match"]
+AuthorizationStatus = Literal["authorized", "denied"]
+ReadinessStatus = Literal[
+    "ready",
+    "satisfied_by_artifact",
+    "blocked_missing_slot",
+    "blocked_source",
+    "blocked_permission",
+]
+SourceResolutionStatus = Literal[
+    "satisfied_by_artifact",
+    "source_for_execution",
+    "requires_execution",
+    "ambiguous",
+    "unresolved",
+    "incompatible",
+    "stale",
+]
+GoalTerminalStatus = Literal["pending", "completed", "failed", "blocked", "denied", "satisfied"]
 
 
 class CanonicalContract(BaseModel):
@@ -247,6 +265,54 @@ class CanonicalTurnRequest(CanonicalContract):
         return self
 
 
+class GoalAuthorizationDecision(CanonicalContract):
+    """Current-turn authorization for exactly one canonical Goal."""
+
+    schema_version: Literal["goal_authorization_decision.v1"] = "goal_authorization_decision.v1"
+    goal_id: str
+    capability: str
+    status: AuthorizationStatus
+    reason_code: str = ""
+    reason: str = ""
+    audit: dict[str, Any] = Field(default_factory=dict)
+
+
+class GoalSourceResolution(CanonicalContract):
+    """Goal-scoped distinction between selecting a source and satisfying a Goal."""
+
+    schema_version: Literal["goal_source_resolution.v1"] = "goal_source_resolution.v1"
+    goal_id: str
+    status: SourceResolutionStatus
+    artifact_id: str | None = None
+    artifact_type: str | None = None
+    source_freshness: str = "unknown"
+    reason: str = ""
+    candidate_artifact_ids: list[str] = Field(default_factory=list)
+    resolved_slots: dict[str, Any] = Field(default_factory=dict)
+    reusable_result_artifact_id: str | None = None
+    idempotency_key: str | None = None
+
+
+class GoalReadinessDecision(CanonicalContract):
+    """Execution readiness for exactly one canonical Goal."""
+
+    schema_version: Literal["goal_readiness_decision.v1"] = "goal_readiness_decision.v1"
+    goal_id: str
+    status: ReadinessStatus
+    blockers: list[str] = Field(default_factory=list)
+
+
+class GoalExecutionStatus(CanonicalContract):
+    """Terminal or in-flight execution state for exactly one canonical Goal."""
+
+    schema_version: Literal["goal_execution_status.v1"] = "goal_execution_status.v1"
+    goal_id: str
+    status: GoalTerminalStatus = "pending"
+    node_ids: list[str] = Field(default_factory=list)
+    artifact_ids: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+
+
 class PendingTransitionProposal(CanonicalContract):
     action: Literal["none", "create_waiting", "keep_waiting", "resume_and_consume"] = "none"
     pending_id: str | None = None
@@ -258,7 +324,7 @@ class PendingTransitionProposal(CanonicalContract):
 
 class TurnCommand(CanonicalContract):
     schema_version: Literal["turn_command.v1"] = "turn_command.v1"
-    command: Literal["preview"] = "preview"
+    command: Literal["execute", "preview"] = "execute"
     thread_id: str
     user_id: str
     turn_id: str
@@ -268,11 +334,13 @@ class TurnCommand(CanonicalContract):
     candidate_values: dict[str, list[str]] = Field(default_factory=dict)
     source_bindings: list[PendingSourceBinding] = Field(default_factory=list)
     historical_authorization_audit: dict[str, Any] = Field(default_factory=dict)
+    channel: Literal["text", "text_edit", "voice", "collect", "plan"] = "text"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class TurnEvent(CanonicalContract):
     schema_version: Literal["turn_event.v1"] = "turn_event.v1"
-    event_type: Literal["utterance_parsed", "pending_loaded", "pending_bound", "request_built"]
+    event_type: str
     sequence: int = Field(ge=0)
     detail: dict[str, Any] = Field(default_factory=dict)
 
@@ -282,4 +350,11 @@ class TurnResult(CanonicalContract):
     request: CanonicalTurnRequest
     events: list[TurnEvent]
     pending_transition: PendingTransitionProposal
-    execution_performed: Literal[False] = False
+    authorization: list[GoalAuthorizationDecision] = Field(default_factory=list)
+    readiness: list[GoalReadinessDecision] = Field(default_factory=list)
+    source_resolutions: list[GoalSourceResolution] = Field(default_factory=list)
+    goal_statuses: list[GoalExecutionStatus] = Field(default_factory=list)
+    execution_performed: bool = False
+    terminal_status: str = "preview"
+    plan_snapshot: Any | None = None
+    complete_payload: dict[str, Any] = Field(default_factory=dict)

@@ -1,9 +1,4 @@
-"""Phase 1 canonical-turn contracts.
-
-This package is intentionally not imported by the production agent or
-transport entrypoints.  It is consumed only by the isolated preview
-coordinator and its tests until the later cutover phase.
-"""
+"""Canonical-turn contracts shared by production and preview paths."""
 
 from .contracts import (
     CAPABILITY_ALLOWLIST,
@@ -13,6 +8,10 @@ from .contracts import (
     ClauseSource,
     CurrentUtteranceParse,
     EntitySpan,
+    GoalAuthorizationDecision,
+    GoalExecutionStatus,
+    GoalReadinessDecision,
+    GoalSourceResolution,
     PendingBinding,
     PendingClarification,
     PendingSourceBinding,
@@ -31,6 +30,10 @@ __all__ = [
     "ClauseSource",
     "CurrentUtteranceParse",
     "EntitySpan",
+    "GoalAuthorizationDecision",
+    "GoalExecutionStatus",
+    "GoalReadinessDecision",
+    "GoalSourceResolution",
     "PendingBinding",
     "PendingClarification",
     "PendingSourceBinding",

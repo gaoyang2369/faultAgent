@@ -6,15 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_ENTRY_PATHS = (
-    "fault_diagnosis/app.py",
-    "fault_diagnosis/server",
-    "fault_diagnosis/agent/engine.py",
-    "fault_diagnosis/agent/cutover.py",
-    "fault_diagnosis/agent/skills/router.py",
-    "fault_diagnosis/agent/planning/compiler.py",
-    "fault_diagnosis/agent/planning/validator.py",
-    "fault_diagnosis/agent/runtime",
-    "fault_diagnosis/agent/output",
+    "fault_diagnosis/server/use_cases/chat_service.py",
+    "fault_diagnosis/server/agent_gateway/streaming.py",
 )
 
 
@@ -25,33 +18,28 @@ def _python_files(path: Path):
         yield from path.rglob("*.py")
 
 
-def test_phase1_canonical_turn_is_not_imported_by_any_production_entry_or_decision_path() -> None:
+def test_phase2_production_entries_do_not_construct_or_orchestrate_engine() -> None:
     violations = []
     for relative in PRODUCTION_ENTRY_PATHS:
         for path in _python_files(ROOT / relative):
             tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
             for node in ast.walk(tree):
-                imported = ""
-                if isinstance(node, ast.Import):
-                    imported = " ".join(alias.name for alias in node.names)
-                elif isinstance(node, ast.ImportFrom):
-                    imported = node.module or ""
-                if any(
-                    token in imported
-                    for token in (
-                        "canonical_turn",
-                        "ConversationTurnCoordinator",
-                        "pending_clarification_repository",
-                    )
-                ):
-                    violations.append(f"{path.relative_to(ROOT)}:{node.lineno}:{imported}")
+                if isinstance(node, ast.Call):
+                    called = node.func
+                    name = called.id if isinstance(called, ast.Name) else called.attr if isinstance(called, ast.Attribute) else ""
+                    if name in {"AgentEngineV2", "ConversationTurnCoordinator"}:
+                        violations.append(f"{path.relative_to(ROOT)}:{node.lineno}:{name}")
 
     assert violations == []
+    chat = (ROOT / "fault_diagnosis/server/use_cases/chat_service.py").read_text(encoding="utf-8")
+    assert "get_production_turn_coordinator" in chat
+    assert ".preview_turn(context)" in chat
+    assert ".stream_turn(" in chat
 
 
-def test_phase1_coordinator_has_preview_only_and_no_execution_api() -> None:
+def test_phase2_coordinator_exposes_preview_and_execute_without_embedding_runtime() -> None:
     from fault_diagnosis.agent.canonical_turn import ConversationTurnCoordinator
 
     public_methods = {name for name in dir(ConversationTurnCoordinator) if not name.startswith("_")}
-    assert public_methods == {"preview"}
-    assert not public_methods.intersection({"execute", "stream", "compile", "route", "validate", "run"})
+    assert {"preview", "preview_turn", "execute_turn"}.issubset(public_methods)
+    assert not public_methods.intersection({"compile", "route", "validate", "run"})

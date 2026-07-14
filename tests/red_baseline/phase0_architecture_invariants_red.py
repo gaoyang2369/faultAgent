@@ -8,9 +8,10 @@ from fault_diagnosis.agent.engine import AgentEngineV2
 from fault_diagnosis.agent.output.answer import build_output_frame
 from fault_diagnosis.domain.diagnosis.contracts import AnalysisStepArtifact
 from fault_diagnosis.domain.security.permissions import build_auth_context
-from fault_diagnosis.platform.persistence.repositories.conversation_store import (
-    ConversationRepository,
-    SQLiteConversationRepository,
+from fault_diagnosis.platform.persistence.repositories.pending_clarification_repository import (
+    MemoryPendingClarificationRepository,
+    PendingClarificationRepository,
+    SQLitePendingClarificationRepository,
 )
 
 
@@ -36,14 +37,18 @@ def _manifest(artifact_id: str, artifact_type: str, *, sources: list[str] | None
 
 def test_pending_clarification_repository_has_waiting_cas_and_idempotency_boundary() -> None:
     required_methods = {
-        "get_waiting_clarification",
-        "create_waiting_clarification",
-        "compare_and_set_clarification_status",
-        "get_turn_by_idempotency_key",
+        "get_waiting",
+        "peek_waiting",
+        "create_waiting",
+        "compare_and_set_status",
+        "get_by_idempotency_key",
+        "mark_resumed",
+        "mark_consumed",
     }
 
-    assert required_methods.issubset(set(dir(ConversationRepository)))
-    assert required_methods.issubset(set(dir(SQLiteConversationRepository)))
+    assert required_methods.issubset(set(dir(PendingClarificationRepository)))
+    assert required_methods.issubset(set(dir(MemoryPendingClarificationRepository)))
+    assert required_methods.issubset(set(dir(SQLitePendingClarificationRepository)))
 
 
 def test_source_selector_reports_satisfaction_not_merely_candidate_selection() -> None:
@@ -60,7 +65,7 @@ def test_source_selector_reports_satisfaction_not_merely_candidate_selection() -
         thread_id=analysis.thread_id,
     )
 
-    assert selection.status == "satisfied_by_artifact"
+    assert selection.status == "source_for_execution"
     assert selection.binding is not None
     assert selection.binding.artifact_id == analysis.artifact_id
 
@@ -80,7 +85,7 @@ def test_source_selector_does_not_recursively_guess_a_compatible_ancestor() -> N
         thread_id=report.thread_id,
     )
 
-    assert selection.status == "blocked"
+    assert selection.status == "incompatible"
     assert selection.binding is None
     assert selection.observation["selection_reason"] == "explicit_source_type_incompatible"
 
@@ -122,4 +127,3 @@ def test_dependency_goal_has_terminal_state_but_no_user_deliverable() -> None:
     )
 
     assert [item.goal_id for item in frame.composite_output.deliverables] == ["goal_user_diagnosis"]
-

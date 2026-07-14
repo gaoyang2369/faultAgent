@@ -206,7 +206,8 @@ def test_singular_pronoun_after_comparison_only_runs_clarification(production_ha
     assert trace["selected_devices"] == []
     assert trace["selected_artifact_id"] in {"", None}
     assert followup.complete["produced_artifacts"] == []
-    assert node_types == ["clarification"]
+    assert node_types == []
+    assert trace["missing_context"] == ["device"]
 
 
 def test_motor2_report_and_repeated_workorder_keep_typed_source_lineage(production_harness) -> None:

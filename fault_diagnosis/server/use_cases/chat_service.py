@@ -13,7 +13,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
 from fault_diagnosis.server.auth.admin_auth import resolve_auth_context
-from fault_diagnosis.domain.context.conversation_context import ConversationContextAssembler
 from fault_diagnosis.server.devtools.dev_mode import get_dev_messages
 from fault_diagnosis.platform.logging import ensure_request_id, get_logger
 from fault_diagnosis.platform.model_catalog import resolve_model_name
@@ -22,7 +21,6 @@ from fault_diagnosis.platform.persistence.repositories.conversation_store import
     get_conversation_repository,
     messages_to_history_payload,
 )
-from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import get_artifact_manifest_exact, get_thread_artifact, list_thread_artifacts
 from fault_diagnosis.platform.persistence.repositories.history_index import get_history_index_repository
 from fault_diagnosis.server.use_cases.history_service import load_artifact_history_messages
 from fault_diagnosis.server.auth.session_scope import resolve_request_scope
@@ -33,10 +31,8 @@ from fault_diagnosis.server.agent_gateway.stream_control import (
     register_stream_handle,
 )
 from fault_diagnosis.server.agent_gateway.streaming import token_stream_events as default_token_stream_events
-from fault_diagnosis.agent import AgentEngineV2
-from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_plan
-from fault_diagnosis.agent.planning import PlanPolicyBridge
-from .conversation_persistence import ConversationPersistenceService, parse_sse_payloads
+from .conversation_persistence import parse_sse_payloads
+from .turn_execution import get_production_turn_coordinator, plan_compat_payload
 from fault_diagnosis.shared.utils import (
     sanitize_chat_history_messages,
     summarize_identifier_for_log,
@@ -170,78 +166,6 @@ def to_langchain_history_messages(messages: list[dict[str, Any]]) -> list:
     return converted
 
 
-def _v2_plan_compat_payload(*, snapshot: Any, plan: Any) -> dict[str, Any]:
-    bridge = PlanPolicyBridge()
-    primary_skill = snapshot.skill_route.primary_skill or "clarification"
-    policy_id = bridge.policy_id_for_skill(primary_skill)
-    task_family = bridge.task_family_for_skill(primary_skill)
-    enabled_nodes = bridge.legacy_enabled_nodes(plan)
-    skipped_nodes = _v2_plan_skip_reasons(enabled_nodes)
-    planned_tools = bridge.v2_to_legacy_tools(list(plan.allowed_tools))
-    forbidden_tools = bridge.v2_to_legacy_tools(list(plan.forbidden_tools))
-    authz = dict((snapshot.output_frame.guardrail_result or {}).get("authorization") or {})
-    resolved_context = snapshot.context_frame.model_dump(mode="json", exclude_none=True)
-    signals_summary = (resolved_context.get("permission_context") or {}).get("conversation_context_signals_summary")
-    if isinstance(signals_summary, dict):
-        resolved_context["conversation_context_signals_summary"] = signals_summary
-    return {
-        "schema_version": snapshot.schema_version,
-        "engine_version": "v2",
-        "task_family": task_family,
-        "policy_id": policy_id,
-        "plan_mode": "agent_engine_v2",
-        "context_relation": snapshot.context_frame.relation_to_previous,
-        "resolved_context": resolved_context,
-        "goal_set": {
-            "primary_goal_id": str(plan.goals[0].get("goal_id") or "") if plan.goals else "",
-            "goals": [_dump_model(goal) for goal in plan.goals],
-            "goal_types": [str(goal.get("goal_type") or "") for goal in plan.goals if goal.get("goal_type")],
-            "expected_outputs": list(plan.expected_outputs),
-        },
-        "goals": [_dump_model(goal) for goal in plan.goals],
-        "workflow_route": {
-            "task_family": task_family,
-            "policy_id": policy_id,
-            "risk_level": plan.risk_level,
-            "required_evidence": list(plan.required_evidence),
-        },
-        "workflow_policy": {
-            "policy_id": policy_id,
-            "enabled_nodes": dict(enabled_nodes),
-            "allowed_tools": planned_tools,
-            "forbidden_tools": forbidden_tools,
-        },
-        "enabled_nodes": dict(enabled_nodes),
-        "skipped_nodes": dict(skipped_nodes),
-        "skip_reasons": dict(skipped_nodes),
-        "planned_tools": planned_tools,
-        "forbidden_tools": forbidden_tools,
-        "missing_slots": [
-            str(item.get("missing_slot"))
-            for item in snapshot.effective_request_frame.clarification_reasons
-            if item.get("missing_slot")
-        ],
-        "evidence_gaps": {"required_evidence": list(plan.required_evidence), "missing_or_stale_evidence": []},
-        "readiness": {"diagnosis": {}, "workorder_action": {}},
-        "manual_confirmation": {},
-        "authorization": authz,
-    }
-
-
-def _dump_model(value: Any) -> Any:
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json", by_alias=True, exclude_none=True)
-    return dict(value) if isinstance(value, dict) else value
-
-
-def _v2_plan_skip_reasons(enabled_nodes: dict[str, bool]) -> dict[str, str]:
-    skip_reasons: dict[str, str] = {}
-    for node in ("analysis", "sql", "knowledge", "report", "workorder_decision"):
-        if not enabled_nodes.get(node):
-            skip_reasons[node] = "not_planned_by_agent_engine_v2"
-    return skip_reasons
-
-
 class ChatService:
     """封装聊天流、编辑重生成、语音 Agent 聚合和停止流用例。"""
 
@@ -301,36 +225,8 @@ class ChatService:
     def _conversation_repository(self, app) -> ConversationRepository:
         return getattr(app.state, "conversation_repository", None) or get_conversation_repository()
 
-    def _conversation_persistence(self, app) -> ConversationPersistenceService:
-        return ConversationPersistenceService(
-            repository=self._conversation_repository(app),
-            logger=self._log,
-        )
-
-    def _build_read_only_conversation_context(self, app, context: AgentInvocationContext) -> dict[str, Any] | None:
-        try:
-            from fault_diagnosis.domain.context import ArtifactBackedCaseStore
-
-            return ConversationContextAssembler(
-                conversation_repository=self._conversation_repository(app),
-                case_store=ArtifactBackedCaseStore(
-                    artifact_lister=lambda thread_id, limit: list_thread_artifacts(thread_id, limit=limit)
-                ),
-                artifact_getter=get_thread_artifact,
-                artifact_manifest_getter=get_artifact_manifest_exact,
-            ).build(
-                thread_id=context.thread_id,
-                current_user_message=context.message,
-                auth_context=context.auth_context,
-            )
-        except Exception as exc:
-            self._log.warning(
-                "构造只读对话上下文失败",
-                thread_id=summarize_thread_id(context.thread_id),
-                request_id=context.request_id,
-                error=str(exc),
-            )
-            return None
+    def _turn_coordinator(self, app):
+        return get_production_turn_coordinator(app, stream_events=self.stream_events, logger=self._log)
 
     async def prepare_agent_invocation_context(
         self,
@@ -456,18 +352,10 @@ class ChatService:
             message_len=len(message),
             message_preview=summarize_text_for_log(message, limit=72),
         )
-        conversation_context = self._build_read_only_conversation_context(request.app, context)
-        snapshot = AgentEngineV2().build_plan_snapshot(
-            raw_message=context.message,
-            thread_id=context.thread_id,
-            request_id=context.request_id,
-            auth_context=context.auth_context,
-            conversation_context=conversation_context,
-            metadata={"source": "chat_plan"},
-        )
-        plan = prepare_v2_execution_plan(snapshot=snapshot, thread_id=context.thread_id, auth_context=context.auth_context)
+        canonical, snapshot, plan = self._turn_coordinator(request.app).preview_turn(context)
         payload = snapshot.model_dump(mode="json", exclude_none=True)
-        payload.update(_v2_plan_compat_payload(snapshot=snapshot, plan=plan))
+        payload.update(plan_compat_payload(snapshot=snapshot, plan=plan))
+        payload["turn_result"] = canonical.model_dump(mode="json", exclude_none=True)
         payload["thread_id"] = context.thread_id
         payload["request_id"] = context.request_id
         payload["auth_context"] = context.auth_context.audit_summary()
@@ -544,26 +432,14 @@ class ChatService:
                 thread_id=context.thread_id,
                 session_id=context.session_id,
             )
-            self._conversation_persistence(request.app).prepare_turn(context)
-
             response = StreamingResponse(
-                self._conversation_persistence(request.app).stream_events_with_persistence(
+                self._turn_coordinator(request.app).stream_turn(
                     context,
-                    self.stream_events(
-                        request.app,
-                        context.message,
-                        context.thread_id,
-                        context.trusted_user_identity,
-                        request_id=context.request_id,
-                        stream_id=context.stream_id,
-                        cancel_handle=cancel_handle,
-                        history_messages=context.history_messages,
-                        replace_history=False,
-                        auth_context=context.auth_context,
-                        model_name=resolved_model,
-                        conversation_context=context.conversation_context,
-                        complete_payload_enricher=self._build_complete_payload_enricher(context),
-                    ),
+                    cancel_handle=cancel_handle,
+                    history_messages=context.history_messages,
+                    replace_history=False,
+                    model_name=resolved_model,
+                    complete_payload_enricher=self._build_complete_payload_enricher(context),
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -722,30 +598,16 @@ class ChatService:
                 updated_legacy_bindings=legacy_bindings,
                 minted_new_thread=False,
             )
-            self._conversation_persistence(request.app).prepare_turn(
-                edit_context,
-                branch_id=f"edit-{request_id}",
-                parent_message_id=(kept_messages[-1].get("id") if kept_messages else None),
-            )
-
             response = StreamingResponse(
-                self._conversation_persistence(request.app).stream_events_with_persistence(
+                self._turn_coordinator(request.app).stream_turn(
                     edit_context,
-                    self.stream_events(
-                        request.app,
-                        normalized_message,
-                        resolved_thread_id,
-                        trusted_user_identity,
-                        request_id=request_id,
-                        stream_id=stream_id,
-                        cancel_handle=cancel_handle,
-                        history_messages=to_langchain_history_messages(kept_messages),
-                        replace_history=True,
-                        auth_context=auth_context,
-                        model_name=resolved_model,
-                        conversation_context=edit_context.conversation_context,
-                        complete_payload_enricher=self._build_complete_payload_enricher(edit_context),
-                    ),
+                    cancel_handle=cancel_handle,
+                    history_messages=to_langchain_history_messages(kept_messages),
+                    replace_history=True,
+                    model_name=resolved_model,
+                    complete_payload_enricher=self._build_complete_payload_enricher(edit_context),
+                    branch_id=f"edit-{request_id}",
+                    parent_message_id=(kept_messages[-1].get("id") if kept_messages else None),
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -824,23 +686,12 @@ class ChatService:
         )
 
         try:
-            self._conversation_persistence(request.app).prepare_turn(context)
-            async for chunk in self._conversation_persistence(request.app).stream_events_with_persistence(
+            async for chunk in self._turn_coordinator(request.app).stream_turn(
                 context,
-                self.stream_events(
-                    request.app,
-                    context.message,
-                    context.thread_id,
-                    context.trusted_user_identity,
-                    request_id=context.request_id,
-                    stream_id=context.stream_id,
-                    history_messages=context.history_messages,
-                    replace_history=False,
-                    auth_context=context.auth_context,
-                    model_name=resolved_model,
-                    conversation_context=context.conversation_context,
-                    complete_payload_enricher=self._build_complete_payload_enricher(context),
-                ),
+                history_messages=context.history_messages,
+                replace_history=False,
+                model_name=resolved_model,
+                complete_payload_enricher=self._build_complete_payload_enricher(context),
             ):
                 for event in parse_sse_payloads(chunk):
                     msg_type = event.get("type")

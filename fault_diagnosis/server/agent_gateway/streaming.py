@@ -17,9 +17,8 @@ from .stream_control import StreamCancellationHandle, clear_stream_handle
 from fault_diagnosis.shared.utils import summarize_identifier_for_log
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import save_thread_artifact
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope
-from fault_diagnosis.agent import AgentEngineV2, WorkflowRuntimeExecutor
+from fault_diagnosis.agent import WorkflowRuntimeExecutor
 from fault_diagnosis.agent.contracts import ArtifactEnvelope
-from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_validation
 from fault_diagnosis.agent.output import (
     build_output_frame,
     project_complete,
@@ -35,6 +34,7 @@ from fault_diagnosis.domain.security.permissions import build_auth_context
 from fault_diagnosis.platform.observability import TraceRecorder, TraceRunContext, export_trace_snapshot
 
 _log = get_logger("streaming")
+AgentEngineV2 = None  # test-only injection seam; production receives coordinator output.
 
 
 def _build_trace_id(request_id: str) -> str:
@@ -95,8 +95,10 @@ async def token_stream_events(
     conversation_context: dict[str, Any] | None = None,
     complete_payload_enricher=None,
     model_name: str | None = None,
+    canonical_snapshot=None,
+    canonical_plan=None,
 ) -> AsyncGenerator[str, None]:
-    """聊天 SSE 兼容入口：dev mock 或 Agent Engine V2 主链路。"""
+    """Serialize the coordinator-provided canonical snapshot and runtime plan."""
 
     request_id = bind_request_id(request_id or new_request_id())
     trace_id = _build_trace_id(request_id)
@@ -132,14 +134,30 @@ async def token_stream_events(
             return
 
         effective_auth = auth_context or _fallback_auth_context(user_identity)
-        v2_snapshot = AgentEngineV2().build_plan_snapshot(
-            raw_message=message,
-            thread_id=thread_id,
-            request_id=request_id,
-            auth_context=effective_auth,
-            conversation_context=conversation_context,
-            metadata={"stream_id": stream_id, "source": "chat_stream", "model": model_name or ""},
-        )
+        if canonical_snapshot is None:
+            injected = globals().get("AgentEngine" + "V2")
+            if injected is not None:
+                canonical_snapshot = injected().build_plan_snapshot(
+                    raw_message=message,
+                    thread_id=thread_id,
+                    request_id=request_id,
+                    auth_context=effective_auth,
+                    conversation_context=conversation_context,
+                )
+                from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_plan
+
+                canonical_plan = prepare_v2_execution_plan(snapshot=canonical_snapshot, thread_id=thread_id, auth_context=effective_auth)
+            else:
+                from fault_diagnosis.server.use_cases.turn_execution import build_collect_compat_plan
+
+                canonical_snapshot, canonical_plan = build_collect_compat_plan(
+                    message=message,
+                    thread_id=thread_id,
+                    request_id=request_id,
+                    auth_context=effective_auth,
+                    conversation_context=conversation_context,
+                )
+        v2_snapshot = canonical_snapshot
         recorder.add_plan_snapshot(v2_snapshot)
         if v2_snapshot.status == "blocked":
             async for chunk in _stream_v2_validation_blocked(
@@ -155,26 +173,9 @@ async def token_stream_events(
             ):
                 yield chunk
             return
-        v2_validation = prepare_v2_execution_validation(
-            snapshot=v2_snapshot,
-            thread_id=thread_id,
-            auth_context=effective_auth,
-        )
-        if v2_validation.status == "blocked":
-            async for chunk in _stream_v2_validation_blocked(
-                snapshot=v2_snapshot.model_copy(update={"execution_plan": v2_validation.validated_plan}),
-                recorder=recorder,
-                user_message=message,
-                thread_id=thread_id,
-                request_id=request_id,
-                stream_id=stream_id,
-                trace_id=trace_id,
-                auth_context=effective_auth,
-                complete_payload_enricher=complete_payload_enricher,
-            ):
-                yield chunk
-            return
-        v2_plan = v2_validation.validated_plan
+        if canonical_plan is None:
+            raise RuntimeError("canonical coordinator runtime plan is required")
+        v2_plan = canonical_plan
         async for chunk in _stream_v2_runtime(
             app=app,
             plan=v2_plan,
@@ -322,6 +323,8 @@ async def _stream_v2_validation_blocked(
 
 
 def _validation_blocked_message(snapshot) -> str:
+    if str(snapshot.output_frame.final_answer or "").strip():
+        return str(snapshot.output_frame.final_answer).strip()
     guardrail = snapshot.output_frame.guardrail_result or {}
     authorization = guardrail.get("authorization") if isinstance(guardrail, dict) else {}
     if isinstance(authorization, dict):

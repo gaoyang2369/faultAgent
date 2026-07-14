@@ -20,7 +20,7 @@ RULE_CATALOG = (
     {
         "rule_id": "entity.device.motor_reference.v1",
         "category": "device_pattern",
-        "pattern": r"(?<![A-Za-z0-9])(?:[A-Za-z]\d{2,4})?\s*电机\s*\d+(?!\d)",
+        "pattern": r"(?<![A-Za-z0-9])(?:(?:[A-Za-z]\d{2,4})?\s*电机\s*\d+|J\d+(?:号机)?)(?!\d)",
         "semantic_value": "device_reference",
         "priority": 690,
         "confidence": 1.0,
@@ -58,7 +58,7 @@ RULE_CATALOG = (
     {
         "rule_id": "source.prior_result.marker.v1",
         "category": "source_marker",
-        "pattern": r"(?:刚才|上一轮|上一次|前面|之前|这个|该)(?:的)?(?:诊断(?:结果)?|分析结果|运行报告|报告|数据|结果)",
+        "pattern": r"(?:(?:刚才|上一轮|上一次|前面|之前|这个|该)(?:的)?|(?:基于|根据|使用|用)(?:刚才的|上一轮的|前面的|这个)?)(?:诊断(?:结果)?|分析结果|运行报告|报告|数据|结果)",
         "semantic_value": "source_reference",
         "priority": 660,
         "confidence": 1.0,
@@ -69,7 +69,7 @@ RULE_CATALOG = (
     {
         "rule_id": "reference.correction.marker.v1",
         "category": "correction_marker",
-        "pattern": r"(?:不是.+?是|改成|更正为|应该是)",
+        "pattern": r"(?:不是.+?是|改成|改查|更正为|应该是)",
         "semantic_value": "correction_reference",
         "priority": 650,
         "confidence": 1.0,
@@ -89,7 +89,7 @@ RULE_CATALOG = (
     {
         "rule_id": "clause.boundary.punctuation.v1",
         "category": "clause_boundary",
-        "pattern": r"[，,。；;！？!?]+",
+        "pattern": r"[，,。；;！？!?]+|(?:并|然后|顺便|另外|以及)(?=(?:给出|诊断|分析|查询|生成|创建|判断|比较|解释|看看))",
         "semantic_value": "boundary",
         "priority": 600,
         "confidence": 1.0,
@@ -121,7 +121,7 @@ RULE_CATALOG = (
     {
         "rule_id": "action.report.generate.v1",
         "category": "action_predicate",
-        "pattern": r"(?:生成|整理成|出一份|制作).{0,6}(?:运行)?报告",
+        "pattern": r"(?:生成|整理成|出一份|制作).{0,24}(?:运行)?报告",
         "semantic_value": "generate_report",
         "priority": 900,
         "confidence": 1.0,
@@ -143,7 +143,7 @@ RULE_CATALOG = (
     {
         "rule_id": "action.runtime.compare.v1",
         "category": "action_predicate",
-        "pattern": r"(?:对比|比较).{0,12}(?:状态|运行|异常|数据)",
+        "pattern": r"(?:对比|比较).{0,36}(?:状态|运行|异常|数据)",
         "semantic_value": "compare_runtime_status",
         "priority": 880,
         "confidence": 1.0,
@@ -154,7 +154,7 @@ RULE_CATALOG = (
     {
         "rule_id": "action.diagnosis.assess.v1",
         "category": "action_predicate",
-        "pattern": r"(?:诊断(?!结果)|判断).{0,12}(?:故障|异常|问题|原因)|(?:有没有|是否|存在).{0,5}故障",
+        "pattern": r"(?:诊断(?!结果)(?:一下|看看)?|判断|排查|分析).{0,24}(?:故障|异常|问题|原因|根因|[A-Za-z]{1,3}\d{4,6})|(?:详细)?诊断(?!结果)(?:一下|看看)?|(?:为什么|为何).{0,18}(?:故障|异常|问题)|(?:有没有|是否|存在).{0,5}(?:故障|异常)|(?:故障|异常)吗",
         "semantic_value": "diagnose_fault",
         "priority": 870,
         "confidence": 1.0,
@@ -165,7 +165,7 @@ RULE_CATALOG = (
     {
         "rule_id": "action.fault_code.explain_explicit.v1",
         "category": "action_predicate",
-        "pattern": r"(?:什么意思|含义|解释|说明|故障码)",
+        "pattern": r"(?:是什么|什么意思|含义|解释|说明|故障码)",
         "semantic_value": "explain_fault_code",
         "priority": 860,
         "confidence": 1.0,
@@ -192,21 +192,20 @@ RULE_CATALOG = (
     {
         "rule_id": "action.runtime.status.v1",
         "category": "action_predicate",
-        "pattern": r"(?:查询|查看|检查|看看|有没有).{0,18}(?:状态|运行|异常|数据)",
+        "pattern": r"(?:查询|查看|检查|看看|查|改查).{0,24}(?:状态|运行|异常|数据|电机\d+)|(?:当前|现在).{0,18}(?:状态|运行|异常|健康)|(?:健康状况|运行情况)",
         "semantic_value": "check_runtime_status",
-        "priority": 840,
+        "priority": 875,
         "confidence": 1.0,
         "allowed_clause_roles": ("action",),
-        "requires_entity_kind": "device_reference",
         "entity_ref_kinds": ("device_reference",),
         "example": "查询G120电机1运行状态",
     },
     {
         "rule_id": "action.workorder.create_draft.v1",
         "category": "action_predicate",
-        "pattern": r"(?:创建|生成|新建).{0,5}(?:工单|维修单)",
+        "pattern": r"(?:创建|生成|新建|判断|看看|是否需要|要不要).{0,24}(?:工单|维修单)",
         "semantic_value": "create_workorder_draft",
-        "priority": 830,
+        "priority": 885,
         "confidence": 1.0,
         "allowed_clause_roles": ("action",),
         "entity_ref_kinds": ("*",),

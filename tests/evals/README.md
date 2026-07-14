@@ -10,6 +10,15 @@ PR plan eval:
 python tests/evals/run_plan_eval.py
 ```
 
+Phase 2 canonical-turn core gate:
+
+```bash
+python tests/evals/run_plan_eval.py --tier core
+```
+
+The core gate reads `canonical_turn_phase2_cases.yaml`; the older mixed-phase
+case catalog remains in `agent_workflow_cases.yaml` for historical/extended comparison.
+
 Trace core eval with the in-process mocked runtime:
 
 ```bash

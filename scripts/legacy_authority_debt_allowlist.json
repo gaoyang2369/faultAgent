@@ -1,906 +1,267 @@
 {
+  "schema_version": "legacy_authority_debt_allowlist.v1",
+  "policy": "Exact Phase 0 debt only. Remove entries as reads disappear; never add transitional production reads.",
   "entries": [
     {
-      "authority": "EffectiveRequestFrame",
-      "component": "Compiler",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "PlanCompiler.compile",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "IntentFrame",
-      "component": "Compiler",
-      "expression": "IntentFrame",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "PlanCompiler.compile",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "effective_semantic_intent",
-      "component": "Compiler",
-      "expression": "effective_request_frame.effective_semantic_intent if effective_request_frame else \"\"",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "PlanCompiler.compile",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "primary_skill",
-      "component": "Compiler",
-      "expression": "[skill_route.primary_skill] if skill_route.primary_skill else []",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "PlanCompiler.compile",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "primary_skill",
-      "component": "Compiler",
-      "expression": "skill_route.primary_skill",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "PlanCompiler.compile",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "EffectiveRequestFrame",
-      "component": "Compiler",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_goal_scoped_nodes",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "needs_clarification",
-      "component": "Compiler",
-      "expression": "effective_request_frame.needs_clarification",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_goal_scoped_nodes",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Compiler",
-      "expression": "\"block_all\" if effective_request_frame.target_artifact_id else \"block_dependents\"",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_goal_scoped_nodes",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Compiler",
-      "expression": "not effective_request_frame.target_artifact_id",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_goal_scoped_nodes",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_type",
-      "component": "Compiler",
-      "expression": "effective_request_frame.target_artifact_type in {\"sql_artifact\", \"status_query\", \"status_inspection\"}",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_goal_scoped_nodes",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_type",
-      "component": "Compiler",
-      "expression": "effective_request_frame.target_artifact_type not in {\"analysis_artifact\", \"report_artifact\", \"report_generation\"}",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_goal_scoped_nodes",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "EffectiveRequestFrame",
-      "component": "Compiler",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_normalized_nodes",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "EffectiveRequestFrame",
-      "component": "Compiler",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_source_artifact_refs",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Compiler",
-      "expression": "frame.target_artifact_id",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_source_artifact_refs",
-      "usage": "call_argument"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Compiler",
-      "expression": "frame.target_artifact_id",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_source_artifact_refs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_type",
-      "component": "Compiler",
-      "expression": "frame.target_artifact_type or \"\"",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_source_artifact_refs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "EffectiveRequestFrame",
-      "component": "Compiler",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_source_binding_for_goals",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "EffectiveRequestFrame",
-      "component": "Compiler",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_wanted_node_types",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Compiler",
-      "expression": "\"workorder_decision\" in selected and effective_request_frame is not None and effective_request_frame.target_artifact_id and effective_request_frame.target_artifact_type in {\"report_artifact\", \"analysis_artifact\"}",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_wanted_node_types",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Compiler",
-      "expression": "effective_request_frame.target_artifact_id or effective_request_frame.target_evidence_bundle_id",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_wanted_node_types",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_type",
-      "component": "Compiler",
-      "expression": "effective_request_frame.target_artifact_type in {\"report_artifact\", \"analysis_artifact\"}",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "_wanted_node_types",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "EffectiveRequestFrame",
-      "component": "Compiler",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "compile_node_inputs",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "effective_semantic_intent",
-      "component": "Compiler",
-      "expression": "effective_request_frame.effective_semantic_intent or effective_request_frame.semantic_intent",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "compile_node_inputs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "requested_action",
-      "component": "Compiler",
-      "expression": "effective_request_frame.requested_action",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "compile_node_inputs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "requested_action",
-      "component": "Compiler",
-      "expression": "effective_request_frame.requested_action or effective_request_frame.semantic_intent",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "compile_node_inputs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "semantic_intent",
-      "component": "Compiler",
-      "expression": "effective_request_frame.effective_semantic_intent or effective_request_frame.semantic_intent",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "compile_node_inputs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "semantic_intent",
-      "component": "Compiler",
-      "expression": "effective_request_frame.requested_action or effective_request_frame.semantic_intent",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "compile_node_inputs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Compiler",
-      "expression": "effective_request_frame.target_artifact_id",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "compile_node_inputs",
-      "usage": "assignment_source"
-    },
-    {
-      "authority": "target_artifact_type",
-      "component": "Compiler",
-      "expression": "effective_request_frame.target_artifact_type",
-      "path": "fault_diagnosis/agent/planning/compiler.py",
-      "purpose": "goal_node_or_artifact_plan_construction",
-      "symbol": "compile_node_inputs",
-      "usage": "assignment_source"
-    },
-    {
-      "authority": "requested_variant",
       "component": "Output",
-      "expression": "requested_variant",
       "path": "fault_diagnosis/agent/output/answer.py",
-      "purpose": "deliverable_or_answer_variant_selection",
       "symbol": "build_output_frame",
-      "usage": "call_argument"
+      "authority": "requested_variant",
+      "usage": "call_argument",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "requested_variant"
     },
     {
-      "authority": "compatibility_call",
       "component": "Output",
-      "expression": "compatibility_call and sql",
       "path": "fault_diagnosis/agent/output/deliverables.py",
-      "purpose": "deliverable_or_answer_variant_selection",
       "symbol": "DeliverableAssembler._assemble_one",
-      "usage": "control_flow"
+      "authority": "compatibility_call",
+      "usage": "control_flow",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "compatibility_call and sql"
     },
     {
-      "authority": "compatibility_call",
       "component": "Output",
-      "expression": "compatibility_call and workorder_payload.get(\"workorder_suggestion\")",
       "path": "fault_diagnosis/agent/output/deliverables.py",
-      "purpose": "deliverable_or_answer_variant_selection",
       "symbol": "DeliverableAssembler._assemble_one",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "requested_variant",
-      "component": "Output",
-      "expression": "requested_variant == \"clarification\"",
-      "path": "fault_diagnosis/agent/output/deliverables.py",
-      "purpose": "deliverable_or_answer_variant_selection",
-      "symbol": "DeliverableAssembler._compatibility_goals",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "requested_variant",
-      "component": "Output",
-      "expression": "requested_variant == \"diagnosis_answer\"",
-      "path": "fault_diagnosis/agent/output/deliverables.py",
-      "purpose": "deliverable_or_answer_variant_selection",
-      "symbol": "DeliverableAssembler._compatibility_goals",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "requested_variant",
-      "component": "Output",
-      "expression": "requested_variant == \"permission_denied\"",
-      "path": "fault_diagnosis/agent/output/deliverables.py",
-      "purpose": "deliverable_or_answer_variant_selection",
-      "symbol": "DeliverableAssembler._compatibility_goals",
-      "usage": "control_flow"
-    },
-    {
       "authority": "compatibility_call",
-      "component": "Output",
-      "expression": "goal.get(\"compatibility_call\")",
-      "path": "fault_diagnosis/agent/output/deliverables.py",
+      "usage": "control_flow",
       "purpose": "deliverable_or_answer_variant_selection",
-      "symbol": "DeliverableAssembler.assemble",
-      "usage": "call_argument"
+      "expression": "compatibility_call and workorder_payload.get(\"workorder_suggestion\")"
     },
     {
+      "component": "Output",
+      "path": "fault_diagnosis/agent/output/deliverables.py",
+      "symbol": "DeliverableAssembler._compatibility_goals",
+      "authority": "requested_variant",
+      "usage": "control_flow",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "requested_variant == \"clarification\""
+    },
+    {
+      "component": "Output",
+      "path": "fault_diagnosis/agent/output/deliverables.py",
+      "symbol": "DeliverableAssembler._compatibility_goals",
+      "authority": "requested_variant",
+      "usage": "control_flow",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "requested_variant == \"diagnosis_answer\""
+    },
+    {
+      "component": "Output",
+      "path": "fault_diagnosis/agent/output/deliverables.py",
+      "symbol": "DeliverableAssembler._compatibility_goals",
+      "authority": "requested_variant",
+      "usage": "control_flow",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "requested_variant == \"permission_denied\""
+    },
+    {
+      "component": "Output",
+      "path": "fault_diagnosis/agent/output/deliverables.py",
+      "symbol": "DeliverableAssembler.assemble",
       "authority": "compatibility_call",
+      "usage": "call_argument",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "goal.get(\"compatibility_call\")"
+    },
+    {
       "component": "Output",
-      "expression": "goal.get(\"compatibility_call\")",
       "path": "fault_diagnosis/agent/output/deliverables.py",
-      "purpose": "deliverable_or_answer_variant_selection",
       "symbol": "DeliverableAssembler.assemble",
-      "usage": "control_flow"
+      "authority": "compatibility_call",
+      "usage": "control_flow",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "goal.get(\"compatibility_call\")"
     },
     {
-      "authority": "requested_variant",
       "component": "Output",
-      "expression": "requested_variant",
       "path": "fault_diagnosis/agent/output/deliverables.py",
-      "purpose": "deliverable_or_answer_variant_selection",
       "symbol": "DeliverableAssembler.assemble",
-      "usage": "call_argument"
+      "authority": "requested_variant",
+      "usage": "call_argument",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "requested_variant"
     },
     {
-      "authority": "requested_variant",
       "component": "Output",
-      "expression": "requested_variant == \"diagnosis_answer\"",
       "path": "fault_diagnosis/agent/output/deliverables.py",
-      "purpose": "deliverable_or_answer_variant_selection",
       "symbol": "DeliverableAssembler.assemble",
-      "usage": "control_flow"
+      "authority": "requested_variant",
+      "usage": "control_flow",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "requested_variant == \"diagnosis_answer\""
     },
     {
-      "authority": "requested_variant",
       "component": "Output",
-      "expression": "requested_variant == \"clarification\"",
       "path": "fault_diagnosis/agent/output/presenter.py",
-      "purpose": "deliverable_or_answer_variant_selection",
       "symbol": "CompositePresenter._compatibility_variant",
-      "usage": "control_flow"
+      "authority": "requested_variant",
+      "usage": "control_flow",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "requested_variant == \"clarification\""
     },
     {
-      "authority": "requested_variant",
       "component": "Output",
-      "expression": "requested_variant == \"permission_denied\"",
       "path": "fault_diagnosis/agent/output/presenter.py",
-      "purpose": "deliverable_or_answer_variant_selection",
       "symbol": "CompositePresenter._compatibility_variant",
-      "usage": "control_flow"
+      "authority": "requested_variant",
+      "usage": "control_flow",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "requested_variant == \"permission_denied\""
     },
     {
-      "authority": "requested_variant",
       "component": "Output",
-      "expression": "requested_variant or \"clarification\"",
       "path": "fault_diagnosis/agent/output/presenter.py",
-      "purpose": "deliverable_or_answer_variant_selection",
       "symbol": "CompositePresenter._compatibility_variant",
-      "usage": "control_flow"
+      "authority": "requested_variant",
+      "usage": "control_flow",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "requested_variant or \"clarification\""
     },
     {
-      "authority": "requested_variant",
       "component": "Output",
-      "expression": "requested_variant in {\"blocked\", \"permission_denied\"}",
       "path": "fault_diagnosis/agent/output/presenter.py",
-      "purpose": "deliverable_or_answer_variant_selection",
       "symbol": "CompositePresenter._terminal_body",
-      "usage": "control_flow"
-    },
-    {
       "authority": "requested_variant",
-      "component": "Output",
-      "expression": "requested_variant",
-      "path": "fault_diagnosis/agent/output/presenter.py",
+      "usage": "control_flow",
       "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "requested_variant in {\"blocked\", \"permission_denied\"}"
+    },
+    {
+      "component": "Output",
+      "path": "fault_diagnosis/agent/output/presenter.py",
       "symbol": "CompositePresenter.present",
-      "usage": "call_argument"
+      "authority": "requested_variant",
+      "usage": "call_argument",
+      "purpose": "deliverable_or_answer_variant_selection",
+      "expression": "requested_variant"
     },
     {
-      "authority": "EffectiveRequestFrame",
-      "component": "Router",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "SkillRouter.route",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "IntentFrame",
-      "component": "Router",
-      "expression": "IntentFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "SkillRouter.route",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "RewriteFrame",
-      "component": "Router",
-      "expression": "RewriteFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "SkillRouter.route",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "EffectiveRequestFrame",
-      "component": "Router",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_clarification_reason",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "IntentFrame",
-      "component": "Router",
-      "expression": "IntentFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_clarification_reason",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "IntentFrame",
-      "component": "Router",
-      "expression": "IntentFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_confidence",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "EffectiveRequestFrame",
-      "component": "Router",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_effective_request_has_executable_target",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "effective_semantic_intent",
-      "component": "Router",
-      "expression": "frame.effective_semantic_intent or frame.semantic_intent",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_effective_request_has_executable_target",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "semantic_intent",
-      "component": "Router",
-      "expression": "frame.effective_semantic_intent or frame.semantic_intent",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_effective_request_has_executable_target",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Router",
-      "expression": "frame.target_artifact_id",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_effective_request_has_executable_target",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "EffectiveRequestFrame",
-      "component": "Router",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_needs_clarification",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "IntentFrame",
-      "component": "Router",
-      "expression": "IntentFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_needs_clarification",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "needs_clarification",
-      "component": "Router",
-      "expression": "effective_request_frame.needs_clarification",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_needs_clarification",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "EffectiveRequestFrame",
-      "component": "Router",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_select_skills",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "IntentFrame",
-      "component": "Router",
-      "expression": "IntentFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_select_skills",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "RewriteFrame",
-      "component": "Router",
-      "expression": "RewriteFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_select_skills",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "effective_semantic_intent",
-      "component": "Router",
-      "expression": "effective_request_frame.effective_semantic_intent or effective_request_frame.semantic_intent",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_select_skills",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "semantic_intent",
-      "component": "Router",
-      "expression": "effective_request_frame.effective_semantic_intent or effective_request_frame.semantic_intent",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_select_skills",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "sub_intents",
-      "component": "Router",
-      "expression": "intent_frame.sub_intents",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_select_skills",
-      "usage": "call_argument"
-    },
-    {
-      "authority": "sub_intents",
-      "component": "Router",
-      "expression": "intent_frame.sub_intents",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_select_skills",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "user_rewrite",
-      "component": "Router",
-      "expression": "rewrite_frame.user_rewrite",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_select_skills",
-      "usage": "read"
-    },
-    {
-      "authority": "EffectiveRequestFrame",
-      "component": "Router",
-      "expression": "EffectiveRequestFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_skill_inputs",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "IntentFrame",
-      "component": "Router",
-      "expression": "IntentFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_skill_inputs",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "RewriteFrame",
-      "component": "Router",
-      "expression": "RewriteFrame",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_skill_inputs",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "effective_semantic_intent",
-      "component": "Router",
-      "expression": "effective_request_frame.effective_semantic_intent if effective_request_frame is not None else \"\"",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_skill_inputs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "requested_action",
-      "component": "Router",
-      "expression": "effective_request_frame.requested_action if effective_request_frame is not None else \"\"",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_skill_inputs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "requested_action",
-      "component": "Router",
-      "expression": "effective_request_frame.requested_action in {\"decide_workorder\", \"create_workorder_draft\", \"confirm_workorder_draft\"}",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_skill_inputs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Router",
-      "expression": "effective_request_frame.target_artifact_id if effective_request_frame is not None else None",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_skill_inputs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_type",
-      "component": "Router",
-      "expression": "effective_request_frame.target_artifact_type if effective_request_frame is not None else None",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_skill_inputs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "user_rewrite",
-      "component": "Router",
-      "expression": "rewrite_frame.user_rewrite",
-      "path": "fault_diagnosis/agent/skills/router.py",
-      "purpose": "route_selection_or_skill_input",
-      "symbol": "_skill_inputs",
-      "usage": "return_value"
-    },
-    {
-      "authority": "user_rewrite",
       "component": "Runtime",
-      "expression": "snapshot.rewrite_frame.user_rewrite or snapshot.intent_frame.normalized_message",
       "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
-      "purpose": "runtime_input_or_artifact_binding",
       "symbol": "_diagnosis_request",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "semantic_intent",
-      "component": "Runtime",
-      "expression": "snapshot.effective_request_frame.semantic_intent == \"confirm_workorder_draft\"",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
-      "purpose": "runtime_input_or_artifact_binding",
-      "symbol": "_prepare_plan",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Runtime",
-      "expression": "snapshot.effective_request_frame.target_artifact_id",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
-      "purpose": "runtime_input_or_artifact_binding",
-      "symbol": "_prepare_plan",
-      "usage": "call_argument"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Runtime",
-      "expression": "inputs.get(\"target_artifact_id\") or snapshot.effective_request_frame.target_artifact_id or \"\"",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
-      "purpose": "runtime_input_or_artifact_binding",
-      "symbol": "_prepare_plan",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Runtime",
-      "expression": "node_type == \"analysis\" and snapshot.effective_request_frame.target_artifact_id",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
-      "purpose": "runtime_input_or_artifact_binding",
-      "symbol": "_prepare_plan",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "target_artifact_id",
-      "component": "Runtime",
-      "expression": "snapshot.effective_request_frame.target_artifact_id",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
-      "purpose": "runtime_input_or_artifact_binding",
-      "symbol": "_prepare_plan",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "semantic_intent",
-      "component": "Runtime",
-      "expression": "effective.semantic_intent in {\"expand_previous_answer\", \"show_manual_fields\"}",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
-      "purpose": "runtime_input_or_artifact_binding",
-      "symbol": "_rag_query",
-      "usage": "control_flow"
-    },
-    {
       "authority": "user_rewrite",
-      "component": "Runtime",
-      "expression": "snapshot.rewrite_frame.user_rewrite or snapshot.intent_frame.normalized_message",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "usage": "control_flow",
       "purpose": "runtime_input_or_artifact_binding",
-      "symbol": "_rag_query",
-      "usage": "control_flow"
+      "expression": "snapshot.rewrite_frame.user_rewrite or snapshot.intent_frame.normalized_message"
     },
     {
-      "authority": "target_artifact_id",
       "component": "Runtime",
-      "expression": "snapshot.effective_request_frame.target_artifact_id",
       "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
-      "purpose": "runtime_input_or_artifact_binding",
-      "symbol": "_rag_source_artifact_refs",
-      "usage": "assignment_source"
-    },
-    {
-      "authority": "target_artifact_type",
-      "component": "Runtime",
-      "expression": "snapshot.effective_request_frame.target_artifact_type",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
-      "purpose": "runtime_input_or_artifact_binding",
-      "symbol": "_rag_source_artifact_refs",
-      "usage": "assignment_source"
-    },
-    {
+      "symbol": "_prepare_plan",
       "authority": "semantic_intent",
-      "component": "Runtime",
-      "expression": "snapshot.effective_request_frame.semantic_intent == \"confirm_workorder_draft\"",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "usage": "control_flow",
       "purpose": "runtime_input_or_artifact_binding",
-      "symbol": "_workorder_manifest_inputs",
-      "usage": "control_flow"
+      "expression": "snapshot.effective_request_frame.semantic_intent == \"confirm_workorder_draft\""
     },
     {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "symbol": "_prepare_plan",
       "authority": "target_artifact_id",
-      "component": "Runtime",
-      "expression": "inputs.get(\"target_artifact_id\") or snapshot.effective_request_frame.target_artifact_id or \"\"",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "usage": "call_argument",
       "purpose": "runtime_input_or_artifact_binding",
-      "symbol": "_workorder_manifest_inputs",
-      "usage": "control_flow"
+      "expression": "snapshot.effective_request_frame.target_artifact_id"
     },
     {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "symbol": "_prepare_plan",
+      "authority": "target_artifact_id",
+      "usage": "control_flow",
+      "purpose": "runtime_input_or_artifact_binding",
+      "expression": "inputs.get(\"target_artifact_id\") or snapshot.effective_request_frame.target_artifact_id or \"\""
+    },
+    {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "symbol": "_prepare_plan",
+      "authority": "target_artifact_id",
+      "usage": "control_flow",
+      "purpose": "runtime_input_or_artifact_binding",
+      "expression": "node_type == \"analysis\" and snapshot.effective_request_frame.target_artifact_id"
+    },
+    {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "symbol": "_prepare_plan",
+      "authority": "target_artifact_id",
+      "usage": "control_flow",
+      "purpose": "runtime_input_or_artifact_binding",
+      "expression": "snapshot.effective_request_frame.target_artifact_id"
+    },
+    {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "symbol": "_rag_query",
+      "authority": "semantic_intent",
+      "usage": "control_flow",
+      "purpose": "runtime_input_or_artifact_binding",
+      "expression": "effective.semantic_intent in {\"expand_previous_answer\", \"show_manual_fields\"}"
+    },
+    {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "symbol": "_rag_query",
+      "authority": "user_rewrite",
+      "usage": "control_flow",
+      "purpose": "runtime_input_or_artifact_binding",
+      "expression": "snapshot.rewrite_frame.user_rewrite or snapshot.intent_frame.normalized_message"
+    },
+    {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "symbol": "_rag_source_artifact_refs",
+      "authority": "target_artifact_id",
+      "usage": "assignment_source",
+      "purpose": "runtime_input_or_artifact_binding",
+      "expression": "snapshot.effective_request_frame.target_artifact_id"
+    },
+    {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "symbol": "_rag_source_artifact_refs",
       "authority": "target_artifact_type",
-      "component": "Runtime",
-      "expression": "inputs.get(\"target_artifact_type\") or \"\"",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "usage": "assignment_source",
       "purpose": "runtime_input_or_artifact_binding",
+      "expression": "snapshot.effective_request_frame.target_artifact_type"
+    },
+    {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
       "symbol": "_workorder_manifest_inputs",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "primary_skill",
-      "component": "Runtime",
-      "expression": "snapshot.skill_route.primary_skill or \"clarification\"",
-      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "authority": "semantic_intent",
+      "usage": "control_flow",
       "purpose": "runtime_input_or_artifact_binding",
+      "expression": "snapshot.effective_request_frame.semantic_intent == \"confirm_workorder_draft\""
+    },
+    {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "symbol": "_workorder_manifest_inputs",
+      "authority": "target_artifact_id",
+      "usage": "control_flow",
+      "purpose": "runtime_input_or_artifact_binding",
+      "expression": "inputs.get(\"target_artifact_id\") or snapshot.effective_request_frame.target_artifact_id or \"\""
+    },
+    {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
+      "symbol": "_workorder_manifest_inputs",
+      "authority": "target_artifact_type",
+      "usage": "control_flow",
+      "purpose": "runtime_input_or_artifact_binding",
+      "expression": "inputs.get(\"target_artifact_type\") or \"\""
+    },
+    {
+      "component": "Runtime",
+      "path": "fault_diagnosis/agent/runtime/plan_preparer.py",
       "symbol": "decide_v2_execution",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "AgentEngineV2",
-      "component": "Transport",
-      "expression": "AgentEngineV2()",
-      "path": "fault_diagnosis/server/agent_gateway/streaming.py",
-      "purpose": "engine_or_plan_orchestration_owned_by_transport",
-      "symbol": "token_stream_events",
-      "usage": "construction_or_method_call"
-    },
-    {
-      "authority": "prepare_turn",
-      "component": "Transport",
-      "expression": "self._conversation_persistence(request.app).prepare_turn(context)",
-      "path": "fault_diagnosis/server/use_cases/chat_service.py",
-      "purpose": "turn_transaction_owned_by_transport",
-      "symbol": "ChatService.agent_chat",
-      "usage": "construction_or_method_call"
-    },
-    {
-      "authority": "stream_events_with_persistence",
-      "component": "Transport",
-      "expression": "self._conversation_persistence(request.app).stream_events_with_persistence( context, self.stream_events( request.app, context.message, context.thread_id, context.trusted_user_identity, request_id=context.request_id, stream_id=context.stream_id, history_messages=context.history_messages, replace_history=False, auth_context=context.auth_context, model_name=resolved_model, conversation_context=context.conversation_context, complete_payload_enricher=self._build_complete_payload_enricher(context), ), )",
-      "path": "fault_diagnosis/server/use_cases/chat_service.py",
-      "purpose": "turn_transaction_owned_by_transport",
-      "symbol": "ChatService.agent_chat",
-      "usage": "construction_or_method_call"
-    },
-    {
-      "authority": "AgentEngineV2",
-      "component": "Transport",
-      "expression": "AgentEngineV2()",
-      "path": "fault_diagnosis/server/use_cases/chat_service.py",
-      "purpose": "engine_or_plan_orchestration_owned_by_transport",
-      "symbol": "ChatService.plan_chat",
-      "usage": "construction_or_method_call"
-    },
-    {
-      "authority": "prepare_turn",
-      "component": "Transport",
-      "expression": "self._conversation_persistence(request.app).prepare_turn(context)",
-      "path": "fault_diagnosis/server/use_cases/chat_service.py",
-      "purpose": "turn_transaction_owned_by_transport",
-      "symbol": "ChatService.stream_chat",
-      "usage": "construction_or_method_call"
-    },
-    {
-      "authority": "stream_events_with_persistence",
-      "component": "Transport",
-      "expression": "self._conversation_persistence(request.app).stream_events_with_persistence( context, self.stream_events( request.app, context.message, context.thread_id, context.trusted_user_identity, request_id=context.request_id, stream_id=context.stream_id, cancel_handle=cancel_handle, history_messages=context.history_messages, replace_history=False, auth_context=context.auth_context, model_name=resolved_model, conversation_context=context.conversation_context, complete_payload_enricher=self._build_complete_payload_enricher(context), ), )",
-      "path": "fault_diagnosis/server/use_cases/chat_service.py",
-      "purpose": "turn_transaction_owned_by_transport",
-      "symbol": "ChatService.stream_chat",
-      "usage": "construction_or_method_call"
-    },
-    {
-      "authority": "prepare_turn",
-      "component": "Transport",
-      "expression": "self._conversation_persistence(request.app).prepare_turn( edit_context, branch_id=f\"edit-{request_id}\", parent_message_id=(kept_messages[-1].get(\"id\") if kept_messages else None), )",
-      "path": "fault_diagnosis/server/use_cases/chat_service.py",
-      "purpose": "turn_transaction_owned_by_transport",
-      "symbol": "ChatService.stream_edit",
-      "usage": "construction_or_method_call"
-    },
-    {
-      "authority": "stream_events_with_persistence",
-      "component": "Transport",
-      "expression": "self._conversation_persistence(request.app).stream_events_with_persistence( edit_context, self.stream_events( request.app, normalized_message, resolved_thread_id, trusted_user_identity, request_id=request_id, stream_id=stream_id, cancel_handle=cancel_handle, history_messages=to_langchain_history_messages(kept_messages), replace_history=True, auth_context=auth_context, model_name=resolved_model, conversation_context=edit_context.conversation_context, complete_payload_enricher=self._build_complete_payload_enricher(edit_context), ), )",
-      "path": "fault_diagnosis/server/use_cases/chat_service.py",
-      "purpose": "turn_transaction_owned_by_transport",
-      "symbol": "ChatService.stream_edit",
-      "usage": "construction_or_method_call"
-    },
-    {
       "authority": "primary_skill",
-      "component": "Transport",
-      "expression": "snapshot.skill_route.primary_skill or \"clarification\"",
-      "path": "fault_diagnosis/server/use_cases/chat_service.py",
-      "purpose": "engine_or_plan_orchestration_owned_by_transport",
-      "symbol": "_v2_plan_compat_payload",
-      "usage": "control_flow"
-    },
-    {
-      "authority": "IntentFrame",
-      "component": "Validator",
-      "expression": "IntentFrame",
-      "path": "fault_diagnosis/agent/planning/validator.py",
-      "purpose": "authorization_validation_or_plan_rewrite",
-      "symbol": "PlanValidator.validate",
-      "usage": "type_annotation"
-    },
-    {
-      "authority": "primary_skill",
-      "component": "Validator",
-      "expression": "self.bridge.primary_skill(skill_route, candidate_plan)",
-      "path": "fault_diagnosis/agent/planning/validator.py",
-      "purpose": "authorization_validation_or_plan_rewrite",
-      "symbol": "PlanValidator.validate",
-      "usage": "construction_or_method_call"
-    },
-    {
-      "authority": "IntentFrame",
-      "component": "Validator",
-      "expression": "IntentFrame",
-      "path": "fault_diagnosis/agent/planning/validator.py",
-      "purpose": "authorization_validation_or_plan_rewrite",
-      "symbol": "_degrade_guest_report_plan",
-      "usage": "type_annotation"
+      "usage": "control_flow",
+      "purpose": "runtime_input_or_artifact_binding",
+      "expression": "snapshot.skill_route.primary_skill or \"clarification\""
     }
-  ],
-  "policy": "Exact Phase 0 debt only. Remove entries as reads disappear; never add transitional production reads.",
-  "schema_version": "legacy_authority_debt_allowlist.v1"
+  ]
 }

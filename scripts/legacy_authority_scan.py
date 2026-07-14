@@ -9,6 +9,7 @@ removed; adding a new read is always reported as unexpected debt.
 from __future__ import annotations
 
 import ast
+import argparse
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -148,6 +149,19 @@ def grouped_counts(entries: Iterable[dict[str, Any]]) -> dict[str, int]:
         component = str(item.get("component") or "")
         counts[component] = counts.get(component, 0) + 1
     return counts
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--write-allowlist", action="store_true")
+    args = parser.parse_args()
+    reads = scan_authority_reads(ROOT)
+    payload = allowlist_payload(reads)
+    if args.write_allowlist:
+        ALLOWLIST_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
 
 
 def _allowlist_identity(item: dict[str, Any]) -> tuple[str, ...]:
@@ -310,3 +324,7 @@ def _purpose(component: str, authority: str) -> str:
             return "turn_transaction_owned_by_transport"
         return "engine_or_plan_orchestration_owned_by_transport"
     return "legacy_execution_authority_read"
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

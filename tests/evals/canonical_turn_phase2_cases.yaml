@@ -1,0 +1,176 @@
+schema_version: canonical_turn_phase2_eval.v1
+cases:
+- id: phase2_current_status
+  name: Phase 2 当前状态强制执行
+  tier: core
+  eval_modes: [plan]
+  role: engineer
+  identity_fixture: engineer_j1.json
+  artifact_fixture: null
+  turns: ["查询 J1 当前运行状态"]
+  expected:
+    route:
+      primary_skill: runtime_status
+      selected_skills: [runtime_status]
+    effective_request:
+      requested_goals: [check_runtime_status]
+      effective_device_refs: [J1]
+    plan:
+      node_types_contains: [sql]
+      node_types_absent: [report, workorder]
+      status: validated
+    workflow:
+      must_skip: [report, workorder_decision]
+
+- id: phase2_clause_order_composite
+  name: Phase 2 复合 Goal 保持 clause order
+  tier: core
+  eval_modes: [plan]
+  role: admin
+  identity_fixture: admin.json
+  artifact_fixture: null
+  turns: ["A07089 是什么？查询 G120电机1 当前状态，判断是否存在故障，并给出处理建议"]
+  expected:
+    route:
+      primary_skill: fault_code_explain
+      selected_skills: [fault_code_explain, runtime_status, alarm_triage]
+    effective_request:
+      requested_goals: [explain_fault_code, check_runtime_status, diagnose_fault, resolution_recommendation]
+    plan:
+      node_types_contains: [rag, sql, analysis]
+      node_types_absent: [report, workorder]
+      status: validated
+    workflow:
+      must_skip: [report, workorder_decision]
+
+- id: phase2_guest_report_denied
+  name: Phase 2 guest report denied 不降级
+  tier: core
+  eval_modes: [plan]
+  role: guest
+  identity_fixture: guest.json
+  artifact_fixture: null
+  turns: ["生成 G120电机1 运行报告"]
+  expected:
+    effective_request:
+      requested_goals: [generate_report]
+    plan:
+      node_types_absent: [sql, report]
+      status: blocked
+    authorization:
+      mode: deny
+      denied_reason_code: report_permission_denied
+    workflow:
+      must_skip: [report]
+
+- id: phase2_per_goal_authorization
+  name: Phase 2 denied Goal 不阻塞独立 Goal
+  tier: core
+  eval_modes: [plan]
+  role: guest
+  identity_fixture: guest.json
+  artifact_fixture: null
+  turns: ["A07089 是什么？并生成报告"]
+  expected:
+    route:
+      primary_skill: fault_code_explain
+      selected_skills: [fault_code_explain]
+    effective_request:
+      requested_goals: [explain_fault_code, generate_report]
+    plan:
+      node_types_contains: [rag]
+      node_types_absent: [sql, report]
+      status: validated
+    authorization:
+      mode: deny
+    workflow:
+      must_skip: [report]
+
+- id: phase2_goal_scoped_missing_slot
+  name: Phase 2 缺 slot 只阻塞自身
+  tier: core
+  eval_modes: [plan]
+  role: admin
+  identity_fixture: admin.json
+  artifact_fixture: null
+  turns: ["解释 A07089，并诊断是否存在故障"]
+  expected:
+    route:
+      primary_skill: fault_code_explain
+      selected_skills: [fault_code_explain]
+    effective_request:
+      requested_goals: [explain_fault_code, diagnose_fault]
+      needs_clarification: true
+    plan:
+      node_types_contains: [rag]
+      node_types_absent: [sql, analysis]
+      status: validated
+    workflow:
+      must_skip: [analysis]
+
+- id: phase2_report_source_for_execution
+  name: Phase 2 Analysis 只作为 report 输入
+  tier: core
+  eval_modes: [plan]
+  role: admin
+  identity_fixture: admin.json
+  artifact_fixture: previous_j1_a07089.json
+  turns: ["根据诊断结果生成报告"]
+  expected:
+    route:
+      primary_skill: report_generation
+      selected_skills: [report_generation]
+    effective_request:
+      requested_goals: [generate_report]
+      target_artifact_type: analysis_artifact
+    plan:
+      node_types_contains: [report]
+      node_types_absent: [sql, analysis]
+      status: validated
+    workflow:
+      must_skip: [sql, analysis]
+
+- id: phase2_workorder_explicit_report_source
+  name: Phase 2 workorder 使用明确 report source
+  tier: core
+  eval_modes: [plan]
+  role: admin
+  identity_fixture: admin.json
+  artifact_fixture: previous_j1_a07089.json
+  turns: ["根据报告生成工单草稿"]
+  expected:
+    route:
+      primary_skill: workorder_decision
+      selected_skills: [workorder_decision]
+    effective_request:
+      requested_goals: [create_workorder_draft]
+      target_artifact_type: report_artifact
+      needs_clarification: false
+    plan:
+      node_types_contains: [workorder, approval]
+      node_types_absent: [sql, analysis, report]
+      status: validated
+    workflow:
+      must_skip: [sql, analysis, report]
+
+- id: phase2_bare_fault_code
+  name: Phase 2 裸故障码形成 explanation Goal
+  tier: core
+  eval_modes: [plan]
+  role: guest
+  identity_fixture: guest.json
+  artifact_fixture: null
+  turns: ["A07089"]
+  expected:
+    route:
+      primary_skill: fault_code_explain
+      selected_skills: [fault_code_explain]
+    effective_request:
+      requested_goals: [explain_fault_code]
+      effective_fault_code_refs: [A07089]
+    plan:
+      node_types_contains: [rag]
+      node_types_absent: [sql, analysis]
+      status: validated
+    workflow:
+      must_skip: [sql, analysis]

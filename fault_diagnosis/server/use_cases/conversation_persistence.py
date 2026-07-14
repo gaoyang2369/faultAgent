@@ -71,6 +71,7 @@ class ConversationPersistenceService:
                     "channel": context.channel,
                     "session_id": context.session_id,
                     "requested_thread_id": context.requested_thread_id,
+                    "idempotency_key": str(context.metadata.get("idempotency_key") or context.request_id),
                 },
             )
             context.user_message_id = str(user_message.get("id") or "")
@@ -190,6 +191,7 @@ class ConversationPersistenceService:
                     **metadata,
                     "channel": context.channel,
                     "session_id": context.session_id,
+                    "idempotency_key": str(context.metadata.get("idempotency_key") or context.request_id),
                     "conversation_context_stats": (context.conversation_context or {}).get("stats", {}),
                     "content_fingerprint": content_fingerprint(content),
                 },

@@ -44,6 +44,7 @@ from fault_diagnosis.server.devtools.dev_mode import init_dev_state
 from evaluators import case_assertion_strength_failures, evaluate_plan_case, hard_gate_failures, summarize_results
 
 CASE_FILE = ROOT / "tests" / "evals" / "agent_workflow_cases.yaml"
+PHASE2_CASE_FILE = ROOT / "tests" / "evals" / "canonical_turn_phase2_cases.yaml"
 FIXTURE_DIR = ROOT / "tests" / "evals" / "fixtures"
 RESULTS_DIR = ROOT / "tests" / "evals" / "results"
 PLAN_SUMMARY_FILE = RESULTS_DIR / "plan_eval_summary.json"
@@ -248,9 +249,12 @@ def main() -> int:
     parser.add_argument("--tier", choices=["smoke", "core", "extended"], default="")
     args = parser.parse_args()
 
+    case_path = Path(args.cases)
+    if args.tier == "core" and case_path.resolve() == CASE_FILE.resolve():
+        case_path = PHASE2_CASE_FILE
     cases = [
         case
-        for case in load_cases(Path(args.cases))
+        for case in load_cases(case_path)
         if "plan" in (case.get("eval_modes") or [])
         and (not args.tier or case.get("tier") == args.tier)
     ]

@@ -13,6 +13,9 @@ import pytest
 
 from fault_diagnosis.agent.contracts import ArtifactLineage, ArtifactManifest, PlanGoal
 from fault_diagnosis.agent.engine import AgentEngineV2
+from fault_diagnosis.agent.canonical_turn import ConversationTurnCoordinator
+from fault_diagnosis.domain.canonical_turn import CanonicalGoal, TurnCommand
+from fault_diagnosis.domain.canonical_turn.contracts import GoalProvenance
 from fault_diagnosis.agent.output.answer import build_output_frame
 from fault_diagnosis.domain.diagnosis.contracts import (
     AnalysisStepArtifact,
@@ -21,6 +24,7 @@ from fault_diagnosis.domain.diagnosis.contracts import (
 )
 from fault_diagnosis.domain.diagnosis.runtime_status import DataBasis, RuntimeStatusAssessment
 from fault_diagnosis.domain.security.permissions import build_auth_context
+from fault_diagnosis.platform.persistence.repositories.pending_clarification_repository import MemoryPendingClarificationRepository
 
 
 THREAD_ID = "thread.phase0.red"
@@ -121,6 +125,46 @@ def _pending_diagnosis() -> dict:
             }
         ],
     }
+
+
+def _pending_coordinator() -> ConversationTurnCoordinator:
+    repository = MemoryPendingClarificationRepository()
+    goal = CanonicalGoal(
+        goal_id="goal_pending_diagnose",
+        capability="diagnose_fault",
+        origin="explicit",
+        user_requested=True,
+        user_visible=True,
+        clause_index=0,
+        required_slots=["device"],
+        resolved_slots={},
+        missing_slots=["device"],
+        provenance=GoalProvenance(parser_source="deterministic", utterance_span=(0, 8)),
+    )
+    repository.create_waiting(
+        pending_id="pending-diagnose-device",
+        thread_id=THREAD_ID,
+        user_id="admin-phase0",
+        created_turn_id="turn-original",
+        created_message_id="message-original",
+        idempotency_key="pending-create",
+        original_goals=[goal],
+        missing_slots=["device"],
+        candidate_values={"device": ["G120电机1", "G120电机2"]},
+    )
+    return ConversationTurnCoordinator(pending_repository=repository)
+
+
+def _pending_command(message: str) -> TurnCommand:
+    return TurnCommand(
+        command="preview",
+        thread_id=THREAD_ID,
+        user_id="admin-phase0",
+        turn_id=f"turn-{message}",
+        message_id=f"message-{message}",
+        idempotency_key=f"key-{message}",
+        raw_message=message,
+    )
 
 
 def _composite_goals() -> list[PlanGoal]:
@@ -254,28 +298,20 @@ def test_case_c_ambiguous_pronoun_creates_goal_scoped_pending() -> None:
 
 
 def test_case_c_slot_only_reply_restores_original_diagnosis_goal() -> None:
-    snapshot = AgentEngineV2().build_plan_snapshot(
-        raw_message="是电机2。",
-        thread_id=THREAD_ID,
-        auth_context=_admin(),
-        conversation_context=_comparison_context(pending=_pending_diagnosis()),
-    )
+    result = _pending_coordinator().preview_turn(_pending_command("是电机2。"), auth_context=_admin())
 
-    assert snapshot.effective_request_frame.requested_goals == ["diagnose_fault"]
-    assert snapshot.effective_request_frame.effective_device_refs == ["G120电机2"]
-    assert snapshot.effective_request_frame.ambiguity.get("pending_status") == "consumed"
+    assert [goal.capability for goal in result.request.goals] == ["diagnose_fault"]
+    assert result.request.goals[0].resolved_slots == {"device": "G120电机2"}
+    assert result.request.goals[0].goal_id == "goal_pending_diagnose"
+    assert result.pending_transition.action == "resume_and_consume"
 
 
 def test_case_c_mixed_reply_restores_pending_and_adds_explicit_report_goal() -> None:
-    snapshot = AgentEngineV2().build_plan_snapshot(
-        raw_message="是电机2，顺便生成报告。",
-        thread_id=THREAD_ID,
-        auth_context=_admin(),
-        conversation_context=_comparison_context(pending=_pending_diagnosis()),
-    )
+    result = _pending_coordinator().preview_turn(_pending_command("是电机2，顺便生成报告。"), auth_context=_admin())
 
-    assert snapshot.effective_request_frame.requested_goals == ["diagnose_fault", "generate_report"]
-    assert snapshot.effective_request_frame.effective_device_refs == ["G120电机2"]
+    assert [goal.capability for goal in result.request.goals] == ["diagnose_fault", "generate_report"]
+    assert result.request.goals[0].resolved_slots == {"device": "G120电机2"}
+    assert result.request.pending_binding.kind == "mixed"
 
 
 @pytest.mark.parametrize(
@@ -299,8 +335,7 @@ def test_case_d_missing_device_goal_does_not_block_explicit_explanation() -> Non
 
     assert "explain_fault_code" in snapshot.effective_request_frame.requested_goals
     assert any(node.node_type == "rag" for node in snapshot.execution_plan.nodes)
-    assert any(
-        item.get("goal_id") == "goal_02_diagnose_fault"
-        for item in snapshot.effective_request_frame.clarification_reasons
+    diagnosis_goal = next(
+        goal for goal in snapshot.metadata["canonical_request"]["goals"] if goal["capability"] == "diagnose_fault"
     )
-
+    assert any(item.get("goal_id") == diagnosis_goal["goal_id"] for item in snapshot.effective_request_frame.clarification_reasons)

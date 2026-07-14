@@ -57,7 +57,7 @@ def test_goal_source_type_matrix_is_explicit() -> None:
     assert allowed_source_types("confirm_workorder_draft") == ("workorder_artifact",)
 
 
-def test_incompatible_explicit_reference_uses_only_unique_lineage_ancestor() -> None:
+def test_incompatible_explicit_reference_never_guesses_lineage_ancestor() -> None:
     report = _manifest("report-1", "report_artifact", sources=["analysis-1"])
     workorder = _manifest("workorder-1", "workorder_artifact", sources=[report.artifact_id])
     analysis = _manifest("analysis-1", "analysis_artifact", sources=["sql-1"])
@@ -69,14 +69,12 @@ def test_incompatible_explicit_reference_uses_only_unique_lineage_ancestor() -> 
         expected_devices=["G120电机2"],
         thread_id=workorder.thread_id,
     )
-    assert selection.status == "selected"
-    assert selection.binding is not None
-    assert selection.binding.artifact_id == report.artifact_id
-    assert selection.binding.selection_reason == "unique_compatible_lineage_ancestor"
-    assert selection.binding.reusable_result_artifact_id == workorder.artifact_id
+    assert selection.status == "incompatible"
+    assert selection.binding is None
+    assert selection.observation["selection_reason"] == "explicit_source_type_incompatible"
 
 
-def test_multiple_compatible_lineage_ancestors_are_ambiguous() -> None:
+def test_incompatible_explicit_reference_does_not_inspect_multiple_ancestors() -> None:
     report = _manifest("report-1", "report_artifact")
     analysis = _manifest("analysis-1", "analysis_artifact")
     workorder = _manifest("workorder-1", "workorder_artifact", sources=[report.artifact_id, analysis.artifact_id])
@@ -87,9 +85,9 @@ def test_multiple_compatible_lineage_ancestors_are_ambiguous() -> None:
         expected_devices=["G120电机2"],
         thread_id=workorder.thread_id,
     )
-    assert selection.status == "ambiguous"
+    assert selection.status == "incompatible"
     assert selection.binding is None
-    assert selection.observation["selection_reason"] == "multiple_compatible_lineage_ancestors"
+    assert selection.observation["selection_reason"] == "explicit_source_type_incompatible"
 
 
 def test_collect_new_policy_never_binds_historical_candidate() -> None:
@@ -101,7 +99,7 @@ def test_collect_new_policy_never_binds_historical_candidate() -> None:
         expected_devices=["G120电机2"],
         thread_id=sql.thread_id,
     )
-    assert selection.status == "collect_new"
+    assert selection.status == "requires_execution"
     assert selection.binding is None
 
 

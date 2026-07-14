@@ -102,8 +102,8 @@ def test_agent_engine_v2_build_plan_snapshot_returns_validated_snapshot() -> Non
     assert snapshot.intent_frame.raw_message == "  诊断 J1 A07089  "
     assert snapshot.intent_frame.normalized_message == "诊断 J1 A07089"
     if snapshot.status == "blocked":
-        assert snapshot.execution_plan.plan_version.endswith(".blocked")
         assert snapshot.execution_plan.nodes == []
+        assert snapshot.metadata["goal_readiness"][0]["status"] == "blocked_permission"
         assert snapshot.output_frame.guardrail_result["runtime_invoked"] is False
     else:
         assert snapshot.execution_plan.plan_version.endswith(".validated")

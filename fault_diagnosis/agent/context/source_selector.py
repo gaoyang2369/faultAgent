@@ -46,33 +46,23 @@ class GoalScopedSourceSelector:
         selected: ArtifactManifest | None = None
         reason = ""
         lineage_ancestor = ""
-        status = "not_required"
+        status = "requires_execution"
 
         if not allowed_types or not _policy_allows_reuse(goal.source_policy):
-            status = "collect_new"
+            status = "requires_execution"
             reason = "source_policy_requires_collection"
         elif explicit is not None and explicit.artifact_type in allowed_types:
             selected = explicit
-            status = "selected"
+            status = _satisfaction_status(goal.capability)
             reason = "explicit_compatible_reference"
         elif explicit is not None:
-            ancestors = _compatible_ancestors(explicit, by_id=by_id, allowed_types=set(allowed_types))
-            if len(ancestors) == 1:
-                selected = ancestors[0]
-                status = "selected"
-                reason = "unique_compatible_lineage_ancestor"
-                lineage_ancestor = selected.artifact_id
-            elif len(ancestors) > 1:
-                status = "ambiguous"
-                reason = "multiple_compatible_lineage_ancestors"
-            else:
-                status = "unresolved"
-                reason = "explicit_reference_has_no_compatible_ancestor"
+            status = "incompatible"
+            reason = "explicit_source_type_incompatible"
         else:
             compatible = [item for item in verified if item.artifact_type in allowed_types]
             if len(compatible) == 1:
                 selected = compatible[0]
-                status = "selected"
+                status = _satisfaction_status(goal.capability)
                 reason = "unique_compatible_candidate"
             elif len(compatible) > 1:
                 status = "ambiguous"
@@ -150,6 +140,12 @@ def allowed_source_types(capability: str) -> tuple[str, ...]:
     return _ALLOWED_TYPES.get(capability, ())
 
 
+def _satisfaction_status(capability: str) -> str:
+    if capability in {"diagnose_fault", "resolution_recommendation", "explain_fault_code"}:
+        return "satisfied_by_artifact"
+    return "source_for_execution"
+
+
 def _policy_allows_reuse(policy: str) -> bool:
     return policy not in {"collect_new", "refresh_runtime_data", "collect_fresh_runtime"}
 
@@ -179,30 +175,6 @@ def _verified_candidates(
         else:
             verified.append(item)
     return verified, rejected
-
-
-def _compatible_ancestors(
-    manifest: ArtifactManifest,
-    *,
-    by_id: dict[str, ArtifactManifest],
-    allowed_types: set[str],
-) -> list[ArtifactManifest]:
-    found: list[ArtifactManifest] = []
-    visited: set[str] = set()
-    pending = list(manifest.lineage.source_artifact_ids)
-    while pending:
-        artifact_id = pending.pop(0)
-        if artifact_id in visited:
-            continue
-        visited.add(artifact_id)
-        ancestor = by_id.get(artifact_id)
-        if ancestor is None:
-            continue
-        if ancestor.artifact_type in allowed_types:
-            found.append(ancestor)
-        else:
-            pending.extend(ancestor.lineage.source_artifact_ids)
-    return found
 
 
 def _matching_workorders(

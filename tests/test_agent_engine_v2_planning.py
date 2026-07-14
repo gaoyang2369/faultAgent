@@ -46,52 +46,37 @@ def test_compiler_builds_runtime_status_candidate_plan() -> None:
 
 def test_guest_blocks_report_root_cause_and_workorder_plans() -> None:
     cases = [
-        ("基于刚才结果生成报告", "report_generation"),
-        ("诊断 J1 A07089 的根因", "root_cause"),
-        ("判断 J1 A07089 是否需要工单草稿", "workorder_decision"),
+        ("基于刚才结果生成报告", "generate_report"),
+        ("诊断 J1 A07089 的根因", "diagnose_fault"),
+        ("判断 J1 A07089 是否需要工单草稿", "create_workorder_draft"),
     ]
 
-    for message, skill in cases:
+    for message, capability in cases:
         snapshot = AgentEngineV2().build_plan_snapshot(raw_message=message, auth_context=build_auth_context(role="guest"))
 
-        assert snapshot.skill_route.primary_skill == skill
+        goal = snapshot.metadata["canonical_request"]["goals"][0]
+        assert goal["capability"] == capability
+        assert snapshot.skill_route.primary_skill == ""
         assert snapshot.status == "blocked"
         assert snapshot.output_frame.guardrail_result["authorization"]["mode"] == "deny"
+        assert snapshot.metadata["goal_authorization"][0]["goal_id"] == goal["goal_id"]
+        assert snapshot.metadata["goal_authorization"][0]["status"] == "denied"
         assert "report.write_draft" not in snapshot.execution_plan.allowed_tools
         assert "workorder.propose_draft" not in snapshot.execution_plan.allowed_tools
 
 
-def test_guest_report_for_scoped_device_degrades_to_one_hour_status_query() -> None:
+def test_guest_report_for_scoped_device_is_denied_without_status_downgrade() -> None:
     auth = build_auth_context(role="guest")
     snapshot = AgentEngineV2().build_plan_snapshot(
         raw_message="生成G120电机1的运行报告",
         auth_context=auth,
     )
-    validation = prepare_v2_execution_validation(snapshot=snapshot, thread_id="thread.guest.report", auth_context=auth)
-
-    assert snapshot.status == "validated_degraded"
-    assert validation.status == "degraded"
-    assert ".validated" in validation.validated_plan.plan_version
-    assert ".degraded" in validation.validated_plan.plan_version
-    assert [node.node_type for node in validation.validated_plan.nodes] == ["sql"]
-    assert validation.validated_plan.allowed_tools == ["sql.read"]
-    assert "report.write_draft" not in validation.validated_plan.allowed_tools
-
-    fake = _CapturingSqlRuntime()
-    result = WorkflowRuntimeExecutor(real_tools=True, tool_runtime=fake).execute(
-        validation.validated_plan,
-        auth_context=auth,
-    )
-
-    assert result.status == "completed"
-    assert "V2 runtime only executes validated plans" not in result.output_frame.final_answer
-    assert "游客不能生成正式报告" in result.output_frame.final_answer
-    realtime_sql = fake.sql_calls[0]
-    assert "real_data_01" in realtime_sql
-    assert "G120电机1" in realtime_sql
-    assert "create_time >= NOW() - INTERVAL 1 HOUR" in realtime_sql
-    assert "LIMIT 50" in realtime_sql
-    assert any("MAX(create_time)" in query for query in fake.sql_calls)
+    assert snapshot.status == "blocked"
+    assert snapshot.metadata["canonical_request"]["goals"][0]["capability"] == "generate_report"
+    assert snapshot.metadata["goal_authorization"][0]["status"] == "denied"
+    assert snapshot.execution_plan.nodes == []
+    assert "sql.read" not in snapshot.execution_plan.allowed_tools
+    assert "report.write_draft" not in snapshot.execution_plan.allowed_tools
 
 
 def test_report_authorization_matrix_for_guest_engineer_and_admin() -> None:
@@ -109,7 +94,7 @@ def test_report_authorization_matrix_for_guest_engineer_and_admin() -> None:
     )
 
     assert guest_other.status == "blocked"
-    assert guest_other.output_frame.guardrail_result["authorization"]["denied_reason_code"] == "asset_out_of_scope"
+    assert guest_other.output_frame.guardrail_result["authorization"]["denied_reason_code"] == "report_permission_denied"
     assert engineer_other.status == "blocked"
     assert engineer_other.output_frame.guardrail_result["authorization"]["denied_reason_code"] == "asset_out_of_scope"
     assert admin_any.status == "validated"
@@ -326,4 +311,5 @@ def test_report_then_workorder_plan_reuses_analysis_for_workorder() -> None:
     assert node_types.count("report") == 1
     assert node_types.count("workorder") == 1
     assert ("analysis_1", "report_1") in edges
-    assert ("analysis_1", "workorder_1") in edges
+    assert ("report_1", "workorder_1") in edges
+    assert ("analysis_1", "workorder_1") not in edges

@@ -12,6 +12,12 @@ from ..context.artifact_access import resolve_target_artifact
 
 from ..contracts import ExecutionPlan, PlanSnapshotV2
 from ..planning import PlanValidationResult, PlanValidator
+from fault_diagnosis.domain.canonical_turn import (
+    CanonicalTurnRequest,
+    GoalAuthorizationDecision,
+    GoalReadinessDecision,
+    GoalSourceResolution,
+)
 
 
 @dataclass(frozen=True)
@@ -40,9 +46,10 @@ def prepare_v2_execution_validation(
     prepared = _prepare_plan(snapshot.execution_plan, snapshot=snapshot, thread_id=thread_id, auth_context=auth_context)
     return PlanValidator().validate(
         candidate_plan=prepared,
-        skill_route=snapshot.skill_route,
-        intent_frame=snapshot.intent_frame,
-        auth_context=auth_context,
+        request=CanonicalTurnRequest.model_validate(snapshot.metadata["canonical_request"]),
+        authorization=[GoalAuthorizationDecision.model_validate(item) for item in snapshot.metadata["goal_authorization"]],
+        readiness=[GoalReadinessDecision.model_validate(item) for item in snapshot.metadata["goal_readiness"]],
+        sources=[GoalSourceResolution.model_validate(item) for item in snapshot.metadata["goal_source_resolution"]],
         require_runtime_inputs=True,
     )
 

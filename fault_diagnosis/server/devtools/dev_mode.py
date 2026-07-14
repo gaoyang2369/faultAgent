@@ -190,6 +190,15 @@ def build_dev_authorization(
         action_type="create_workorder_draft" if task_family == "action_or_workorder" else None,
     )
     authorization = authorize_workflow(auth_context, auth_decision).model_dump()
+    canonical_authorization = dict((snapshot.output_frame.guardrail_result or {}).get("authorization") or {})
+    if canonical_authorization.get("mode") == "deny":
+        authorization = {
+            **authorization,
+            **canonical_authorization,
+            "allowed": False,
+            "runtime_tools": [],
+            "allowed_nodes": {},
+        }
     runtime_tools = list(authorization.get("runtime_tools", [])) if authorization.get("allowed") else []
     decision_payload = {
         "primary_task_type": compat_task,

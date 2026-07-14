@@ -1,8 +1,10 @@
-"""In-memory/preview orchestration for Canonical Turn Phase 1."""
+"""Canonical production-turn orchestration and side-effect-free preview."""
 
 from __future__ import annotations
 
 import hashlib
+import inspect
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -10,6 +12,7 @@ from fault_diagnosis.agent.canonical_turn.parser import CurrentUtteranceParser
 from fault_diagnosis.domain.canonical_turn import (
     CanonicalGoal,
     CanonicalTurnRequest,
+    GoalExecutionStatus,
     PendingBinding,
     PendingClarification,
     PendingTransitionProposal,
@@ -17,6 +20,12 @@ from fault_diagnosis.domain.canonical_turn import (
     TurnEvent,
     TurnResult,
 )
+from fault_diagnosis.agent.canonical_turn.decisions import (
+    decide_goal_authorization,
+    decide_goal_readiness,
+    resolve_goal_sources,
+)
+from fault_diagnosis.domain.security.permissions import build_auth_context
 from fault_diagnosis.domain.canonical_turn.contracts import GoalProvenance
 from fault_diagnosis.platform.persistence.repositories.pending_clarification_repository import (
     DEFAULT_PENDING_TTL,
@@ -47,7 +56,7 @@ def _stable_id(prefix: str, *parts: str) -> str:
 
 
 class ConversationTurnCoordinator:
-    """Build a canonical request and persistence proposal without execution."""
+    """Own request construction, pending CAS and idempotent turn execution."""
 
     def __init__(
         self,
@@ -59,11 +68,28 @@ class ConversationTurnCoordinator:
         self._parser = parser or CurrentUtteranceParser()
         self._pending_repository = pending_repository or MemoryPendingClarificationRepository(clock=clock)
         self._clock = clock
+        self._completed: dict[tuple[str, str, str, str, str], TurnResult] = {}
+        self._execution_lock = asyncio.Lock()
 
     def preview(self, command: TurnCommand) -> TurnResult:
+        """Phase 1 compatibility alias for :meth:`preview_turn`."""
+
+        return self.preview_turn(command)
+
+    def preview_turn(
+        self,
+        command: TurnCommand,
+        *,
+        auth_context=None,
+        conversation_context: dict[str, Any] | None = None,
+    ) -> TurnResult:
+        """Build the exact production request and decisions without repository writes."""
+
         parsed = self._parser.parse(command.raw_message)
         current_goals = self._build_current_goals(command, parsed)
-        waiting = self._pending_repository.get_waiting(
+        if not current_goals:
+            current_goals = self._build_context_followup_goals(command, parsed, conversation_context)
+        waiting = self._pending_repository.peek_waiting(
             command.thread_id,
             command.user_id,
             now=self._clock(),
@@ -106,37 +132,231 @@ class ConversationTurnCoordinator:
                 detail={"goal_ids": [goal.goal_id for goal in goals], "execution_performed": False},
             ),
         ]
+        auth = auth_context or build_auth_context(user_id=command.user_id, role="guest")
+        authorization = decide_goal_authorization(request, auth)
+        source_resolutions = resolve_goal_sources(request, conversation_context)
+        readiness = decide_goal_readiness(request, authorization, source_resolutions)
         return TurnResult(
             request=request,
             events=events,
             pending_transition=transition,
+            authorization=authorization,
+            readiness=readiness,
+            source_resolutions=source_resolutions,
+            goal_statuses=[
+                GoalExecutionStatus(
+                    goal_id=goal.goal_id,
+                    status=(
+                        "denied"
+                        if next(item for item in authorization if item.goal_id == goal.goal_id).status == "denied"
+                        else "satisfied"
+                        if next(item for item in readiness if item.goal_id == goal.goal_id).status == "satisfied_by_artifact"
+                        else "blocked"
+                        if next(item for item in readiness if item.goal_id == goal.goal_id).status.startswith("blocked_")
+                        else "pending"
+                    ),
+                )
+                for goal in request.goals
+            ],
             execution_performed=False,
         )
 
+    async def execute_turn(
+        self,
+        command: TurnCommand,
+        *,
+        auth_context,
+        conversation_context: dict[str, Any] | None = None,
+        executor=None,
+    ) -> TurnResult:
+        """Execute one idempotent turn through an injected existing runtime executor.
+
+        The coordinator owns pending transitions.  The injected callable owns only
+        plan/runtime work and receives the already-decided preview result.
+        """
+
+        key = (
+            command.thread_id,
+            command.user_id,
+            command.turn_id,
+            command.message_id,
+            command.idempotency_key,
+        )
+        async with self._execution_lock:
+            replay = self._completed.get(key)
+            if replay is not None:
+                return replay.model_copy(deep=True)
+            self._pending_repository.get_waiting(
+                command.thread_id,
+                command.user_id,
+                now=self._clock(),
+            )
+            preview = self.preview_turn(
+                command,
+                auth_context=auth_context,
+                conversation_context=conversation_context,
+            )
+            transition = preview.pending_transition
+            resumed = None
+            if transition.action == "create_waiting" and transition.proposed_pending is not None:
+                pending = transition.proposed_pending
+                self._pending_repository.create_waiting(
+                    pending_id=pending.pending_id,
+                    thread_id=pending.thread_id,
+                    user_id=pending.user_id,
+                    created_turn_id=pending.created_turn_id,
+                    created_message_id=pending.created_message_id,
+                    idempotency_key=pending.idempotency_key,
+                    original_goals=pending.original_goals,
+                    missing_slots=pending.missing_slots,
+                    candidate_values=pending.candidate_values,
+                    source_bindings=pending.source_bindings,
+                    historical_authorization_audit=pending.historical_authorization_audit,
+                    now=self._clock(),
+                )
+            elif transition.action == "resume_and_consume" and transition.pending_id:
+                resumed = self._pending_repository.mark_resumed(
+                    transition.pending_id,
+                    thread_id=command.thread_id,
+                    user_id=command.user_id,
+                    expected_version=int(transition.expected_version or 1),
+                    turn_id=command.turn_id,
+                    message_id=command.message_id,
+                    idempotency_key=transition.transition_idempotency_keys[0],
+                    now=self._clock(),
+                )
+
+            try:
+                outcome = executor(preview) if executor is not None else {}
+                if inspect.isawaitable(outcome):
+                    outcome = await outcome
+            except Exception as exc:
+                failed = preview.model_copy(
+                    update={
+                        "events": [
+                            *preview.events,
+                            TurnEvent(
+                                event_type="turn_failed",
+                                sequence=len(preview.events),
+                                detail={"error_type": type(exc).__name__},
+                            ),
+                        ],
+                        "execution_performed": False,
+                        "terminal_status": "failed",
+                        "goal_statuses": _terminal_goal_statuses(preview, None, "failed"),
+                    },
+                    deep=True,
+                )
+                if resumed is not None:
+                    self._pending_repository.mark_consumed(
+                        resumed.pending_id,
+                        thread_id=command.thread_id,
+                        user_id=command.user_id,
+                        expected_version=resumed.version,
+                        turn_id=command.turn_id,
+                        message_id=command.message_id,
+                        idempotency_key=transition.transition_idempotency_keys[1],
+                        now=self._clock(),
+                    )
+                self._completed[key] = failed.model_copy(deep=True)
+                raise
+            if outcome is None:
+                outcome = {}
+            snapshot = outcome.get("plan_snapshot") if isinstance(outcome, dict) else outcome
+            payload = dict(outcome.get("complete_payload") or {}) if isinstance(outcome, dict) else {}
+            extra_events = list(outcome.get("events") or []) if isinstance(outcome, dict) else []
+            terminal = str(outcome.get("terminal_status") or "completed") if isinstance(outcome, dict) else "completed"
+            performed = bool(outcome.get("execution_performed", True)) if isinstance(outcome, dict) else True
+            if resumed is not None and terminal in {"completed", "blocked", "failed", "cancelled"}:
+                self._pending_repository.mark_consumed(
+                    resumed.pending_id,
+                    thread_id=command.thread_id,
+                    user_id=command.user_id,
+                    expected_version=resumed.version,
+                    turn_id=command.turn_id,
+                    message_id=command.message_id,
+                    idempotency_key=transition.transition_idempotency_keys[1],
+                    now=self._clock(),
+                )
+            result = preview.model_copy(
+                update={
+                    "events": [*preview.events, *extra_events],
+                    "execution_performed": performed,
+                    "terminal_status": terminal,
+                    "plan_snapshot": snapshot,
+                    "complete_payload": payload,
+                    "goal_statuses": _terminal_goal_statuses(preview, snapshot, terminal),
+                },
+                deep=True,
+            )
+            self._completed[key] = result.model_copy(deep=True)
+            return result
+
+    def finalize_interrupted_turn(
+        self,
+        *,
+        idempotency_key: str,
+        turn_id: str,
+        message_id: str,
+    ) -> bool:
+        """Terminally close a durable resumed pending without rerunning its executor."""
+
+        resumed = self._pending_repository.get_by_idempotency_key(f"{idempotency_key}:resume")
+        if resumed is None or resumed.status != "resumed":
+            return False
+        self._pending_repository.mark_consumed(
+            resumed.pending_id,
+            thread_id=resumed.thread_id,
+            user_id=resumed.user_id,
+            expected_version=resumed.version,
+            turn_id=turn_id,
+            message_id=message_id,
+            idempotency_key=f"{idempotency_key}:consume",
+            now=self._clock(),
+        )
+        return True
+
     def _build_current_goals(self, command: TurnCommand, parsed) -> list[CanonicalGoal]:
         entity_by_id = {entity.entity_id: entity for entity in parsed.entities}
-        values_by_slot: dict[str, list[str]] = {}
-        for slot, kind in _ENTITY_KIND_BY_SLOT.items():
-            values_by_slot[slot] = [entity.value for entity in parsed.entities if entity.kind == kind]
-
         goals: list[CanonicalGoal] = []
+        carried_source_refs: list[str] = []
+        carried_slot_values: dict[str, Any] = {}
         for clause in parsed.clauses:
+            for slot, kind in _ENTITY_KIND_BY_SLOT.items():
+                observed = [
+                    entity.value
+                    for entity in parsed.entities
+                    if entity.kind == kind and clause.start <= entity.start and entity.end <= clause.end
+                ]
+                if observed:
+                    unique = list(dict.fromkeys(observed))
+                    carried_slot_values[slot] = unique[0] if len(unique) == 1 else unique
+            if clause.source and clause.action is None:
+                carried_source_refs = list(clause.source.entity_refs)
             if clause.action is None:
                 continue
             required_slots = list(_REQUIRED_SLOTS[clause.action.capability])
             resolved_slots: dict[str, Any] = {}
-            for slot in required_slots:
-                values = list(dict.fromkeys(values_by_slot.get(slot, [])))
+            for slot, kind in _ENTITY_KIND_BY_SLOT.items():
+                values = list(
+                    dict.fromkeys(
+                        entity_by_id[ref].value
+                        for ref in clause.action.entity_refs
+                        if ref in entity_by_id and entity_by_id[ref].kind == kind
+                    )
+                )
                 if values:
                     resolved_slots[slot] = values[0] if len(values) == 1 else values
+                    carried_slot_values[slot] = resolved_slots[slot]
+                elif slot in required_slots and slot in carried_slot_values:
+                    resolved_slots[slot] = carried_slot_values[slot]
             missing_slots = [slot for slot in required_slots if slot not in resolved_slots]
-            source_requirements: list[str] = []
-            if clause.source:
-                source_requirements = [
-                    entity_by_id[ref].value
-                    for ref in clause.source.entity_refs
-                    if ref in entity_by_id
-                ]
+            source_refs = list(clause.source.entity_refs) if clause.source else carried_source_refs
+            source_requirements = [
+                entity_by_id[ref].value
+                for ref in source_refs
+                if ref in entity_by_id
+            ]
             goal_id = _stable_id(
                 "goal",
                 command.thread_id,
@@ -165,7 +385,42 @@ class ConversationTurnCoordinator:
                     ),
                 )
             )
-        return goals
+        return _attach_goal_dependencies(goals)
+
+    def _build_context_followup_goals(
+        self,
+        command: TurnCommand,
+        parsed,
+        conversation_context: dict[str, Any] | None,
+    ) -> list[CanonicalGoal]:
+        text = command.raw_message.strip()
+        if not any(marker in text for marker in ("详细", "展开", "多说", "字段")):
+            return []
+        manifests = [item for item in ((conversation_context or {}).get("artifact_manifests") or []) if isinstance(item, dict)]
+        knowledge = [item for item in manifests if item.get("artifact_type") == "knowledge_artifact"]
+        if len(knowledge) != 1:
+            return []
+        codes = [str(item) for item in (knowledge[0].get("fault_code_refs") or []) if str(item)]
+        resolved = {"fault_code": codes[0]} if len(codes) == 1 else {}
+        goal_id = _stable_id("goal", command.thread_id, command.turn_id, command.message_id, "0", "explain_fault_code")
+        return [
+            CanonicalGoal(
+                goal_id=goal_id,
+                capability="explain_fault_code",
+                origin="inferred",
+                user_requested=True,
+                user_visible=True,
+                clause_index=0,
+                required_slots=["fault_code"],
+                resolved_slots=resolved,
+                missing_slots=[] if resolved else ["fault_code"],
+                source_requirements=[str(knowledge[0].get("artifact_id") or "")],
+                provenance=GoalProvenance(
+                    parser_source="deterministic",
+                    utterance_span=(0, len(text)),
+                ),
+            )
+        ]
 
     def _bind_pending(
         self,
@@ -326,3 +581,60 @@ class ConversationTurnCoordinator:
             proposed_pending=proposed,
             transition_idempotency_keys=[proposed.idempotency_key],
         )
+
+
+def _terminal_goal_statuses(preview: TurnResult, snapshot: Any, terminal: str) -> list[GoalExecutionStatus]:
+    plan = getattr(snapshot, "execution_plan", None)
+    nodes = list(getattr(plan, "nodes", []) or [])
+    node_ids_by_goal: dict[str, list[str]] = {}
+    for node in nodes:
+        for goal_id in list(getattr(node, "goal_ids", []) or []):
+            node_ids_by_goal.setdefault(str(goal_id), []).append(str(getattr(node, "node_id", "")))
+    readiness = {item.goal_id: item.status for item in preview.readiness}
+    authorization = {item.goal_id: item.status for item in preview.authorization}
+    results: list[GoalExecutionStatus] = []
+    for goal in preview.request.goals:
+        if authorization.get(goal.goal_id) == "denied":
+            status = "denied"
+        elif readiness.get(goal.goal_id) == "satisfied_by_artifact":
+            status = "satisfied"
+        elif str(readiness.get(goal.goal_id, "")).startswith("blocked_"):
+            status = "blocked"
+        elif terminal == "completed":
+            status = "completed"
+        elif terminal in {"blocked", "cancelled"}:
+            status = "blocked"
+        else:
+            status = "failed"
+        results.append(
+            GoalExecutionStatus(
+                goal_id=goal.goal_id,
+                status=status,
+                node_ids=node_ids_by_goal.get(goal.goal_id, []),
+            )
+        )
+    return results
+
+
+def _attach_goal_dependencies(goals: list[CanonicalGoal]) -> list[CanonicalGoal]:
+    """Express only same-turn, clause-ordered producer dependencies."""
+
+    result: list[CanonicalGoal] = []
+    for goal in goals:
+        dependencies = list(goal.dependencies)
+        if goal.capability == "generate_report":
+            producer = next(
+                (item for item in reversed(result) if item.capability in {"diagnose_fault", "resolution_recommendation"}),
+                None,
+            )
+            if producer is not None:
+                dependencies.append(producer.goal_id)
+        elif goal.capability == "create_workorder_draft":
+            producer = next(
+                (item for item in reversed(result) if item.capability in {"generate_report", "diagnose_fault"}),
+                None,
+            )
+            if producer is not None:
+                dependencies.append(producer.goal_id)
+        result.append(goal.model_copy(update={"dependencies": list(dict.fromkeys(dependencies))}, deep=True))
+    return result

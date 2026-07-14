@@ -198,9 +198,8 @@ def test_a02_third_turn_runs_workorder_then_pending_approval_without_dispatch(mo
         assert report_id in {item["artifact_id"] for item in third["workorder_draft_payload"]["source_artifact_refs"]}
 
         _, fourth = _turn(client, "确认工单草稿", thread_id)
-        assert [item["node_type"] for item in fourth["node_results"]] == ["workorder", "approval"]
-        assert fourth["workorder_pending_action"]["status"] == "confirmed_pending_dispatch_forbidden"
-        assert fourth["node_results"][0]["output"]["dispatch_performed"] is False
+        assert fourth["node_results"] == []
+        assert fourth["produced_artifacts"] == []
     finally:
         client.close()
         reset_artifact_store_backend()

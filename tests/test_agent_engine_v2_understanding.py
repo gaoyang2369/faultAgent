@@ -64,6 +64,7 @@ def test_build_plan_snapshot_includes_understanding_frames_and_trace() -> None:
     assert snapshot.trace["request_understanding"]["user_rewrite"] == snapshot.rewrite_frame.user_rewrite
     assert snapshot.trace["request_understanding"]["rewrite_reason"] == snapshot.rewrite_frame.rewrite_reason
     assert snapshot.execution_plan.nodes
+    assert snapshot.execution_plan.execution_capability == "composite"
     assert snapshot.output_frame.guardrail_result["status"] == "validated"
     assert "candidate_plan" in snapshot.trace
     assert "validation" in snapshot.trace

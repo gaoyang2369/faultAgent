@@ -38,9 +38,9 @@ def test_v01_fault_code_and_detail_followup_remain_allowed() -> None:
     [
         ("诊断一下设备是否有故障", "diagnose_fault"),
         ("判断它有没有异常", "diagnose_fault"),
-        ("当前健康状况如何", "health_assessment"),
-        ("为什么速度异常", "root_cause_analysis"),
-        ("分析故障原因", "root_cause_analysis"),
+        ("当前健康状况如何", "check_runtime_status"),
+        ("为什么速度异常", "diagnose_fault"),
+        ("分析故障原因", "diagnose_fault"),
         ("看一下当前运行状态", "check_runtime_status"),
     ],
 )
@@ -254,24 +254,24 @@ def test_v05_out_of_scope_device_still_blocks_sql() -> None:
     assert snapshot.effective_request_frame.executed_semantic_intent == ""
 
 
-def test_authorized_missing_device_uses_real_clarification_node() -> None:
+def test_authorized_missing_device_is_goal_scoped_and_does_not_create_node() -> None:
     auth = build_auth_context(
         role="engineer",
         asset_scope=["G120电机1"],
         table_scope=["real_data_01"],
     )
     snapshot = AgentEngineV2().build_plan_snapshot(raw_message="查看当前运行状态", auth_context=auth)
-    assert snapshot.skill_route.primary_skill == "clarification"
-    validation = prepare_v2_execution_validation(snapshot=snapshot, thread_id="thread.clarification", auth_context=auth)
-    result = WorkflowRuntimeExecutor(real_tools=True, tool_runtime=_ResolutionSqlRuntime()).execute(
-        validation.validated_plan,
-        auth_context=auth,
-    )
-    assert result.status == "completed"
-    assert result.node_results[0].node_type == "clarification"
-    assert result.node_results[0].status == "completed"
-    assert result.node_results[0].output["reason"] == "authorized_but_incomplete"
-    assert "请确认" in result.output_frame.final_answer
+    goal = snapshot.metadata["canonical_request"]["goals"][0]
+    assert snapshot.skill_route.primary_skill == ""
+    assert snapshot.execution_plan.nodes == []
+    assert snapshot.metadata["goal_readiness"] == [
+        {
+            "schema_version": "goal_readiness_decision.v1",
+            "goal_id": goal["goal_id"],
+            "status": "blocked_missing_slot",
+            "blockers": ["device"],
+        }
+    ]
 
 
 class _ResolutionSqlRuntime:
@@ -294,14 +294,11 @@ class _ResolutionSqlRuntime:
         return repr([row])
 
 
-def test_v02_and_v03_share_resolved_runtime_assessment(monkeypatch) -> None:
+def test_v02_runtime_assessment_and_v03_guest_report_denial_are_independent(monkeypatch) -> None:
     monkeypatch.setattr("fault_diagnosis.config.DATA_RESOLUTION_STRATEGY", "realtime_then_latest")
     monkeypatch.setattr("fault_diagnosis.config.DATA_ENVIRONMENT", "simulation")
     auth = _guest()
-    for message, degraded in [
-        ("查询 G120电机1 最近的运行状态", False),
-        ("给我生成 G120电机1 最近一小时的运行报告", True),
-    ]:
+    for message in ["查询 G120电机1 最近的运行状态"]:
         snapshot = AgentEngineV2().build_plan_snapshot(raw_message=message, auth_context=auth)
         validation = prepare_v2_execution_validation(snapshot=snapshot, thread_id="thread.visitor", auth_context=auth)
         runtime = _ResolutionSqlRuntime()
@@ -322,10 +319,6 @@ def test_v02_and_v03_share_resolved_runtime_assessment(monkeypatch) -> None:
         assert result.output_frame.guardrail_result["contract_satisfied"] is True
         assert {claim["claim_type"] for claim in result.evidence_ledger.claims} == {"runtime_status_assessment"}
         assert not any(node.node_type == "report" for node in validation.validated_plan.nodes)
-        assert ("当前身份不能生成正式报告" in result.output_frame.final_answer) is degraded
-        if degraded:
-            assert result.complete_payload["report_artifact"] == {}
-            assert result.complete_payload["report_url"] is None
         manifests = result.complete_payload["artifact"]["payload"]["artifact_manifests"]
         sql_manifest = next(item for item in manifests if item["artifact_type"] == "sql_artifact")
         assert sql_manifest["device_refs"] == ["G120电机1"]
@@ -335,3 +328,11 @@ def test_v02_and_v03_share_resolved_runtime_assessment(monkeypatch) -> None:
         assert sql_manifest["runtime_status"] == "attention"
         assert sql_manifest["supporting_evidence_ids"]
         assert "check_runtime_status" in sql_manifest["supported_followup_capabilities"]
+
+    denied_report = AgentEngineV2().build_plan_snapshot(
+        raw_message="给我生成 G120电机1 最近一小时的运行报告",
+        auth_context=auth,
+    )
+    assert denied_report.metadata["canonical_request"]["goals"][0]["capability"] == "generate_report"
+    assert denied_report.metadata["goal_authorization"][0]["status"] == "denied"
+    assert denied_report.execution_plan.nodes == []

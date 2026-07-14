@@ -123,8 +123,8 @@ def test_e03_preserves_four_explicit_goals_and_goal_scoped_nodes() -> None:
 
     assert snapshot.effective_request_frame.requested_goals == [
         "explain_fault_code",
-        "diagnose_fault",
         "check_runtime_status",
+        "diagnose_fault",
         "resolution_recommendation",
     ]
     node_types = [node.node_type for node in snapshot.execution_plan.nodes]
@@ -196,7 +196,7 @@ def test_a03_replace_excludes_old_device_from_scope_plan_and_tables() -> None:
 def test_a02_diagnosis_report_uses_analysis_before_report_and_single_device_workorder() -> None:
     sql_manifest = _complete_manifest("sql:g120:2", "sql_artifact", "G120电机2")
     second = AgentEngineV2().build_plan_snapshot(
-        raw_message="分析一下是否存在异常，并生成运行报告",
+        raw_message="根据刚才的结果分析一下是否存在异常，并生成运行报告",
         thread_id="thread.v2.contract",
         auth_context=_admin(),
         conversation_context={"artifact_manifests": [sql_manifest]},
@@ -231,6 +231,9 @@ def test_workorder_requires_exactly_one_device_for_multi_device_report() -> None
     )
     assert snapshot.effective_request_frame.needs_clarification is True
     assert snapshot.effective_request_frame.ambiguity["slot"] == "exactly_one_device"
+    goal = snapshot.metadata["canonical_request"]["goals"][0]
+    assert snapshot.metadata["goal_readiness"][0]["goal_id"] == goal["goal_id"]
+    assert snapshot.metadata["goal_readiness"][0]["status"] == "blocked_missing_slot"
 
 
 def test_artifact_lookup_is_exact_and_never_falls_back_to_latest() -> None:

@@ -126,6 +126,27 @@ class MemoryPendingClarificationRepository(PendingTransitionCommands):
                 return None
             return pending.model_copy(deep=True)
 
+    def peek_waiting(
+        self,
+        thread_id: str,
+        user_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> PendingClarification | None:
+        current = aware(now or self._clock())
+        with self._lock:
+            pending = next(
+                (
+                    item
+                    for item in self._records.values()
+                    if item.thread_id == thread_id and item.user_id == user_id and item.status == "waiting"
+                ),
+                None,
+            )
+            if pending is None or pending.expires_at <= current:
+                return None
+            return pending.model_copy(deep=True)
+
     def compare_and_set_status(
         self,
         pending_id: str,

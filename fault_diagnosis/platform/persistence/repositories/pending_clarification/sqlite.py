@@ -198,6 +198,33 @@ class SQLitePendingClarificationRepository(PendingTransitionCommands):
             return None
         return pending
 
+    def peek_waiting(
+        self,
+        thread_id: str,
+        user_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> PendingClarification | None:
+        current = aware(now or self._clock())
+        if not self._initialized and self._memory_connection is None and not self.path.exists():
+            return None
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT * FROM pending_clarifications
+                    WHERE thread_id = ? AND user_id = ? AND status = 'waiting'
+                    ORDER BY updated_at DESC LIMIT 1
+                    """,
+                    (thread_id, user_id),
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        if row is None:
+            return None
+        pending = self._row_to_pending(row)
+        return None if pending.expires_at <= current else pending
+
     def compare_and_set_status(
         self,
         pending_id: str,

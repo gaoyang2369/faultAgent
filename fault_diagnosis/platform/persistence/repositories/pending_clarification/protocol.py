@@ -43,6 +43,15 @@ class PendingClarificationRepository(Protocol):
     ) -> PendingClarification | None:
         """Return the scope's waiting record, lazily expiring it when needed."""
 
+    def peek_waiting(
+        self,
+        thread_id: str,
+        user_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> PendingClarification | None:
+        """Read a live waiting record without applying lazy expiry or any write."""
+
     def compare_and_set_status(
         self,
         pending_id: str,

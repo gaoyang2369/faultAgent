@@ -93,6 +93,10 @@ class EffectiveGoal(AgentEngineContract):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     explicit: bool = True
     depends_on_goal_ids: list[str] = Field(default_factory=list)
+    origin: Literal["explicit", "inferred", "dependency"] = "explicit"
+    clause_index: int = 0
+    user_requested: bool = True
+    user_visible: bool = True
 
 
 class RequestedGoalSet(AgentEngineContract):
@@ -277,6 +281,12 @@ class PlanGoal(_DictCompatContract):
     depends_on_goal_ids: list[str] = Field(default_factory=list)
     authorization_status: Literal["authorized", "denied"] = "authorized"
     drop_reason: str = ""
+    origin: Literal["explicit", "inferred", "dependency"] = "explicit"
+    clause_index: int = 0
+    user_requested: bool = True
+    user_visible: bool = True
+    readiness_status: str = "ready"
+    source_resolution_status: str = "requires_execution"
 
 
 class PlanEdge(_DictCompatContract):

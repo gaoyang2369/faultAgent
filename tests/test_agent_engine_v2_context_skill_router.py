@@ -409,6 +409,7 @@ def test_followup_detail_inherits_latest_knowledge_artifact_fault_code() -> None
     )
 
     assert snapshot.effective_request_frame.semantic_intent == "expand_previous_answer"
+    assert snapshot.metadata["canonical_request"]["goals"][0]["capability"] == "explain_fault_code"
     assert snapshot.effective_request_frame.effective_fault_code_refs == ["A07089"]
     assert snapshot.effective_request_frame.requested_output_mode == "detailed"
     assert snapshot.effective_request_frame.needs_clarification is False
@@ -493,7 +494,10 @@ def test_followup_detail_with_multiple_fault_codes_requires_clarification() -> N
     assert snapshot.context_frame.relation_to_previous == "ambiguous"
     assert snapshot.context_frame.missing_context
     assert snapshot.effective_request_frame.effective_fault_code_refs == []
-    assert snapshot.skill_route.primary_skill == "clarification"
+    assert snapshot.skill_route.primary_skill == ""
+    readiness = snapshot.metadata["goal_readiness"][0]
+    assert readiness["status"] == "blocked_missing_slot"
+    assert readiness["blockers"] == ["exactly_one_fault_code"]
 
 
 def test_followup_workorder_uses_latest_report_manifest_without_ambiguity() -> None:
@@ -542,7 +546,7 @@ def test_followup_workorder_uses_latest_report_manifest_without_ambiguity() -> N
     )
 
     snapshot = AgentEngineV2().build_plan_snapshot(
-        raw_message="看起来有故障，那就创建工单",
+        raw_message="根据报告创建工单",
         thread_id=thread_id,
         request_id="request.report.workorder.followup",
         auth_context=_engineer(asset_scope=["G120电机1"]),
