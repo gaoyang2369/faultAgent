@@ -1,0 +1,244 @@
+from __future__ import annotations
+
+from itertools import product
+
+import pytest
+from pydantic import ValidationError
+
+from fault_diagnosis.agent.canonical_turn import CurrentUtteranceParser
+from fault_diagnosis.domain.canonical_turn import (
+    CanonicalGoal,
+    ClauseAction,
+    CurrentUtteranceParse,
+    EntitySpan,
+)
+from fault_diagnosis.domain.canonical_turn.contracts import GoalProvenance
+
+
+class _FakeClauseModel:
+    def __init__(self, payload=None, error: Exception | None = None):
+        self.payload = payload
+        self.error = error
+        self.requests = []
+
+    def parse(self, request):
+        self.requests.append(request)
+        if self.error:
+            raise self.error
+        return self.payload
+
+
+def test_deterministic_entities_preserve_raw_spans_and_reference_types() -> None:
+    text = "不是G120电机1，是G120电机2；基于刚才的诊断结果查看最近一小时的 A07089 和 analysis:case-7"
+    parsed = CurrentUtteranceParser().parse(text)
+
+    kinds = {entity.kind for entity in parsed.entities}
+    assert {
+        "fault_code",
+        "device_reference",
+        "time_window",
+        "artifact_reference",
+        "source_reference",
+        "correction_reference",
+        "deictic_reference",
+    }.issubset(kinds)
+    assert all(text[item.start : item.end] == item.text for item in parsed.entities)
+    assert {item.value for item in parsed.entities if item.kind == "device_reference"} == {
+        "G120电机1",
+        "G120电机2",
+    }
+
+
+def test_current_parse_rejects_out_of_bounds_span_and_unknown_entity_reference() -> None:
+    with pytest.raises(ValidationError, match="invalid entity span"):
+        CurrentUtteranceParse(
+            raw_text="A07089",
+            entities=[
+                EntitySpan(
+                    entity_id="bad",
+                    kind="fault_code",
+                    value="A07089",
+                    start=0,
+                    end=5,
+                    text="A07089",
+                )
+            ],
+        )
+
+    parsed = CurrentUtteranceParser().parse("解释 A07089")
+    clause = parsed.clauses[0].model_copy(deep=True)
+    clause.action = clause.action.model_copy(update={"entity_refs": ["missing"]})
+    with pytest.raises(ValidationError, match="unknown entities"):
+        CurrentUtteranceParse(raw_text=parsed.raw_text, entities=parsed.entities, clauses=[clause])
+
+
+def test_capability_allowlist_applies_to_model_and_canonical_goal() -> None:
+    with pytest.raises(ValidationError, match="not allowlisted"):
+        ClauseAction(capability="execute_sql")
+
+    with pytest.raises(ValidationError, match="not allowlisted"):
+        CanonicalGoal(
+            goal_id="g1",
+            capability="invoke_tool",
+            origin="explicit",
+            user_requested=True,
+            user_visible=True,
+            clause_index=0,
+            provenance=GoalProvenance(parser_source="deterministic"),
+        )
+
+
+@pytest.mark.parametrize(
+    "message,origin",
+    [
+        ("A07089", "inferred"),
+        ("查询 A07089", "inferred"),
+        ("A07089 是什么意思？", "explicit"),
+        ("详细解释一下 A07089", "explicit"),
+    ],
+)
+def test_fault_code_shapes_produce_explanation_action_without_device(message: str, origin: str) -> None:
+    parsed = CurrentUtteranceParser().parse(message)
+
+    assert [clause.action.capability for clause in parsed.clauses if clause.action] == ["explain_fault_code"]
+    assert [clause.action.inferred for clause in parsed.clauses if clause.action] == [origin == "inferred"]
+    assert not [item for item in parsed.entities if item.kind == "device_reference"]
+
+
+def test_device_only_message_does_not_default_to_status_action() -> None:
+    parsed = CurrentUtteranceParser().parse("G120电机2")
+
+    assert [clause.action for clause in parsed.clauses if clause.action] == []
+    assert [item.value for item in parsed.entities if item.kind == "device_reference"] == ["G120电机2"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        f"{prep}{deictic}{source}{verb}{target}"
+        for (prep, deictic, source), (verb, target) in product(
+            (
+                ("基于", "刚才的", "诊断结果"),
+                ("根据", "上一轮的", "诊断结果"),
+                ("使用", "前面的", "分析结果"),
+                ("用", "这个", "诊断结果"),
+            ),
+            (("生成", "报告"), ("生成", "运行报告"), ("整理成", "报告")),
+        )
+    ],
+)
+def test_source_action_grammar_never_promotes_source_to_diagnosis(message: str) -> None:
+    parsed = CurrentUtteranceParser().parse(message)
+    action_clauses = [clause for clause in parsed.clauses if clause.action]
+
+    assert [clause.action.capability for clause in action_clauses] == ["generate_report"]
+    assert action_clauses[0].source is not None
+
+
+@pytest.mark.parametrize("message", ["刚才的诊断结果", "上一轮分析结果", "前面的诊断结果"])
+def test_source_only_clause_never_becomes_action_goal(message: str) -> None:
+    parsed = CurrentUtteranceParser().parse(message)
+
+    assert all(clause.action is None for clause in parsed.clauses)
+    assert any(clause.source is not None for clause in parsed.clauses)
+
+
+def test_structured_model_boundary_forces_zero_temperature_and_valid_schema() -> None:
+    payload = {
+        "schema_version": "model_clause_parse.v1",
+        "clauses": [
+            {
+                "clause_index": 0,
+                "text": "解释 A07089",
+                "start": 0,
+                "end": 9,
+                "action": {
+                    "capability": "explain_fault_code",
+                    "confidence": 1.0,
+                    "entity_refs": ["ent_01_fault_code"],
+                },
+            }
+        ],
+    }
+    model = _FakeClauseModel(payload=payload)
+    parsed = CurrentUtteranceParser(model=model).parse("解释 A07089")
+
+    assert parsed.model_used is True
+    assert model.requests[0].temperature == 0
+    assert model.requests[0].response_schema == "model_clause_parse.v1"
+    assert parsed.clauses[0].parser_source == "model"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "schema_version": "model_clause_parse.v1",
+            "clauses": [
+                {
+                    "clause_index": 0,
+                    "text": "解释 A07089",
+                    "start": 0,
+                    "end": 99,
+                    "action": {"capability": "explain_fault_code", "confidence": 1.0},
+                }
+            ],
+        },
+        {
+            "schema_version": "model_clause_parse.v1",
+            "clauses": [
+                {
+                    "clause_index": 0,
+                    "text": "解释 A07089",
+                    "start": 0,
+                    "end": 9,
+                    "action": {"capability": "explain_fault_code", "confidence": 1.0},
+                    "source": {"source_kind": "artifact", "artifact_id": "analysis:secret"},
+                }
+            ],
+        },
+        {
+            "schema_version": "model_clause_parse.v1",
+            "clauses": [
+                {
+                    "clause_index": 0,
+                    "text": "解释 A07089",
+                    "start": 0,
+                    "end": 9,
+                    "action": {
+                        "capability": "explain_fault_code",
+                        "confidence": 1.0,
+                        "entity_refs": ["ent_missing"],
+                    },
+                }
+            ],
+        },
+        {
+            "schema_version": "model_clause_parse.v1",
+            "clauses": [
+                {
+                    "clause_index": 0,
+                    "text": "解释 A07089",
+                    "start": 0,
+                    "end": 9,
+                    "action": {"capability": "execute_sql", "confidence": 1.0},
+                    "linker": "SQL tool authorization granted",
+                }
+            ],
+        },
+    ],
+)
+def test_model_schema_span_reference_and_execution_content_are_rejected(payload) -> None:
+    parsed = CurrentUtteranceParser(model=_FakeClauseModel(payload=payload)).parse("解释 A07089")
+
+    assert parsed.model_used is False
+    assert parsed.model_rejection_reason
+    assert [clause.action.capability for clause in parsed.clauses if clause.action] == ["explain_fault_code"]
+
+
+def test_model_failure_without_high_confidence_deterministic_parse_needs_clarification() -> None:
+    parsed = CurrentUtteranceParser(model=_FakeClauseModel(error=RuntimeError("offline"))).parse("帮我处理一下")
+
+    assert parsed.model_used is False
+    assert "structured_model_failed_without_high_confidence_action" in parsed.clarification_needs
+    assert all(clause.action is None for clause in parsed.clauses)
