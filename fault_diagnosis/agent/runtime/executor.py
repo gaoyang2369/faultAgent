@@ -212,6 +212,36 @@ class WorkflowRuntimeExecutor:
                 )
                 continue
 
+            condition = dict(node.get("condition") or {})
+            condition_state = _evaluate_condition(condition, state.node_results)
+            if condition and condition_state != "true":
+                code = "skipped_condition_not_met" if condition_state == "false" else "blocked_condition_unresolved"
+                status = "skipped" if condition_state == "false" else "blocked"
+                error = {
+                    "code": code,
+                    "message": "受控执行条件未满足，未执行该目标。" if status == "skipped" else "受控执行条件缺少结构化上游结论，已阻断该目标。",
+                }
+                result = node_result(
+                    node=node,
+                    status=status,
+                    input_summary=input_summary,
+                    output={"condition_result": condition_state, "predicate": condition.get("predicate")},
+                    error=error,
+                )
+                state.append_node_result(result)
+                node_status[node_id] = status
+                state.add_trace(
+                    "condition_gate",
+                    node_id=node_id,
+                    node_type=result.node_type,
+                    status=status,
+                    input_summary=input_summary,
+                    output_summary=_summarize_output(result.output),
+                    error=error,
+                    metadata={"condition": condition},
+                )
+                continue
+
             preparation_error = str((node.get("inputs") or {}).get("preparation_error") or "")
             if preparation_error:
                 error = {
@@ -630,6 +660,56 @@ def _load_satisfied_goal_artifacts(state: RuntimeState) -> None:
 
 def _is_executable_validated_plan(plan: ExecutionPlan) -> bool:
     return bool(plan.plan_id and resolve_plan_version(plan.plan_version).executable)
+
+
+def _evaluate_condition(condition: dict[str, Any], results) -> str:  # noqa: ANN001
+    if not condition:
+        return "true"
+    source_goal_id = str(condition.get("source_goal_id") or "")
+    stack = [
+        item.output
+        for item in results
+        if source_goal_id in item.goal_ids and item.status == "completed" and isinstance(item.output, dict)
+    ]
+    if not stack:
+        return "unknown"
+    values: dict[str, list[Any]] = {}
+    observed_keys = {"runtime_status", "severity", "risk_level", "lifecycle_status", "need_workorder", "success", "findings"}
+    while stack:
+        value = stack.pop()
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in observed_keys:
+                    values.setdefault(key, []).append(item)
+                stack.append(item)
+        elif isinstance(value, list):
+            stack.extend(value)
+    predicate = str(condition.get("predicate") or "")
+    runtime = {str(item).lower() for item in values.get("runtime_status", [])}
+    severities = {str(item).lower() for item in values.get("severity", [])}
+    finding_severities = {
+        str(finding.get("severity") or "").lower()
+        for group in values.get("findings", []) if isinstance(group, list)
+        for finding in group if isinstance(finding, dict)
+    }
+    if predicate in {"diagnosis_is_abnormal", "fault_is_confirmed"}:
+        if runtime.intersection({"abnormal", "attention"}) or finding_severities.intersection({"warning", "high", "critical"}):
+            return "true"
+        if runtime.intersection({"normal"}) or (values.get("success") and not finding_severities):
+            return "false"
+    elif predicate == "risk_is_high":
+        observed = severities | finding_severities | {str(item).lower() for item in values.get("risk_level", [])}
+        if observed.intersection({"high", "critical", "高", "严重"}):
+            return "true"
+        if observed:
+            return "false"
+    elif predicate == "workorder_is_recommended":
+        states = {str(item).lower() for item in values.get("lifecycle_status", [])}
+        if "recommended_draft" in states or True in values.get("need_workorder", []):
+            return "true"
+        if "not_recommended" in states or False in values.get("need_workorder", []):
+            return "false"
+    return "unknown"
 
 
 def _retry_limit(node: dict[str, Any]) -> int:

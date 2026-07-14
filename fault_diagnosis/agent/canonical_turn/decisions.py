@@ -25,6 +25,7 @@ _SOURCE_TYPES = {
     "resolution_recommendation": {"analysis_artifact", "sql_artifact"},
     "generate_report": {"analysis_artifact"},
     "create_workorder_draft": {"report_artifact", "analysis_artifact"},
+    "evaluate_workorder_need": {"report_artifact", "analysis_artifact"},
 }
 
 
@@ -54,6 +55,7 @@ def decide_goal_authorization(
                 "diagnose_fault",
                 "resolution_recommendation",
                 "generate_report",
+                "evaluate_workorder_need",
                 "create_workorder_draft",
             }:
                 required_tables = {
@@ -107,6 +109,16 @@ def resolve_goal_sources(
                 results.append(GoalSourceResolution(goal_id=goal.goal_id, status="requires_execution", reason="runtime status is always refreshed"))
             continue
         allowed = _SOURCE_TYPES.get(goal.capability, set())
+        if goal.dependencies and goal.capability in {"generate_report", "evaluate_workorder_need", "create_workorder_draft"}:
+            results.append(GoalSourceResolution(
+                goal_id=goal.goal_id,
+                status="requires_execution",
+                reason="same-turn canonical dependency supplies the execution source",
+            ))
+            continue
+        if goal.capability == "evaluate_workorder_need" and not goal.source_requirements and not goal.dependencies:
+            results.append(GoalSourceResolution(goal_id=goal.goal_id, status="requires_execution", reason="no evidence candidate; return insufficient_evidence without creating an artifact"))
+            continue
         if not goal.source_requirements or not allowed:
             results.append(GoalSourceResolution(goal_id=goal.goal_id, status="requires_execution", reason="no explicit reusable source"))
             continue
@@ -202,7 +214,9 @@ def decide_goal_readiness(
             results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="blocked_permission", blockers=[auth.reason_code or "permission_denied"]))
         elif goal.capability == "explain_fault_code" and len(_slot_values(source.resolved_slots.get("fault_code") or goal.resolved_slots.get("fault_code"))) != 1:
             results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="blocked_missing_slot", blockers=["exactly_one_fault_code"]))
-        elif goal.capability == "create_workorder_draft" and len(_slot_values(source.resolved_slots.get("device") or goal.resolved_slots.get("device"))) != 1:
+        elif goal.execution_condition and not goal.execution_condition.source_goal_id:
+            results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="blocked_source", blockers=["condition_source_unresolved"]))
+        elif goal.capability in {"evaluate_workorder_need", "create_workorder_draft"} and len(_slot_values(source.resolved_slots.get("device") or goal.resolved_slots.get("device"))) != 1:
             results.append(GoalReadinessDecision(goal_id=goal.goal_id, status="blocked_missing_slot", blockers=["exactly_one_device"]))
         elif [slot for slot in goal.missing_slots if slot not in source.resolved_slots]:
             unresolved = [slot for slot in goal.missing_slots if slot not in source.resolved_slots]

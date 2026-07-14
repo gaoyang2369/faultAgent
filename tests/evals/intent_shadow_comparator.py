@@ -44,19 +44,14 @@ _SEQUENCE = re.compile(r"(?:先|然后|再|最后|接着)")
 def infer_shadow_metadata(
     clauses: list[StructuredClause] | tuple[StructuredClause, ...],
 ) -> tuple[ShadowClauseMetadata, ...]:
-    has_sequence = any(_SEQUENCE.search(clause.text) for clause in clauses)
-    result = []
-    for index, clause in enumerate(clauses):
-        negated = bool(_NEGATION.search(clause.text))
-        conditional = bool(_CONDITION.search(clause.text))
-        result.append(ShadowClauseMetadata(
-            requested=clause.action is not None and not negated,
-            negated=negated,
-            conditional=conditional,
-            sequence_index=index if has_sequence else None,
-            depends_on=[index - 1] if index > 0 and (conditional or _SEQUENCE.search(clause.text)) else [],
-        ))
-    return tuple(result)
+    return tuple(ShadowClauseMetadata(
+        requested=clause.modality.requested,
+        negated=clause.modality.negated,
+        conditional=clause.modality.conditional,
+        sequence_index=clause.modality.sequence_index,
+        depends_on=list(clause.modality.depends_on_clause_indexes),
+        relation=clause.modality.relation_to_previous_clause or "requested_action",
+    ) for clause in clauses)
 
 
 class IntentShadowComparator:

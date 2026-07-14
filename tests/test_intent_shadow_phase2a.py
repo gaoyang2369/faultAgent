@@ -138,8 +138,8 @@ def test_gold_dataset_is_unique_and_uses_the_single_capability_registry() -> Non
         if any(index is not None for index in sequence):
             assert sequence == list(range(len(clauses)))
         assert all(not (clause.get("negated") and clause.get("requested", True)) for clause in clauses)
-    with pytest.raises(ValidationError, match="not allowlisted"):
-        ClauseAction(capability="evaluate_workorder_need")
+    assert ClauseAction(capability="evaluate_workorder_need").capability == "evaluate_workorder_need"
+    assert ClauseAction(capability="dispatch_workorder").capability == "dispatch_workorder"
 
 
 def test_shadow_flag_off_does_not_construct_model_or_return_summary(monkeypatch) -> None:
@@ -164,11 +164,14 @@ def test_plan_shadow_only_adds_dev_field_and_cannot_change_formal_payload(monkey
         ).json()
     assert "intent_shadow" not in baseline
     assert shadowed["intent_shadow"]["model_capabilities"] == ["evaluate_workorder_need"]
-    assert "unsupported_output" in shadowed["intent_shadow"]["difference_dimensions"]
-    assert _formal_plan(shadowed) == _formal_plan(baseline)
-    assert "evaluate_workorder_need" not in json.dumps(shadowed["execution_plan"], ensure_ascii=False)
-    assert "evaluate_workorder_need" not in json.dumps(shadowed["goal_authorization"], ensure_ascii=False)
-    assert "evaluate_workorder_need" not in json.dumps(shadowed["goal_source_resolution"], ensure_ascii=False)
+    assert shadowed["intent_shadow"]["difference_dimensions"] == []
+    shadow_formal = _formal_plan(shadowed)
+    baseline_formal = _formal_plan(baseline)
+    shadow_formal.pop("pending_transition")
+    baseline_formal.pop("pending_transition")
+    assert shadow_formal == baseline_formal
+    assert "evaluate_workorder_need" in json.dumps(shadowed["goal_authorization"], ensure_ascii=False)
+    assert not shadowed["execution_plan"]["nodes"]
 
 
 @pytest.mark.parametrize(
@@ -224,10 +227,10 @@ def test_hard_safety_rejects_unknown_capability_execution_content_span_and_tools
 
 def test_shadow_only_candidate_is_marked_but_execution_validation_remains_strict(monkeypatch) -> None:
     text = "这情况要不要安排人处理？"
-    payload = _payload(text, capability="evaluate_workorder_need")
+    payload = _payload(text, capability="meta")
     result = _summary(monkeypatch, text, payload=payload)
     assert result.status == "completed"
-    assert result.model_capabilities == ["evaluate_workorder_need"]
+    assert result.model_capabilities == ["meta"]
     assert "unsupported_output" in result.difference_dimensions
     parsed = CurrentUtteranceParser().parse(text)
     with pytest.raises(ValueError, match="deterministic action evidence"):

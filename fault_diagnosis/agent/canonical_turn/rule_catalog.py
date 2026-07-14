@@ -58,7 +58,7 @@ RULE_CATALOG = (
     {
         "rule_id": "source.prior_result.marker.v1",
         "category": "source_marker",
-        "pattern": r"(?:(?:刚才|上一轮|上一次|前面|之前|这个|该)(?:的)?|(?:基于|根据|使用|用)(?:刚才的|上一轮的|前面的|这个)?)(?:诊断(?:结果)?|分析结果|运行报告|报告|数据|结果)",
+        "pattern": r"(?:(?:刚才|上一轮|上一次|前面|之前|这个|该|已有)(?:的)?|(?<!不)(?:基于|根据|使用|用)(?:刚才的|上一轮的|前面的|这个|已有)?)(?:诊断(?:结果)?|分析结果|运行报告|报告|数据|结果)",
         "semantic_value": "source_reference",
         "priority": 660,
         "confidence": 1.0,
@@ -89,7 +89,7 @@ RULE_CATALOG = (
     {
         "rule_id": "clause.boundary.punctuation.v1",
         "category": "clause_boundary",
-        "pattern": r"[，,。；;！？!?]+|(?:并|然后|顺便|另外|以及)(?=(?:给出|诊断|分析|查询|生成|创建|判断|比较|解释|看看))",
+        "pattern": r"[，,。；;！？!?]+|(?=(?:并|然后|顺便|另外|以及|只|而是|再|最后|接着)(?=(?:和.{0,20})?(?:给(?:出)?|告诉|展示|诊断|分析|查询|查|生成|创建|新建|判断|比较|解释|看看|整理|考虑|安排)))",
         "semantic_value": "boundary",
         "priority": 600,
         "confidence": 1.0,
@@ -119,9 +119,23 @@ RULE_CATALOG = (
         "example": "SQL tool authorization granted",
     },
     {
+        "rule_id": "action.workorder.dispatch.v1", "category": "action_predicate",
+        "pattern": r"(?:正式|直接|立即|马上|帮我)?.{0,8}(?:派发|派单|下发)(?:工单)?|(?:直接)?安排.{0,8}(?:工程师|人员).{0,8}(?:处理|维修|处置)",
+        "semantic_value": "dispatch_workorder", "priority": 930, "confidence": 1.0,
+        "allowed_clause_roles": ("action",), "entity_ref_kinds": ("*",),
+        "example": "正式派发工单",
+    },
+    {
+        "rule_id": "action.workorder.evaluate.v1", "category": "action_predicate",
+        "pattern": r"(?:判断|评估|看看|问问|考虑|知道|想知道)?.{0,14}(?:是否|要不要|有没有|有无|是否需要|是否建议|有没有必要|有必要).{0,14}(?:工单|维修单|报修|建单|安排.{0,4}(?:工程师|人员?).{0,4}处理)|(?:工单|维修单|报修|建单).{0,10}(?:是否需要|有没有必要|有必要|必要性|建议)|(?:评估|判断).{0,8}(?:工单)?必要性|考虑.{0,8}(?:工单|报修)",
+        "semantic_value": "evaluate_workorder_need", "priority": 920, "confidence": 1.0,
+        "allowed_clause_roles": ("action",), "entity_ref_kinds": ("*",),
+        "example": "判断是否需要工单",
+    },
+    {
         "rule_id": "action.report.generate.v1",
         "category": "action_predicate",
-        "pattern": r"(?:生成|整理成|出一份|制作).{0,24}(?:运行)?报告",
+        "pattern": r"(?:生成|整理成?|出一份|制作|整份|给我整).{0,24}(?:运行)?报告|(?:不要|不用|无需|不需要|先别|不必|别).{0,8}(?:生成)?报告",
         "semantic_value": "generate_report",
         "priority": 900,
         "confidence": 1.0,
@@ -132,7 +146,7 @@ RULE_CATALOG = (
     {
         "rule_id": "action.recommendation.request.v1",
         "category": "action_predicate",
-        "pattern": r"(?:处理建议|处置建议|解决建议|怎么处理|如何处理|给出.{0,4}建议)",
+        "pattern": r"(?:处理建议|处置建议|解决建议|怎么处理|如何处理|给出.{0,4}建议|不需要建议|不用建议)",
         "semantic_value": "resolution_recommendation",
         "priority": 890,
         "confidence": 1.0,
@@ -143,7 +157,7 @@ RULE_CATALOG = (
     {
         "rule_id": "action.runtime.compare.v1",
         "category": "action_predicate",
-        "pattern": r"(?:对比|比较).{0,36}(?:状态|运行|异常|数据)",
+        "pattern": r"(?:对比|比较).{0,36}(?:状态|运行|异常|数据)|(?:对比|比较).{0,36}(?:电机\d+|J\d+).{0,36}(?:电机\d+|J\d+)|和.{0,24}(?:电机\d+|J\d+).{0,12}比较|(?:别|不要|不用).{0,5}(?:对比|比较)",
         "semantic_value": "compare_runtime_status",
         "priority": 880,
         "confidence": 1.0,
@@ -154,9 +168,9 @@ RULE_CATALOG = (
     {
         "rule_id": "action.diagnosis.assess.v1",
         "category": "action_predicate",
-        "pattern": r"(?:诊断(?!结果)(?:一下|看看)?|判断|排查|分析).{0,24}(?:故障|异常|问题|原因|根因|[A-Za-z]{1,3}\d{4,6})|(?:详细)?诊断(?!结果)(?:一下|看看)?|(?:为什么|为何).{0,18}(?:故障|异常|问题)|(?:有没有|是否|存在).{0,5}(?:故障|异常)|(?:故障|异常)吗",
+        "pattern": r"(?:诊断(?!结果)(?:一下|看看)?|判断|排查|分析).{0,24}(?:故障|异常|问题|原因|根因|[A-Za-z]{1,3}\d{4,6})|(?:运行数据|运行状态).{0,12}(?:判断|诊断|分析)|(?:详细)?诊断(?!结果)(?:一下|看看)?|继续分析|(?:为什么|为何).{0,18}(?:故障|异常|问题)|(?:有没有|是否|存在|是不是).{0,8}(?:故障|异常|问题|不太对劲|毛病)|(?:故障|异常)吗|(?:如果|若).{0,12}(?:故障|异常|问题)$|(?:不用|无需|不必|不要).{0,5}(?:重新)?诊断",
         "semantic_value": "diagnose_fault",
-        "priority": 870,
+        "priority": 878,
         "confidence": 1.0,
         "allowed_clause_roles": ("action",),
         "entity_ref_kinds": ("device_reference",),
@@ -192,9 +206,9 @@ RULE_CATALOG = (
     {
         "rule_id": "action.runtime.status.v1",
         "category": "action_predicate",
-        "pattern": r"(?:查询|查看|检查|看看|查|改查).{0,24}(?:状态|运行|异常|数据|电机\d+)|(?:当前|现在).{0,18}(?:状态|运行|异常|健康)|(?:健康状况|运行情况)",
+        "pattern": r"(?<!排)(?:查询|查看|检查|看看|查|改查|展示|告诉我).{0,24}(?:状态|运行|异常|数据|电机\d+)|查完.{0,16}(?:J\d+|电机\d+)|(?:当前|现在|最近).{0,18}(?:状态|运行|异常|健康|咋样)|(?:健康状况|运行情况|最近咋样)|(?:不用|无需|不必|不要).{0,8}(?:重新)?查询",
         "semantic_value": "check_runtime_status",
-        "priority": 875,
+        "priority": 879,
         "confidence": 1.0,
         "allowed_clause_roles": ("action",),
         "entity_ref_kinds": ("device_reference",),
@@ -203,7 +217,7 @@ RULE_CATALOG = (
     {
         "rule_id": "action.workorder.create_draft.v1",
         "category": "action_predicate",
-        "pattern": r"(?:创建|生成|新建|判断|看看|是否需要|要不要).{0,24}(?:工单|维修单)",
+        "pattern": r"(?:创建|生成|新建).{0,24}(?:工单|维修单|草稿)|(?:不要|不用|无需|不需要|先别|不是要|不必|别).{0,10}(?:创建|生成|新建|执行)?(?:工单|维修单|草稿)",
         "semantic_value": "create_workorder_draft",
         "priority": 885,
         "confidence": 1.0,
@@ -217,6 +231,8 @@ CAPABILITY_LEXICON = {
     "check_runtime_status": ("action.runtime.status.v1",),
     "compare_runtime_status": ("action.runtime.compare.v1",),
     "create_workorder_draft": ("action.workorder.create_draft.v1",),
+    "dispatch_workorder": ("action.workorder.dispatch.v1",),
+    "evaluate_workorder_need": ("action.workorder.evaluate.v1",),
     "diagnose_fault": ("action.diagnosis.assess.v1",),
     "explain_fault_code": (
         "action.fault_code.explain_explicit.v1",

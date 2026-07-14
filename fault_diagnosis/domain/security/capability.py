@@ -28,12 +28,21 @@ _PERMISSION_BY_CAPABILITY = {
     "generate_report": WORKFLOW_REPORT_GENERATION,
     "generate_report_from_previous": WORKFLOW_REPORT_GENERATION,
     "decide_workorder": WORKFLOW_ACTION_REQUEST,
+    "evaluate_workorder_need": WORKFLOW_FAULT_DIAGNOSIS,
     "create_workorder_draft": WORKFLOW_ACTION_REQUEST,
     "confirm_workorder_draft": WORKFLOW_ACTION_REQUEST,
 }
 
 
 def authorize_capability_preflight(auth: AuthContext, capability: str) -> AuthorizationDecision:
+    if capability == "dispatch_workorder":
+        return AuthorizationDecision(
+            allowed=False,
+            mode="deny",
+            reason="工单派发属于当前系统不支持的高风险动作，必须由人工在外部系统确认并执行。",
+            denied_reason_code="unsupported_high_risk_action",
+            user_message="当前系统不会派发工单；该动作需要人工确认并在外部系统执行。",
+        )
     permission = _PERMISSION_BY_CAPABILITY.get(capability)
     if not permission or auth.has_permission(permission):
         return AuthorizationDecision(allowed=True, mode="allow", reason="Capability preflight passed.")
@@ -45,7 +54,7 @@ def authorize_capability_preflight(auth: AuthContext, capability: str) -> Author
             denied_reason_code="report_permission_denied",
             user_message="当前身份不能生成正式报告，已降级为运行状态摘要。",
         )
-    if capability in {"decide_workorder", "create_workorder_draft", "confirm_workorder_draft"}:
+    if capability in {"decide_workorder", "evaluate_workorder_need", "create_workorder_draft", "confirm_workorder_draft"}:
         code = "workorder_permission_denied"
         message = "当前身份无维修工单判断或草稿生成权限。"
     elif capability == "root_cause_analysis":

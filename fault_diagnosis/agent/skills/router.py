@@ -24,6 +24,8 @@ _SKILL_BY_CAPABILITY = {
     "resolution_recommendation": "alarm_triage",
     "generate_report": "report_generation",
     "create_workorder_draft": "workorder_decision",
+    "dispatch_workorder": "workorder_decision",
+    "evaluate_workorder_need": "workorder_decision",
 }
 
 

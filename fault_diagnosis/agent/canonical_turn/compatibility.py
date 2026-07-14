@@ -32,6 +32,8 @@ _DELIVERABLES = {
     "resolution_recommendation": ["recommendations"],
     "generate_report": ["report"],
     "create_workorder_draft": ["workorder_draft"],
+    "dispatch_workorder": ["permission_denied"],
+    "evaluate_workorder_need": ["workorder_decision"],
 }
 
 

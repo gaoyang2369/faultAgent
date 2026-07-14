@@ -48,7 +48,7 @@ def test_guest_blocks_report_root_cause_and_workorder_plans() -> None:
     cases = [
         ("基于刚才结果生成报告", "generate_report"),
         ("诊断 J1 A07089 的根因", "diagnose_fault"),
-        ("判断 J1 A07089 是否需要工单草稿", "create_workorder_draft"),
+        ("为 J1 创建 A07089 工单草稿", "create_workorder_draft"),
     ]
 
     for message, capability in cases:
@@ -139,12 +139,12 @@ def test_engineer_scope_checks_assets_and_tables() -> None:
 
 def test_workorder_and_device_action_generate_approval_requirements() -> None:
     workorder = AgentEngineV2().build_plan_snapshot(
-        raw_message="判断 J1 A07089 是否需要工单草稿",
+        raw_message="为 J1 创建 A07089 工单草稿",
         auth_context=_engineer(),
     )
     assert any(item["type"] == "workorder_draft" for item in workorder.execution_plan.approval_requirements)
 
-    intent, _context, route = _route("判断 J1 A07089 是否需要工单草稿")
+    intent, _context, route = _route("为 J1 创建 A07089 工单草稿")
     dangerous = ExecutionPlan(
         plan_id="candidate.dangerous",
         plan_version="v2.candidate.test",

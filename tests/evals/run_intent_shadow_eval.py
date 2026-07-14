@@ -48,7 +48,7 @@ def _prediction(parsed, clauses, metadata) -> list[dict[str, Any]]:  # noqa: ANN
             "negated": semantic.negated,
             "conditional": semantic.conditional,
             "sequence_index": semantic.sequence_index,
-            "depends_on": semantic.depends_on,
+            "depends_on": getattr(semantic, "depends_on", getattr(semantic, "depends_on_clause_indexes", [])),
             "source_kind": clause.source.source_kind if clause.source else "current_message",
             "entity_refs": sorted(entities[ref] for ref in refs if ref in entities),
             "boundary": [clause.start, clause.end],
@@ -61,7 +61,7 @@ def _deterministic(case: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "completed", "returned": True, "schema_valid": True, "validation_passed": True,
         "latency_ms": 0.0, "parsed": parsed,
-        "clauses": _prediction(parsed, parsed.clauses, infer_shadow_metadata(parsed.clauses)),
+        "clauses": _prediction(parsed, parsed.clauses, [item.modality for item in parsed.clauses]),
     }
 
 
@@ -116,6 +116,7 @@ def _score(cases: list[dict[str, Any]], results: list[dict[str, Any]]) -> dict[s
     dimension_hits = Counter()
     dimension_totals = Counter()
     tp = fp = fn = entity_tp = entity_fp = entity_fn = exact = false_activations = 0
+    workorder_hits = workorder_total = dispatch_hits = dispatch_total = conditional_hits = conditional_total = 0
     for case, result in zip(cases, results):
         gold = case["expected"]["clauses"]
         predicted = result["clauses"]
@@ -125,6 +126,13 @@ def _score(cases: list[dict[str, Any]], results: list[dict[str, Any]]) -> dict[s
         overlap = gold_caps & pred_caps
         tp += sum(overlap.values()); fp += sum((pred_caps - gold_caps).values()); fn += sum((gold_caps - pred_caps).values())
         case_exact = completed and len(gold) == len(predicted)
+        gold_workorder = [item.get("capability") for item in gold if item.get("capability") in {"evaluate_workorder_need", "create_workorder_draft"}]
+        if gold_workorder:
+            workorder_total += 1
+            workorder_hits += int(gold_workorder == [item.get("capability") for item in predicted if item.get("capability") in {"evaluate_workorder_need", "create_workorder_draft"}])
+        if any(item.get("capability") == "dispatch_workorder" for item in gold):
+            dispatch_total += 1
+            dispatch_hits += int(any(item.get("capability") == "dispatch_workorder" for item in predicted))
         for index, expected in enumerate(gold):
             actual = predicted[index] if index < len(predicted) else {}
             for key in ("capability", "requested", *dimensions):
@@ -134,6 +142,12 @@ def _score(cases: list[dict[str, Any]], results: list[dict[str, Any]]) -> dict[s
                     dimension_hits[key] += 1
                 else:
                     case_exact = False
+            if expected.get("conditional"):
+                conditional_total += 1
+                conditional_hits += int(
+                    actual.get("conditional") is True
+                    and actual.get("depends_on", []) == expected.get("depends_on", [])
+                )
             if "entity_refs" in expected:
                 expected_refs = Counter(expected["entity_refs"])
                 actual_refs = Counter(actual.get("entity_refs", []))
@@ -158,12 +172,17 @@ def _score(cases: list[dict[str, Any]], results: list[dict[str, Any]]) -> dict[s
         "capability_precision": precision, "capability_recall": recall,
         "capability_f1": _f1(precision, recall),
         "entity_reference_f1": _f1(entity_precision, entity_recall),
+        "requested_accuracy": _ratio(dimension_hits["requested"], dimension_totals["requested"]),
         "negation_accuracy": _ratio(dimension_hits["negated"], dimension_totals["negated"]),
         "condition_accuracy": _ratio(dimension_hits["conditional"], dimension_totals["conditional"]),
         "sequence_accuracy": _ratio(dimension_hits["sequence_index"], dimension_totals["sequence_index"]),
         "dependency_accuracy": _ratio(dimension_hits["depends_on"], dimension_totals["depends_on"]),
         "prior_result_relation_accuracy": _ratio(dimension_hits["source_kind"], dimension_totals["source_kind"]),
         "false_positive_activation_rate": _ratio(false_activations, irrelevant_count),
+        "false_positive_activation": false_activations,
+        "workorder_evaluate_create_distinction_accuracy": _ratio(workorder_hits, workorder_total),
+        "dispatch_recognition_accuracy": _ratio(dispatch_hits, dispatch_total),
+        "conditional_execution_semantic_accuracy": _ratio(conditional_hits, conditional_total),
         "p50_latency_ms": _percentile(latencies, 0.50), "p95_latency_ms": _percentile(latencies, 0.95),
         "statuses": dict(Counter(item["status"] for item in results)),
     }
@@ -244,14 +263,26 @@ def main() -> int:
     if args.mode in {"model", "compare"}:
         with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as pool:
             model = list(pool.map(lambda case: _model(case, configured), cases))
+    baseline = {
+        "source": "Phase 2A recorded baseline; current checkout re-measured before Phase 2R",
+        "capability_f1": 0.75, "entity_reference_f1": 0.9474,
+        "negation_accuracy": 0.954, "condition_accuracy": 0.931,
+        "sequence_accuracy": 0.8391, "dependency_accuracy": 0.954,
+        "prior_result_relation_accuracy": 0.9195, "false_positive_activation": 0,
+    }
+    current = _score(cases, deterministic)
     report: dict[str, Any] = {
-        "schema_version": "intent_shadow_eval.v1", "mode": args.mode,
+        "schema_version": "intent_semantics_eval.v2", "mode": args.mode,
         "dataset": str(args.cases), "case_count": len(cases),
         "model_eval_concurrency": max(1, args.concurrency),
-        "deterministic_vs_gold": _score(cases, deterministic),
+        "deterministic_before_or_baseline": baseline,
+        "deterministic_current": current,
+        "deterministic_vs_gold": current,
+        "model_shadow": {"status": "not_run", "acceptance_required": False},
     }
     if model:
         report["model_vs_gold"] = _score(cases, model)
+        report["model_shadow"] = report["model_vs_gold"]
         report["model_configuration_error"] = configuration_error
         report["difference_classification"], report["typical_examples"] = _classify(cases, deterministic, model)
     rendered = json.dumps(report, ensure_ascii=False, indent=2)

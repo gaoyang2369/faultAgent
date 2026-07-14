@@ -31,6 +31,7 @@ _TITLE_BY_CAPABILITY = {
     "resolution_recommendation": "处理建议",
     "generate_report": "运行报告",
     "create_workorder_draft": "工单草稿",
+    "evaluate_workorder_need": "工单必要性判断",
 }
 
 
@@ -206,6 +207,9 @@ class DeliverableAssembler:
                 or workorder_payload.get("workorder_suggestion")
             )
             return dict(workorder_payload), success, None if success else "workorder_draft_unavailable", None
+        if capability == "evaluate_workorder_need":
+            payload = _as_dict(workorder_payload.get("workorder_need_assessment"))
+            return payload, bool(payload), None if payload else "workorder_evidence_required", None
         clarification = _as_dict(goal.get("clarification"))
         return clarification, False, "missing_required_slot", str(
             clarification.get("clarification_question") or "需要补充设备、故障码或时间窗口等关键信息后才能继续处理。"
@@ -220,11 +224,11 @@ def build_workorder_payload(
     evidence_bundle: EvidenceBundle | None,
     node_results: list[NodeResult] | list[dict[str, Any]],
 ) -> dict[str, Any]:
-    if not suggestion and not pending_action and not draft:
-        return {}
-    suggestion_data = _as_dict(suggestion)
-    draft_data = _as_dict(draft)
     node_output = _workorder_node_output(node_results)
+    if not suggestion and not pending_action and not draft and not node_output:
+        return {}
+    suggestion_data = _as_dict(suggestion) or _as_dict(node_output.get("suggestion"))
+    draft_data = _as_dict(draft)
     source_artifact_refs = _source_artifact_refs(suggestion_data, pending_action, draft_data, node_output)
     target_evidence_bundle_id = _first_text(
         node_output.get("target_evidence_bundle_id"),
@@ -249,7 +253,7 @@ def build_workorder_payload(
             *[item.evidence_id for item in (evidence_bundle.evidence_items if evidence_bundle else [])],
         ]
     )
-    manual_confirmation_required = bool(
+    manual_confirmation_required = not _truthy(node_output.get("evaluation_only")) and bool(
         draft_data
         or pending_action
         or suggestion_data.get("lifecycle_status") == "recommended_draft"
@@ -257,6 +261,7 @@ def build_workorder_payload(
     )
     return {
         "workorder_suggestion": suggestion_data,
+        "workorder_need_assessment": _as_dict(node_output.get("need_assessment")),
         "workorder_pending_action": pending_action,
         "workorder_draft": draft_data,
         "approval_requirements": _approval_requirements_from_node_results(node_results),
@@ -280,7 +285,7 @@ def composite_status(deliverables: list[DeliverableResult], fallback: str) -> st
         return "completed"
     if statuses.intersection({"completed", "partial"}):
         return "partial"
-    if statuses <= {"blocked", "denied"}:
+    if statuses <= {"blocked", "denied", "skipped"}:
         return "blocked"
     return "failed"
 

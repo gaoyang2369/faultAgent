@@ -14,13 +14,15 @@ CANONICAL_CAPABILITIES = frozenset(
         "compare_runtime_status",
         "create_workorder_draft",
         "diagnose_fault",
+        "dispatch_workorder",
+        "evaluate_workorder_need",
         "explain_fault_code",
         "generate_report",
         "resolution_recommendation",
     }
 )
 SHADOW_ONLY_CAPABILITIES = frozenset(
-    {"evaluate_workorder_need", "meta", "unsupported_high_risk_action"}
+    {"meta", "unsupported_high_risk_action"}
 )
 ALL_INTENT_CAPABILITIES = CANONICAL_CAPABILITIES | SHADOW_ONLY_CAPABILITIES
 # Backward-compatible production name. It intentionally excludes Shadow-only
@@ -48,7 +50,7 @@ SourceResolutionStatus = Literal[
     "stale",
     "blocked",
 ]
-GoalTerminalStatus = Literal["pending", "completed", "failed", "blocked", "denied", "satisfied"]
+GoalTerminalStatus = Literal["pending", "completed", "failed", "blocked", "denied", "satisfied", "skipped"]
 
 
 class CanonicalContract(BaseModel):
@@ -100,6 +102,20 @@ class ClauseSource(CanonicalContract):
     relation: str = "input_to_action"
 
 
+class ClauseModality(CanonicalContract):
+    """Production language semantics attached to one deterministic clause."""
+
+    requested: bool = True
+    negated: bool = False
+    conditional: bool = False
+    condition_type: Literal[
+        "if_abnormal", "if_fault_confirmed", "if_high_risk", "if_workorder_recommended"
+    ] | None = None
+    sequence_index: int | None = Field(default=None, ge=0)
+    depends_on_clause_indexes: list[int] = Field(default_factory=list)
+    relation_to_previous_clause: Literal["sequence", "condition", "contrast", "parallel"] | None = None
+
+
 class StructuredClause(CanonicalContract):
     clause_index: int = Field(ge=0)
     text: str
@@ -109,6 +125,7 @@ class StructuredClause(CanonicalContract):
     source: ClauseSource | None = None
     slot: dict[str, list[str]] = Field(default_factory=dict)
     linker: str | None = None
+    modality: ClauseModality = Field(default_factory=ClauseModality)
     parser_source: Literal["deterministic", "model"] = "deterministic"
 
     @model_validator(mode="after")
@@ -119,7 +136,7 @@ class StructuredClause(CanonicalContract):
 
 
 class CurrentUtteranceParse(CanonicalContract):
-    schema_version: Literal["current_utterance_parse.v1"] = "current_utterance_parse.v1"
+    schema_version: Literal["current_utterance_parse.v1", "current_utterance_parse.v2"] = "current_utterance_parse.v2"
     raw_text: str
     entities: list[EntitySpan] = Field(default_factory=list)
     clauses: list[StructuredClause] = Field(default_factory=list)
@@ -160,8 +177,17 @@ class GoalProvenance(CanonicalContract):
     original_goal_id: str | None = None
 
 
+class GoalExecutionCondition(CanonicalContract):
+    predicate: Literal[
+        "diagnosis_is_abnormal", "fault_is_confirmed", "risk_is_high", "workorder_is_recommended"
+    ]
+    source_goal_id: str = ""
+    on_false: Literal["skip"] = "skip"
+    on_unknown: Literal["block"] = "block"
+
+
 class CanonicalGoal(CanonicalContract):
-    schema_version: Literal["canonical_goal.v1"] = "canonical_goal.v1"
+    schema_version: Literal["canonical_goal.v1", "canonical_goal.v2"] = "canonical_goal.v2"
     goal_id: str
     capability: str
     origin: GoalOrigin
@@ -173,6 +199,7 @@ class CanonicalGoal(CanonicalContract):
     missing_slots: list[str] = Field(default_factory=list)
     source_requirements: list[str] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
+    execution_condition: GoalExecutionCondition | None = None
     provenance: GoalProvenance
 
     @field_validator("capability")

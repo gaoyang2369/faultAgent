@@ -120,8 +120,8 @@ class PlanValidator:
             issues=issues,
             authorization={"goals": [item.model_dump(mode="json") for item in authorization]},
             approval_requirements=list(candidate_plan.approval_requirements),
-            execution_mode="draft_only" if any(node.node_type == "workorder" for node in candidate_plan.nodes) else "normal",
-            post_execution_confirmation_required=any(node.node_type == "workorder" for node in candidate_plan.nodes),
+            execution_mode="draft_only" if any(node.node_type == "workorder" and node.inputs.get("create_draft") for node in candidate_plan.nodes) else "normal",
+            post_execution_confirmation_required=any(node.node_type == "workorder" and node.inputs.get("create_draft") for node in candidate_plan.nodes),
         )
 
 
@@ -203,7 +203,7 @@ def _validate_role_bindings(node, plan: ExecutionPlan, issues: list[PlanValidati
             issues.append(_error("report_source_cardinality", "Report requires exactly one report_source.", node_id=node.node_id))
         if counts["tabular_source"] > 1:
             issues.append(_error("report_tabular_source_cardinality", "Report accepts at most one tabular_source.", node_id=node.node_id))
-    elif node.node_type == "workorder" and counts["workorder_source"] != 1:
+    elif node.node_type == "workorder" and counts["workorder_source"] != 1 and node.inputs.get("action_type") != "evaluate_workorder_need":
         issues.append(_error("workorder_source_cardinality", "Workorder requires exactly one workorder_source.", node_id=node.node_id))
 
 

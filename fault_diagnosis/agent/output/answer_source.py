@@ -47,6 +47,9 @@ _SAFE_CONTENT_KEYS = {
         "stale_evidence_disclosure_required",
         "evidence_freshness",
     },
+    "evaluate_workorder_need": {
+        "workorder_suggestion",
+    },
 }
 _SAFE_FALLBACK_KEYS = {"message", "clarification_question"}
 _SENSITIVE_KEY_PARTS = (

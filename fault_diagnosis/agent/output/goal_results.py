@@ -17,6 +17,7 @@ _CAPABILITY_ARTIFACT_KEYS = {
     "resolution_recommendation": ("analysis_artifact",),
     "generate_report": ("report_artifact",),
     "create_workorder_draft": ("workorder_draft", "workorder_suggestion"),
+    "evaluate_workorder_need": ("workorder_suggestion",),
 }
 
 
@@ -190,9 +191,18 @@ def _terminal_status(
     statuses = {str(_value(item, "status") or "") for item in scoped_nodes}
     if "failed" in statuses:
         return "failed"
+    if statuses == {"skipped"} and any(
+        _mapping(_value(item, "error")).get("code") == "skipped_condition_not_met"
+        for item in scoped_nodes
+    ):
+        return "skipped"
     if statuses.intersection({"blocked", "skipped", "cancelled"}):
         return "blocked"
     if statuses and statuses <= {"completed"}:
+        if str(goal.get("capability") or "") == "evaluate_workorder_need" and any(
+            _mapping(_value(item, "output")).get("need_assessment") for item in scoped_nodes
+        ):
+            return "completed"
         return "completed" if _artifact_available(str(goal.get("capability") or ""), artifacts) else "failed"
     if _artifact_available(str(goal.get("capability") or ""), artifacts):
         return "completed"

@@ -1,5 +1,5 @@
 # Phase 2A gold data. Entity refs are semantic values, not production entity ids.
-- {case_id: single_status_001, user_message: "查询 G120电机1 当前状态。", expected: {clauses: [{capability: check_runtime_status, requested: true, negated: false, entity_refs: [G120电机1]}]}, tags: [single, status]}
+- {case_id: single_status_001, user_message: "查询 G120电机1 当前状态。", expected: {clauses: [{capability: check_runtime_status, requested: true, negated: false, entity_refs: [G120电机1, 当前]}]}, tags: [single, status]}
 - {case_id: single_fault_code_002, user_message: "A07089 是什么意思？", expected: {clauses: [{capability: explain_fault_code, requested: true, negated: false, entity_refs: [A07089]}]}, tags: [single, fault_code]}
 - {case_id: single_diagnose_003, user_message: "诊断 G120电机2 的故障。", expected: {clauses: [{capability: diagnose_fault, requested: true, negated: false, entity_refs: [G120电机2]}]}, tags: [single, diagnosis]}
 - {case_id: single_report_004, user_message: "生成一份运行报告。", expected: {clauses: [{capability: generate_report, requested: true, negated: false}]}, tags: [single, report]}
@@ -10,7 +10,7 @@
 - {case_id: compound_status_diag_008, user_message: "查询 G120电机1 最近状态，并判断是否异常。", expected: {clauses: [{capability: check_runtime_status, requested: true}, {capability: diagnose_fault, requested: true}]}, tags: [compound, status, diagnosis]}
 - {case_id: compound_diag_report_009, user_message: "分析异常原因并生成报告。", expected: {clauses: [{capability: diagnose_fault, requested: true}, {capability: generate_report, requested: true}]}, tags: [compound, diagnosis, report]}
 - {case_id: compound_code_recommend_010, user_message: "查询 A07089 并给出处理建议。", expected: {clauses: [{capability: explain_fault_code, requested: true}, {capability: resolution_recommendation, requested: true}]}, tags: [compound, fault_code, recommendation]}
-- {case_id: compound_compare_report_011, user_message: "比较 G120电机1 和 G120电机2，然后整理报告。", expected: {clauses: [{capability: compare_runtime_status, requested: true}, {capability: generate_report, requested: true}]}, tags: [compound, compare, report]}
+- {case_id: compound_compare_report_011, user_message: "比较 G120电机1 和 G120电机2，然后整理报告。", expected: {clauses: [{capability: compare_runtime_status, requested: true, sequence_index: 0}, {capability: generate_report, requested: true, sequence_index: 1, depends_on: [0]}]}, tags: [compound, compare, report, sequence]}
 - {case_id: compound_status_report_012, user_message: "查看 J1 运行状态，顺便出一份报告。", expected: {clauses: [{capability: check_runtime_status, requested: true}, {capability: generate_report, requested: true}]}, tags: [compound, status, report]}
 - {case_id: compound_diag_recommend_013, user_message: "排查 G120电机2 异常并给出处理建议。", expected: {clauses: [{capability: diagnose_fault, requested: true}, {capability: resolution_recommendation, requested: true}]}, tags: [compound, diagnosis, recommendation]}
 - {case_id: compound_code_diag_014, user_message: "解释 A07089，再判断 G120电机1 有没有故障。", expected: {clauses: [{capability: explain_fault_code, requested: true, sequence_index: 0}, {capability: diagnose_fault, requested: true, sequence_index: 1, depends_on: [0]}]}, tags: [compound, sequence]}
@@ -21,7 +21,7 @@
 - {case_id: negation_workorder_018, user_message: "不要生成工单，只判断一下有没有必要。", expected: {clauses: [{capability: create_workorder_draft, requested: false, negated: true}, {capability: evaluate_workorder_need, requested: true, negated: false}], relations: [{type: contrast}]}, tags: [negation, workorder]}
 - {case_id: negation_report_019, user_message: "不要生成报告，只告诉我状态。", expected: {clauses: [{capability: generate_report, requested: false, negated: true}, {capability: check_runtime_status, requested: true, negated: false}], relations: [{type: contrast}]}, tags: [negation, report]}
 - {case_id: negation_draft_020, user_message: "先别创建工单。", expected: {clauses: [{capability: create_workorder_draft, requested: false, negated: true}]}, tags: [negation, workorder]}
-- {case_id: negation_dispatch_021, user_message: "不是要你派单，我只是想知道有没有必要。", expected: {clauses: [{capability: unsupported_high_risk_action, requested: false, negated: true}, {capability: evaluate_workorder_need, requested: true, negated: false}]}, tags: [negation, workorder]}
+- {case_id: negation_dispatch_021, user_message: "不是要你派单，我只是想知道有没有必要。", expected: {clauses: [{capability: dispatch_workorder, requested: false, negated: true}, {capability: evaluate_workorder_need, requested: true, negated: false}]}, tags: [negation, workorder, dispatch]}
 - {case_id: negation_query_022, user_message: "无需重新查询，基于已有结果说明。", expected: {clauses: [{capability: check_runtime_status, requested: false, negated: true, source_kind: prior_result}]}, tags: [negation, prior_result]}
 - {case_id: negation_diag_023, user_message: "不用诊断，只解释 A07089。", expected: {clauses: [{capability: diagnose_fault, requested: false, negated: true}, {capability: explain_fault_code, requested: true, negated: false}]}, tags: [negation, fault_code]}
 - {case_id: negation_compare_024, user_message: "别比较了，查 G120电机1 就行。", expected: {clauses: [{capability: compare_runtime_status, requested: false, negated: true}, {capability: check_runtime_status, requested: true, negated: false}]}, tags: [negation, status]}
@@ -51,7 +51,7 @@
 - {case_id: colloquial_workorder_045, user_message: "这情况要不要安排人处理？", expected: {clauses: [{capability: evaluate_workorder_need, requested: true}]}, tags: [colloquial, workorder]}
 - {case_id: colloquial_fault_046, user_message: "看看是不是出毛病了。", expected: {clauses: [{capability: diagnose_fault, requested: true}]}, tags: [colloquial, diagnosis]}
 - {case_id: judgment_repair_047, user_message: "是否建议报修？", expected: {clauses: [{capability: evaluate_workorder_need, requested: true}]}, tags: [judgment, workorder]}
-- {case_id: execute_dispatch_048, user_message: "帮我正式派单。", expected: {clauses: [{capability: unsupported_high_risk_action, requested: true}]}, tags: [execution, high_risk]}
+- {case_id: execute_dispatch_048, user_message: "帮我正式派单。", expected: {clauses: [{capability: dispatch_workorder, requested: true}]}, tags: [execution, high_risk, dispatch]}
 
 - {case_id: prior_detail_049, user_message: "详细点。", expected: {clauses: [{capability: meta, requested: true, source_kind: prior_result}]}, tags: [prior_result, followup]}
 - {case_id: prior_report_050, user_message: "基于刚才结果生成报告。", expected: {clauses: [{capability: generate_report, requested: true, source_kind: prior_result}]}, tags: [prior_result, report]}

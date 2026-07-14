@@ -66,7 +66,7 @@ class PlanCompiler:
                 "fault_code_refs": _fault_codes(request),
                 "expected_outputs": _deliverables(goal.capability),
                 "requested_deliverables": _deliverables(goal.capability),
-                "risk_level": "high" if goal.capability == "create_workorder_draft" else "medium",
+                "risk_level": "high" if goal.capability in {"create_workorder_draft", "dispatch_workorder"} else "medium",
                 "source": "canonical_turn_request",
                 "capability": goal.capability,
                 "required_slots": list(goal.required_slots),
@@ -126,7 +126,7 @@ class PlanCompiler:
             required_evidence=required_evidence,
             allowed_tools=allowed_tools,
             forbidden_tools=forbidden_tools,
-            risk_level="high" if any(node.node_type == "workorder" for node in nodes) else "medium" if nodes else "low",
+            risk_level="high" if any(node.node_type == "workorder" and node.inputs.get("create_draft") for node in nodes) else "medium" if nodes else "low",
             approval_requirements=approvals,
             expected_outputs=list(dict.fromkeys(value for goal in user_goals for value in _deliverables(goal.capability))),
             execution_capability=execution_capability,
@@ -142,7 +142,12 @@ def _nodes_for_goal(goal, request: CanonicalTurnRequest, source: GoalSourceResol
     devices = _slot_values(goal.resolved_slots.get("device"))
     codes = _fault_codes(request)
     if goal.dependencies and capability == "generate_report":
-        return [("report", "")]
+        dependency_capabilities = {
+            item.capability for item in request.goals if item.goal_id in goal.dependencies
+        }
+        return [("analysis", ""), ("report", "")] if dependency_capabilities.intersection(
+            {"check_runtime_status", "compare_runtime_status"}
+        ) else [("report", "")]
     if goal.dependencies and capability == "create_workorder_draft":
         return [("workorder", ""), ("approval", "")]
     if capability == "explain_fault_code":
@@ -163,6 +168,8 @@ def _nodes_for_goal(goal, request: CanonicalTurnRequest, source: GoalSourceResol
         if source.status == "source_for_execution":
             return [("workorder", ""), ("approval", "")]
         return [*(("sql", device) for device in devices), ("analysis", ""), ("workorder", ""), ("approval", "")]
+    if capability == "evaluate_workorder_need":
+        return [("workorder", "")]
     return []
 
 
@@ -211,7 +218,13 @@ def _compile_node(spec: dict, *, request: CanonicalTurnRequest, source_by_goal: 
     if node_type == "rag":
         inputs["query"] = request.raw_message
     if node_type == "workorder":
-        inputs.update(create_draft=True, draft_only=True, manual_confirmation_required=True)
+        create_draft = primary.capability == "create_workorder_draft"
+        inputs.update(
+            create_draft=create_draft,
+            draft_only=create_draft,
+            manual_confirmation_required=create_draft,
+            action_type=primary.capability,
+        )
         if source is not None:
             inputs.update(
                 source_policy="reuse_verified_artifact",
@@ -231,6 +244,7 @@ def _compile_node(spec: dict, *, request: CanonicalTurnRequest, source_by_goal: 
         query_spec_id=f"query_{primary.goal_id}",
         target_scope_id="scope_current",
         failure_policy="continue_degraded" if node_type == "rag" else "block_all" if node_type == "approval" else "block_dependents",
+        condition=primary.execution_condition.model_dump(mode="json") if primary.execution_condition else {},
         inputs=inputs,
         required_tools=[required_tool] if required_tool else [],
         requested_tables=tables_for_assets(devices) if node_type == "sql" else [],
@@ -385,7 +399,7 @@ def _compile_edges(nodes, request: CanonicalTurnRequest) -> list[dict]:
 
 
 def _approval_requirements(nodes) -> list[dict]:
-    if not any(node.node_type == "workorder" for node in nodes):
+    if not any(node.node_type == "workorder" and node.inputs.get("create_draft") for node in nodes):
         return []
     return [{"requirement_id": "approval_workorder_draft", "type": "workorder_draft", "required": True, "required_role": "engineer", "allowed_next_step": "draft_only", "reason": "工单草稿必须由人工确认后继续。"}]
 
@@ -417,4 +431,5 @@ def _deliverables(capability: str) -> list[str]:
         "resolution_recommendation": ["recommendations"],
         "generate_report": ["report"],
         "create_workorder_draft": ["workorder_draft"],
+        "evaluate_workorder_need": ["workorder_need_assessment"],
     }.get(capability, [])

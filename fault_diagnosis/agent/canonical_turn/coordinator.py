@@ -12,6 +12,7 @@ from fault_diagnosis.agent.canonical_turn.parser import CurrentUtteranceParser
 from fault_diagnosis.domain.canonical_turn import (
     CanonicalGoal,
     CanonicalTurnRequest,
+    GoalExecutionCondition,
     GoalExecutionStatus,
     PendingBinding,
     PendingClarification,
@@ -38,6 +39,8 @@ _REQUIRED_SLOTS = {
     "check_runtime_status": ["device"],
     "compare_runtime_status": ["device"],
     "create_workorder_draft": ["device"],
+    "dispatch_workorder": [],
+    "evaluate_workorder_need": ["device"],
     "diagnose_fault": ["device"],
     "explain_fault_code": ["fault_code"],
     "generate_report": [],
@@ -114,7 +117,11 @@ class ConversationTurnCoordinator:
             TurnEvent(
                 event_type="utterance_parsed",
                 sequence=0,
-                detail={"clause_count": len(parsed.clauses), "entity_count": len(parsed.entities)},
+                detail={
+                    "clause_count": len(parsed.clauses),
+                    "entity_count": len(parsed.entities),
+                    "clause_semantics": [_clause_semantics(item) for item in parsed.clauses],
+                },
             ),
             TurnEvent(
                 event_type="pending_loaded",
@@ -129,7 +136,18 @@ class ConversationTurnCoordinator:
             TurnEvent(
                 event_type="request_built",
                 sequence=3,
-                detail={"goal_ids": [goal.goal_id for goal in goals], "execution_performed": False},
+                detail={
+                    "goal_ids": [goal.goal_id for goal in goals],
+                    "execution_performed": False,
+                    "excluded_clauses": [
+                        {
+                            "clause_index": item.clause_index,
+                            "reason": "negated_action" if item.modality.negated else "not_requested",
+                        }
+                        for item in parsed.clauses
+                        if item.action and (item.modality.negated or not item.modality.requested)
+                    ],
+                },
             ),
         ]
         auth = auth_context or build_auth_context(user_id=command.user_id, role="guest")
@@ -330,10 +348,20 @@ class ConversationTurnCoordinator:
                 ]
                 if observed:
                     unique = list(dict.fromkeys(observed))
+                    if slot == "device" and clause.action and clause.action.capability == "compare_runtime_status" and slot in carried_slot_values:
+                        previous = carried_slot_values[slot]
+                        unique = list(dict.fromkeys([*(previous if isinstance(previous, list) else [previous]), *unique]))
                     carried_slot_values[slot] = unique[0] if len(unique) == 1 else unique
-            if clause.source and clause.action is None:
-                carried_source_refs = list(clause.source.entity_refs)
+            if clause.source:
+                explicit_source_refs = [
+                    ref for ref in clause.source.entity_refs if ref in entity_by_id
+                    and entity_by_id[ref].kind in {"artifact_reference", "source_reference"}
+                ]
+                if explicit_source_refs:
+                    carried_source_refs = explicit_source_refs
             if clause.action is None:
+                continue
+            if not clause.modality.requested or clause.modality.negated:
                 continue
             required_slots = list(_REQUIRED_SLOTS[clause.action.capability])
             resolved_slots: dict[str, Any] = {}
@@ -346,17 +374,20 @@ class ConversationTurnCoordinator:
                     )
                 )
                 if values:
+                    if slot == "device" and clause.action.capability == "compare_runtime_status" and slot in carried_slot_values:
+                        previous = carried_slot_values[slot]
+                        values = list(dict.fromkeys([*(previous if isinstance(previous, list) else [previous]), *values]))
                     resolved_slots[slot] = values[0] if len(values) == 1 else values
                     carried_slot_values[slot] = resolved_slots[slot]
                 elif slot in required_slots and slot in carried_slot_values:
                     resolved_slots[slot] = carried_slot_values[slot]
             missing_slots = [slot for slot in required_slots if slot not in resolved_slots]
-            source_refs = list(clause.source.entity_refs) if clause.source else carried_source_refs
-            source_requirements = [
-                entity_by_id[ref].value
-                for ref in source_refs
-                if ref in entity_by_id
+            local_source_refs = [
+                ref for ref in (clause.source.entity_refs if clause.source else []) if ref in entity_by_id
+                and entity_by_id[ref].kind in {"artifact_reference", "source_reference"}
             ]
+            source_refs = local_source_refs or carried_source_refs or list(clause.source.entity_refs if clause.source else [])
+            source_requirements = [entity_by_id[ref].value for ref in source_refs if ref in entity_by_id]
             goal_id = _stable_id(
                 "goal",
                 command.thread_id,
@@ -385,7 +416,7 @@ class ConversationTurnCoordinator:
                     ),
                 )
             )
-        return _attach_goal_dependencies(goals)
+        return _attach_goal_dependencies(goals, parsed.clauses)
 
     def _build_context_followup_goals(
         self,
@@ -616,25 +647,52 @@ def _terminal_goal_statuses(preview: TurnResult, snapshot: Any, terminal: str) -
     return results
 
 
-def _attach_goal_dependencies(goals: list[CanonicalGoal]) -> list[CanonicalGoal]:
-    """Express only same-turn, clause-ordered producer dependencies."""
+def _attach_goal_dependencies(goals: list[CanonicalGoal], clauses) -> list[CanonicalGoal]:  # noqa: ANN001
+    """Project explicit clause relations; never serialize clause indexes as Goal ids."""
 
+    goal_by_clause = {goal.clause_index: goal for goal in goals}
+    clause_by_index = {clause.clause_index: clause for clause in clauses}
+    predicates = {
+        "if_abnormal": "diagnosis_is_abnormal",
+        "if_fault_confirmed": "fault_is_confirmed",
+        "if_high_risk": "risk_is_high",
+        "if_workorder_recommended": "workorder_is_recommended",
+    }
     result: list[CanonicalGoal] = []
     for goal in goals:
-        dependencies = list(goal.dependencies)
-        if goal.capability == "generate_report":
+        clause = clause_by_index[goal.clause_index]
+        dependencies = [
+            goal_by_clause[index].goal_id
+            for index in clause.modality.depends_on_clause_indexes
+            if index in goal_by_clause
+        ]
+        if not dependencies and goal.capability in {"generate_report", "evaluate_workorder_need", "create_workorder_draft"}:
             producer = next(
-                (item for item in reversed(result) if item.capability in {"diagnose_fault", "resolution_recommendation"}),
+                (
+                    item for item in reversed(result)
+                    if item.capability in {"diagnose_fault", "resolution_recommendation", "generate_report"}
+                ),
                 None,
             )
             if producer is not None:
-                dependencies.append(producer.goal_id)
-        elif goal.capability == "create_workorder_draft":
-            producer = next(
-                (item for item in reversed(result) if item.capability in {"generate_report", "diagnose_fault"}),
-                None,
+                dependencies = [producer.goal_id]
+        condition = None
+        if clause.modality.conditional and clause.modality.condition_type:
+            condition = GoalExecutionCondition(
+                predicate=predicates[clause.modality.condition_type],
+                source_goal_id=dependencies[-1] if dependencies else "",
             )
-            if producer is not None:
-                dependencies.append(producer.goal_id)
-        result.append(goal.model_copy(update={"dependencies": list(dict.fromkeys(dependencies))}, deep=True))
+        result.append(goal.model_copy(
+            update={"dependencies": list(dict.fromkeys(dependencies)), "execution_condition": condition},
+            deep=True,
+        ))
     return result
+
+
+def _clause_semantics(clause) -> dict[str, Any]:  # noqa: ANN001
+    modality = clause.modality
+    return {
+        "clause_index": clause.clause_index,
+        "capability": clause.action.capability if clause.action else None,
+        **modality.model_dump(mode="json"),
+    }

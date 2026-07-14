@@ -110,6 +110,14 @@ class AgentEngineV2:
             "compatibility_only": True,
             "primary_execution_capability": projection.primary_execution_capability,
             "canonical_request": request.model_dump(mode="json"),
+            "clause_semantics": [
+                {
+                    "clause_index": clause.clause_index,
+                    "capability": clause.action.capability if clause.action else None,
+                    **clause.modality.model_dump(mode="json"),
+                }
+                for clause in request.current_parse.clauses
+            ],
             "goal_authorization": [item.model_dump(mode="json") for item in result.authorization],
             "goal_readiness": [item.model_dump(mode="json") for item in result.readiness],
             "goal_source_resolution": [item.model_dump(mode="json") for item in result.source_resolutions],
@@ -130,6 +138,7 @@ class AgentEngineV2:
                 "mode": "canonical_turn",
                 "status": status,
                 "canonical_request": request.model_dump(mode="json"),
+                "clause_semantics": canonical_metadata["clause_semantics"],
                 "goal_authorization": canonical_metadata["goal_authorization"],
                 "goal_readiness": canonical_metadata["goal_readiness"],
                 "goal_source_resolution": canonical_metadata["goal_source_resolution"],

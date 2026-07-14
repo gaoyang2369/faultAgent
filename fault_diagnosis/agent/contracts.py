@@ -546,7 +546,7 @@ class GoalExecutionResult(AgentEngineContract):
     goal_id: str
     capability: str
     user_requested: bool
-    status: Literal["pending", "completed", "failed", "blocked", "denied"]
+    status: Literal["pending", "completed", "failed", "blocked", "denied", "skipped"]
     planned_node_ids: list[str] = Field(default_factory=list)
     executed_node_ids: list[str] = Field(default_factory=list)
     artifact_ids: list[str] = Field(default_factory=list)
@@ -567,7 +567,7 @@ class DeliverableResult(AgentEngineContract):
     capability: str = ""
     clause_index: int = 0
     user_requested: bool = True
-    status: Literal["completed", "partial", "failed", "blocked", "denied"]
+    status: Literal["completed", "partial", "failed", "blocked", "denied", "skipped"]
     title: str = ""
     summary: str | None = None
     structured_content: dict[str, Any] = Field(default_factory=dict)

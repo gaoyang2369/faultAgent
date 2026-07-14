@@ -60,6 +60,11 @@ class WorkorderNode:
                 output={"success": False, "artifact_access_error": exc.code},
                 error={"code": exc.code, "message": exc.message},
             )
+        if not sources and action_type == "evaluate_workorder_need":
+            return NodeExecutionOutput(output={
+                "success": True, "evaluation_only": True,
+                "need_assessment": {"recommendation": "insufficient_evidence", "reasons": ["缺少已授权的诊断或报告证据。"], "supporting_claim_ids": [], "target_device_refs": devices},
+            })
         if len(sources) != 1:
             return NodeExecutionOutput(
                 status="blocked",
@@ -96,6 +101,19 @@ class WorkorderNode:
             "suggestion": model_to_dict(suggestion),
             **_source_projection(node=node, state=state, suggestion=suggestion),
         }
+
+        if not bool(input_value(node, "create_draft", True)):
+            output["evaluation_only"] = True
+            output["need_assessment"] = {
+                "recommendation": "recommended" if suggestion.need_workorder else "not_recommended",
+                "reasons": [suggestion.reason] if suggestion.reason else [],
+                "supporting_claim_ids": [
+                    str(item.get("claim_id") or "")
+                    for item in state.evidence_ledger.claims
+                    if str(item.get("claim_id") or "")
+                ],
+                "target_device_refs": devices,
+            }
 
         if suggestion.lifecycle_status == "recommended_draft" and bool(input_value(node, "create_draft", True)):
             pending = build_pending_workorder_draft_action(

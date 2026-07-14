@@ -15,6 +15,7 @@ _ALLOWED_TYPES: dict[str, tuple[str, ...]] = {
     "resolution_recommendation": ("analysis_artifact", "sql_artifact"),
     "generate_report": ("analysis_artifact", "comparison_artifact", "sql_artifact"),
     "create_workorder_draft": ("report_artifact", "analysis_artifact"),
+    "evaluate_workorder_need": ("report_artifact", "analysis_artifact"),
     "confirm_workorder_draft": ("workorder_artifact",),
 }
 

@@ -28,6 +28,7 @@ class CompositePresenter:
         "resolution_recommendation": "处理建议",
         "generate_report": "运行报告",
         "create_workorder_draft": "工单草稿",
+        "evaluate_workorder_need": "工单必要性判断",
     }
     _FAILURE_TEXT = {
         "explain_fault_code": "知识库未获得可靠释义。",
@@ -37,6 +38,7 @@ class CompositePresenter:
         "resolution_recommendation": "缺少可靠诊断依据，未形成处理建议。",
         "generate_report": "依赖来源不可用，未生成报告。",
         "create_workorder_draft": "来源或设备不满足要求，未生成工单草稿。",
+        "evaluate_workorder_need": "缺少已授权的诊断或报告证据，无法判断是否建议建单。",
     }
     _VARIANT_BY_CAPABILITY = {
         "explain_fault_code": "fault_code_answer",
@@ -46,6 +48,7 @@ class CompositePresenter:
         "resolution_recommendation": "recommendation_answer",
         "generate_report": "report_answer",
         "create_workorder_draft": "workorder_answer",
+        "evaluate_workorder_need": "workorder_decision_answer",
     }
     def present(
         self,
@@ -79,7 +82,7 @@ class CompositePresenter:
 
         sections: list[str] = []
         for item in ordered:
-            if item.status in {"failed", "blocked", "denied"}:
+            if item.status in {"failed", "blocked", "denied", "skipped"}:
                 body = item.error_message or self._FAILURE_TEXT.get(item.capability, "该交付物未完成。")
             else:
                 body = self._body(
@@ -122,6 +125,11 @@ class CompositePresenter:
             return f"报告已生成：{link}" if link else "报告已生成。"
         if item.capability == "create_workorder_draft":
             return self._workorder_body(payload)
+        if item.capability == "evaluate_workorder_need":
+            recommendation = payload.get("recommendation")
+            label = {"recommended": "建议创建工单", "not_recommended": "暂不建议创建工单", "insufficient_evidence": "证据不足"}.get(recommendation, "证据不足")
+            reasons = "；".join(_text_list(payload.get("reasons")))
+            return f"{label}。{reasons}".strip("。") + "。"
         return str(payload.get("message") or "已完成。")
 
     @staticmethod

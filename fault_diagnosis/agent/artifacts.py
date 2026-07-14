@@ -205,7 +205,7 @@ def build_node_artifact_envelope(
         parsed_manual_fields=_knowledge_projection(knowledge),
         supported_followup_capabilities=_followups(artifact_type),
         available_followups=_followups(artifact_type),
-        available_actions=["create_workorder_draft"] if artifact_type in {"analysis_artifact", "report_artifact"} else [],
+        available_actions=["evaluate_workorder_need", "create_workorder_draft"] if artifact_type in {"analysis_artifact", "report_artifact"} else [],
         draft_only=artifact_type == "workorder_artifact",
         manual_confirmation_required=artifact_type == "workorder_artifact",
         dispatch_forbidden=artifact_type == "workorder_artifact",
@@ -494,8 +494,8 @@ def _followups(artifact_type: str) -> list[str]:
     return {
         "sql_artifact": ["check_runtime_status", "diagnose_fault", "generate_report"],
         "knowledge_artifact": ["explain_fault_code"],
-        "analysis_artifact": ["generate_report", "create_workorder_draft"],
+        "analysis_artifact": ["generate_report", "evaluate_workorder_need", "create_workorder_draft"],
         "comparison_artifact": ["generate_report"],
-        "report_artifact": ["create_workorder_draft"],
+        "report_artifact": ["evaluate_workorder_need", "create_workorder_draft"],
         "workorder_artifact": ["confirm_workorder_draft"],
     }.get(artifact_type, [])
