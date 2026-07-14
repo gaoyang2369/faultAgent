@@ -25,6 +25,7 @@ from fault_diagnosis.domain.security.permissions import build_auth_context
 from fault_diagnosis.platform import settings
 from fault_diagnosis.server.agent_gateway import streaming
 from fault_diagnosis.server.bootstrap.app_models import build_answer_model
+from fault_diagnosis.platform.model_catalog import get_answer_model_config
 from fault_diagnosis.server.use_cases.turn_execution import build_collect_compat_plan
 
 
@@ -196,10 +197,6 @@ async def _run_case(app: FastAPI, case: Case, gate: asyncio.Semaphore) -> dict[s
         return {"name": case.name, "deterministic_answer": case.deterministic_answer, "stream_error": server_error}
     audit = dict(complete.get("answer_synthesis") or {})
     errors = list(audit.get("validation_errors") or [])
-    schema_ok = audit.get("status") == "generated" or (
-        audit.get("attempted") and not any(value in {"invalid_json", "schema_validation_failed", "model_output_not_json_text"} for value in errors)
-        and audit.get("status") == "validation_failed"
-    )
     trace_span = next(
         (span for span in complete.get("canonical_trace", {}).get("spans", []) if span.get("name") == "answer_synthesis"),
         {},
@@ -207,42 +204,56 @@ async def _run_case(app: FastAPI, case: Case, gate: asyncio.Semaphore) -> dict[s
     return {
         "name": case.name,
         "deterministic_answer": case.deterministic_answer,
-        "model_raw_status": "schema_valid" if schema_ok else "not_returned" if audit.get("status") == "model_error" else "schema_invalid",
+        "model_raw_status": "schema_valid" if audit.get("schema_valid") else "not_returned" if not audit.get("provider_returned") else "schema_invalid",
         "final_answer": complete.get("final_content", ""),
         "answer_synthesis_status": audit.get("status", ""),
+        "synthesis_status": audit.get("synthesis_status", ""),
+        "final_answer_source": audit.get("final_answer_source", ""),
+        "fallback_used": bool(audit.get("fallback_used")),
+        "provider_returned": bool(audit.get("provider_returned")),
+        "schema_valid": bool(audit.get("schema_valid")),
+        "answer_validated": bool(audit.get("answer_validated")),
+        "answer_model_name": audit.get("answer_model_name", ""),
+        "answer_model_source": audit.get("answer_model_source", ""),
         "validation_errors": errors,
         "fallback_reason": audit.get("fallback_reason", ""),
         "duration_ms": audit.get("duration_ms", 0),
         "input_chars": audit.get("input_char_count", 0),
-        "input_tokens": audit.get("input_token_count", 0),
+        "input_tokens": audit.get("prompt_token_count", 0),
         "output_chars": audit.get("output_char_count", 0),
-        "output_tokens": audit.get("output_token_count", 0),
-        "trace_status": trace_span.get("attributes", {}).get("status", "missing"),
+        "output_tokens": audit.get("completion_token_count", 0),
+        "reasoning_tokens": audit.get("reasoning_token_count", 0),
+        "trace_status": trace_span.get("attributes", {}).get("synthesis_status", "missing"),
     }
 
 
 async def _main(args: argparse.Namespace) -> int:
     if not settings.ENABLE_GROUNDED_ANSWER_SYNTHESIS:
         raise SystemExit("ENABLE_GROUNDED_ANSWER_SYNTHESIS=true is required")
-    model = build_answer_model()
+    answer_model_name, answer_model_source = get_answer_model_config()
+    model = build_answer_model(answer_model_name)
     if model.__class__.__module__.startswith("tests") or "fake" in model.__class__.__name__.lower():
         raise SystemExit("real configured model required; fake model rejected")
     app = FastAPI()
     app.state.dev_mode = False
     app.state.grounded_answer_synthesizer = GroundedAnswerSynthesizer(
-        model=model, enabled=True, timeout_seconds=settings.ANSWER_SYNTHESIS_TIMEOUT_SECONDS,
+        model=model, model_name=answer_model_name, model_source=answer_model_source,
+        enabled=True, timeout_seconds=settings.ANSWER_MODEL_REQUEST_TIMEOUT_SECONDS,
         max_input_chars=settings.ANSWER_SYNTHESIS_MAX_INPUT_CHARS,
         max_output_chars=settings.ANSWER_SYNTHESIS_MAX_OUTPUT_CHARS,
     )
     original_executor = streaming.WorkflowRuntimeExecutor
     streaming.WorkflowRuntimeExecutor = _FixtureExecutor
+    original_rollout = settings.GROUNDED_ANSWER_ROLLOUT_PERCENT
+    settings.GROUNDED_ANSWER_ROLLOUT_PERCENT = 100
     try:
         gate = asyncio.Semaphore(max(1, args.parallel))
         selected_cases = _cases()[: args.limit or None]
         records = await asyncio.gather(*[_run_case(app, case, gate) for case in selected_cases])
     finally:
         streaming.WorkflowRuntimeExecutor = original_executor
-    statuses = [item.get("answer_synthesis_status") for item in records]
+        settings.GROUNDED_ANSWER_ROLLOUT_PERCENT = original_rollout
+    statuses = [item.get("synthesis_status") for item in records]
     durations = [float(item.get("duration_ms") or 0) for item in records]
     schema_success = sum(item.get("model_raw_status") == "schema_valid" for item in records)
     generated = statuses.count("generated")
@@ -252,8 +263,8 @@ async def _main(args: argparse.Namespace) -> int:
         "generated": generated,
         "validation_failed": statuses.count("validation_failed"),
         "model_error": statuses.count("model_error"),
-        "timeout": sum(item.get("fallback_reason") == "model_timeout" for item in records),
-        "fallback": statuses.count("fallback"),
+        "timeout": statuses.count("model_timeout"),
+        "fallback": sum(bool(item.get("fallback_used")) for item in records),
         "schema_success_rate": round(schema_success / len(records), 4),
         "validator_pass_rate": round(generated / len(records), 4),
         "average_duration_ms": round(statistics.fmean(durations), 1),

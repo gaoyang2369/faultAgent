@@ -73,3 +73,28 @@ def resolve_model_name(requested_model: str | None) -> str:
     if requested not in allowed:
         raise ValueError("不支持的模型，请刷新模型列表后重试")
     return requested
+
+
+def get_answer_model_config() -> tuple[str, str]:
+    """Resolve the fixed Answer model and record whether it was explicit."""
+
+    explicit = os.getenv("ANSWER_MODEL_NAME", "").strip()
+    selected = explicit or os.getenv("MODEL_NAME", "").strip()
+    if not selected:
+        raise ValueError("answer_model_not_configured")
+    return resolve_answer_model_name(selected), "answer_model" if explicit else "default_model"
+
+
+def resolve_answer_model_name(requested_model: str) -> str:
+    """Validate Answer models against a server-side catalog or explicit allowlist."""
+
+    configured = {
+        value.strip()
+        for value in os.getenv("AVAILABLE_ANSWER_MODEL_NAMES", "").split(",")
+        if value.strip()
+    }
+    allowed = configured or {item["id"] for item in get_model_catalog()["models"]}
+    requested = str(requested_model or "").strip()
+    if not requested or requested not in allowed:
+        raise ValueError("answer_model_not_allowed")
+    return requested

@@ -148,6 +148,9 @@ def test_enabled_synthesis_calls_model_once_and_accepts_grounded_runtime_answer(
     model = FakeModel(_json(answer, claims=["claim_status"], evidence=["ev_status"], limitations=True, basis=True))
     result = _run(_synth(model))
     assert result.status == "generated"
+    assert result.synthesis_status == "generated"
+    assert result.final_answer_source == "grounded_model"
+    assert result.fallback_used is False
     assert result.answer == answer
     assert len(model.calls) == 1
     assert "Answer Source Packet" in model.calls[0][1]["content"]
@@ -278,6 +281,8 @@ def test_validator_rejects_hallucinations_and_uses_deterministic_fallback(mutate
     model = FakeModel(_json(mutate(base), claims=claims, evidence=evidence, limitations=True, basis=True))
     result = _run(_synth(model), deliverables=[_runtime_deliverable(), report, workorder], fallback="确定性兜底")
     assert result.status == "validation_failed"
+    assert result.synthesis_status == "validation_failed"
+    assert result.fallback_used is True
     assert result.answer == "确定性兜底"
     assert result.validation_errors
     assert len(model.calls) == 1
@@ -305,6 +310,8 @@ def test_model_failures_do_not_fail_the_request(error: Exception, reason: str) -
     model = FakeModel(error=error)
     result = _run(_synth(model), fallback="确定性兜底")
     assert result.status == "model_error"
+    assert result.synthesis_status == ("model_timeout" if reason == "model_timeout" else "model_error")
+    assert result.fallback_used is True
     assert result.answer == "确定性兜底"
     assert result.fallback_reason == reason
     assert len(model.calls) == 1

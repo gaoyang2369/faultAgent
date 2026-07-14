@@ -7,6 +7,18 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+SynthesisStatus = Literal[
+    "disabled",
+    "generated",
+    "model_not_configured",
+    "model_timeout",
+    "model_error",
+    "schema_invalid",
+    "validation_failed",
+    "source_packet_invalid",
+]
+
+
 class _StrictContract(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -59,6 +71,7 @@ class GroundedAnswerModelOutput(_StrictContract):
 
 class AnswerValidationResult(_StrictContract):
     valid: bool
+    schema_valid: bool = False
     errors: list[str] = Field(default_factory=list)
     output: GroundedAnswerModelOutput | None = None
 
@@ -72,17 +85,33 @@ class GroundedAnswerResult(_StrictContract):
         "model_error",
         "validation_failed",
     ]
+    status_deprecated: Literal[True] = True
+    synthesis_status: SynthesisStatus = "disabled"
+    final_answer_source: Literal["grounded_model", "deterministic_fallback"] = "deterministic_fallback"
+    fallback_used: bool = True
     answer: str = ""
     used_claim_ids: list[str] = Field(default_factory=list)
     used_evidence_ids: list[str] = Field(default_factory=list)
     limitations_disclosed: bool = False
     data_basis_disclosed: bool = False
     model_name: str = ""
+    answer_model_name: str = ""
+    answer_model_source: Literal["answer_model", "default_model", "injected", "unconfigured"] = "unconfigured"
     duration_ms: float = 0.0
     fallback_reason: str = ""
     validation_errors: list[str] = Field(default_factory=list)
     enabled: bool = False
     attempted: bool = False
+    provider_returned: bool = False
+    schema_valid: bool = False
+    answer_validated: bool = False
+    provider_trace_id: str = ""
+    request_timeout_seconds: float = 0.0
+    prompt_token_count: int = 0
+    completion_token_count: int = 0
+    reasoning_token_count: int = 0
+    time_to_first_token_ms: float = 0.0
+    model_total_latency_ms: float = 0.0
     input_char_count: int = 0
     output_char_count: int = 0
     input_token_count: int = 0
@@ -96,12 +125,28 @@ class GroundedAnswerResult(_StrictContract):
             "enabled": self.enabled,
             "attempted": self.attempted,
             "status": self.status,
+            "status_deprecated": True,
+            "synthesis_status": self.synthesis_status,
+            "final_answer_source": self.final_answer_source,
+            "fallback_used": self.fallback_used,
             "model_name": self.model_name,
+            "answer_model_name": self.answer_model_name or self.model_name,
+            "answer_model_source": self.answer_model_source,
             "duration_ms": round(self.duration_ms, 1),
             "input_char_count": self.input_char_count,
             "output_char_count": self.output_char_count,
             "input_token_count": self.input_token_count,
             "output_token_count": self.output_token_count,
+            "prompt_token_count": self.prompt_token_count or self.input_token_count,
+            "completion_token_count": self.completion_token_count or self.output_token_count,
+            "reasoning_token_count": self.reasoning_token_count,
+            "provider_returned": self.provider_returned,
+            "provider_trace_id": self.provider_trace_id,
+            "schema_valid": self.schema_valid,
+            "answer_validated": self.answer_validated,
+            "request_timeout_seconds": self.request_timeout_seconds,
+            "time_to_first_token_ms": self.time_to_first_token_ms,
+            "model_total_latency_ms": self.model_total_latency_ms,
             "source_packet_compacted": self.source_packet_compacted,
             "used_claim_count": len(self.used_claim_ids),
             "used_evidence_count": len(self.used_evidence_ids),
@@ -116,12 +161,27 @@ class GroundedAnswerResult(_StrictContract):
             "enabled": self.enabled,
             "attempted": self.attempted,
             "status": self.status,
+            "status_deprecated": True,
+            "synthesis_status": self.synthesis_status,
+            "final_answer_source": self.final_answer_source,
+            "fallback_used": self.fallback_used,
             "model_name": self.model_name,
+            "answer_model_name": self.answer_model_name or self.model_name,
+            "answer_model_source": self.answer_model_source,
             "duration_ms": round(self.duration_ms, 1),
             "input_char_count": self.input_char_count,
             "output_char_count": self.output_char_count,
             "input_token_count": self.input_token_count,
             "output_token_count": self.output_token_count,
+            "prompt_token_count": self.prompt_token_count or self.input_token_count,
+            "completion_token_count": self.completion_token_count or self.output_token_count,
+            "reasoning_token_count": self.reasoning_token_count,
+            "provider_returned": self.provider_returned,
+            "schema_valid": self.schema_valid,
+            "answer_validated": self.answer_validated,
+            "request_timeout_seconds": self.request_timeout_seconds,
+            "time_to_first_token_ms": self.time_to_first_token_ms,
+            "model_total_latency_ms": self.model_total_latency_ms,
             "source_packet_compacted": self.source_packet_compacted,
             "used_claim_count": len(self.used_claim_ids),
             "used_evidence_count": len(self.used_evidence_ids),

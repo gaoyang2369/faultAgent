@@ -485,8 +485,9 @@ class TraceRecorder:
     def add_answer_synthesis(self, summary: dict[str, Any]) -> None:
         """Record only the safe audit summary of the optional answer-model call."""
 
-        synthesis_status = str(summary.get("status") or "fallback")
-        span_status = "failed" if synthesis_status in {"model_error", "validation_failed"} else "completed"
+        legacy_status = str(summary.get("status") or "disabled")
+        synthesis_status = str(summary.get("synthesis_status") or legacy_status)
+        span_status = "failed" if synthesis_status in {"model_timeout", "model_error", "schema_invalid", "validation_failed"} else "completed"
         self._add_span(
             span_id="span.answer.synthesis",
             parent_span_id="span.workflow.execute" if "span.workflow.execute" in self._span_ids else "span.chat.request",
@@ -497,13 +498,29 @@ class TraceRecorder:
             attributes={
                 "enabled": bool(summary.get("enabled")),
                 "attempted": bool(summary.get("attempted")),
-                "status": synthesis_status,
+                "status": legacy_status,
+                "status_deprecated": bool(summary.get("status_deprecated", True)),
+                "synthesis_status": synthesis_status,
+                "final_answer_source": str(summary.get("final_answer_source") or "deterministic_fallback"),
+                "fallback_used": bool(summary.get("fallback_used")),
                 "model_name": str(summary.get("model_name") or ""),
+                "answer_model_name": str(summary.get("answer_model_name") or summary.get("model_name") or ""),
+                "answer_model_source": str(summary.get("answer_model_source") or "unconfigured"),
                 "duration_ms": float(summary.get("duration_ms") or 0.0),
                 "input_char_count": int(summary.get("input_char_count") or 0),
                 "output_char_count": int(summary.get("output_char_count") or 0),
                 "input_token_count": int(summary.get("input_token_count") or 0),
                 "output_token_count": int(summary.get("output_token_count") or 0),
+                "prompt_token_count": int(summary.get("prompt_token_count") or 0),
+                "completion_token_count": int(summary.get("completion_token_count") or 0),
+                "reasoning_token_count": int(summary.get("reasoning_token_count") or 0),
+                "provider_returned": bool(summary.get("provider_returned")),
+                "provider_trace_id": str(summary.get("provider_trace_id") or ""),
+                "schema_valid": bool(summary.get("schema_valid")),
+                "answer_validated": bool(summary.get("answer_validated")),
+                "request_timeout_seconds": float(summary.get("request_timeout_seconds") or 0.0),
+                "time_to_first_token_ms": float(summary.get("time_to_first_token_ms") or 0.0),
+                "model_total_latency_ms": float(summary.get("model_total_latency_ms") or 0.0),
                 "source_packet_compacted": bool(summary.get("source_packet_compacted")),
                 "used_claim_count": int(summary.get("used_claim_count") or 0),
                 "used_evidence_count": int(summary.get("used_evidence_count") or 0),
@@ -792,11 +809,12 @@ def canonical_trace_from_payload(
     return recorder.finish(status=status)
 
 
-def _sanitize(value: Any) -> Any:
+def _sanitize(value: Any, *, max_items: int = 50) -> Any:
     return sanitize_trace_value(
         value,
         capture_content=True,
         preview_chars=AGENT_TRACE_PREVIEW_CHARS,
+        max_items=max_items,
     )
 
 

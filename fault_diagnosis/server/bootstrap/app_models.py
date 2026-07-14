@@ -6,6 +6,7 @@ from functools import lru_cache
 from langchain_openai import ChatOpenAI
 
 from fault_diagnosis.platform import settings
+from fault_diagnosis.platform.model_catalog import resolve_answer_model_name
 
 
 def build_chat_model(model_name: str | None = None) -> ChatOpenAI:
@@ -27,10 +28,15 @@ def build_summary_model(model_name: str | None = None) -> ChatOpenAI:
 
 
 @lru_cache(maxsize=8)
-def build_answer_model(model_name: str | None = None) -> ChatOpenAI:
+def build_answer_model(
+    model_name: str,
+    json_mode: bool = True,
+    request_timeout_seconds: float | None = None,
+    max_tokens: int | None = None,
+) -> ChatOpenAI:
     """Lazily build and cache the low-temperature final-answer model."""
 
-    resolved_model = (model_name or os.getenv("MODEL_NAME") or "").strip()
+    resolved_model = resolve_answer_model_name(model_name)
     api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if not resolved_model or not api_key:
         raise RuntimeError("answer_model_not_configured")
@@ -39,8 +45,8 @@ def build_answer_model(model_name: str | None = None) -> ChatOpenAI:
         base_url=os.getenv("OPENAI_BASE_URL"),
         api_key=api_key,
         temperature=settings.ANSWER_SYNTHESIS_TEMPERATURE,
-        timeout=settings.ANSWER_SYNTHESIS_TIMEOUT_SECONDS,
-        max_tokens=settings.ANSWER_SYNTHESIS_MAX_OUTPUT_TOKENS,
+        timeout=request_timeout_seconds or settings.ANSWER_MODEL_REQUEST_TIMEOUT_SECONDS,
+        max_tokens=max_tokens or settings.ANSWER_MODEL_MAX_TOKENS,
         max_retries=0,
-        model_kwargs={"response_format": {"type": "json_object"}},
+        model_kwargs={"response_format": {"type": "json_object"}} if json_mode else {},
     )

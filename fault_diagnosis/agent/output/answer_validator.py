@@ -53,7 +53,7 @@ class GroundedAnswerValidator:
     def validate(self, raw_output: Any, *, source_packet: AnswerSourcePacket) -> AnswerValidationResult:
         parsed, schema_error = self._parse(raw_output)
         if parsed is None:
-            return AnswerValidationResult(valid=False, errors=[schema_error or "invalid_schema"])
+            return AnswerValidationResult(valid=False, schema_valid=False, errors=[schema_error or "invalid_schema"])
 
         errors: list[str] = []
         answer = parsed.answer
@@ -66,7 +66,12 @@ class GroundedAnswerValidator:
         self._validate_actions(answer, source_packet, errors)
         self._validate_numeric_literals(answer, source_packet, errors)
         self._validate_internal_information(answer, source_packet, errors)
-        return AnswerValidationResult(valid=not errors, errors=list(dict.fromkeys(errors)), output=parsed)
+        return AnswerValidationResult(
+            valid=not errors,
+            schema_valid=True,
+            errors=list(dict.fromkeys(errors)),
+            output=parsed,
+        )
 
     @staticmethod
     def _parse(raw_output: Any) -> tuple[GroundedAnswerModelOutput | None, str]:

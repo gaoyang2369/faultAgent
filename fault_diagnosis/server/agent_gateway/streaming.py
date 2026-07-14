@@ -299,6 +299,7 @@ async def _stream_v2_validation_blocked(
         evidence_bundle=None,
         runtime_status="blocked",
         auth_context=auth_context,
+        thread_id=thread_id,
         model_name=model_name,
     )
     response_frame = effective_answer_frame(output_frame, answer_result)
@@ -436,6 +437,7 @@ async def _stream_v2_runtime(
         evidence_bundle=runtime_evidence_bundle(result),
         runtime_status=result.status,
         auth_context=auth_context,
+        thread_id=thread_id,
         model_name=model_name,
         skip_reason="cancelled" if result.complete_payload.get("cancelled") else "",
     )

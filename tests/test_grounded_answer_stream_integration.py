@@ -122,6 +122,7 @@ def test_stream_boundary_uses_the_single_injected_synthesizer_when_enabled(monke
     app = FastAPI()
     app.state.grounded_answer_synthesizer = GroundedAnswerSynthesizer(model=model, enabled=True)
     monkeypatch.setattr(settings, "ENABLE_GROUNDED_ANSWER_SYNTHESIS", True)
+    monkeypatch.setattr(settings, "GROUNDED_ANSWER_ROLLOUT_PERCENT", 100)
     result = asyncio.run(
         synthesize_v2_answer(
             app=app,
@@ -145,18 +146,19 @@ def test_answer_model_builder_is_low_temperature_timed_and_cached(monkeypatch) -
 
     app_models.build_answer_model.cache_clear()
     monkeypatch.setattr(app_models, "ChatOpenAI", _ChatOpenAI)
-    monkeypatch.setenv("MODEL_NAME", "answer-model")
+    monkeypatch.setenv("AVAILABLE_ANSWER_MODEL_NAMES", ",".join(["answer-model", *[f"answer-model-{index}" for index in range(12)]]))
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://model.invalid/v1")
     monkeypatch.setattr(settings, "ANSWER_SYNTHESIS_TEMPERATURE", 0.0)
-    monkeypatch.setattr(settings, "ANSWER_SYNTHESIS_TIMEOUT_SECONDS", 20.0)
-    first = app_models.build_answer_model()
-    second = app_models.build_answer_model()
+    monkeypatch.setattr(settings, "ANSWER_MODEL_REQUEST_TIMEOUT_SECONDS", 8.0)
+    monkeypatch.setattr(settings, "ANSWER_MODEL_MAX_TOKENS", 512)
+    first = app_models.build_answer_model("answer-model")
+    second = app_models.build_answer_model("answer-model")
     assert first is second
     assert len(calls) == 1
     assert calls[0]["temperature"] == 0.0
-    assert calls[0]["timeout"] == 20.0
-    assert calls[0]["max_tokens"] == settings.ANSWER_SYNTHESIS_MAX_OUTPUT_TOKENS
+    assert calls[0]["timeout"] == 8.0
+    assert calls[0]["max_tokens"] == 512
     assert calls[0]["max_retries"] == 0
     assert calls[0]["model_kwargs"] == {"response_format": {"type": "json_object"}}
     for index in range(12):
@@ -217,10 +219,11 @@ def test_concurrent_answer_calls_are_bounded_without_blocking_event_loop(monkeyp
                     user_message="状态",
                     output_frame=frame,
                     evidence_bundle=bundle,
-                    runtime_status="completed",
-                    auth_context=build_auth_context(role="engineer"),
-                )
-                for _ in range(5)
+                        runtime_status="completed",
+                        auth_context=build_auth_context(role="engineer"),
+                        thread_id=f"thread-{index}",
+                    )
+                    for index in range(5)
             ]
         )
         done = True
@@ -229,7 +232,8 @@ def test_concurrent_answer_calls_are_bounded_without_blocking_event_loop(monkeyp
         return results, ticks
 
     monkeypatch.setattr(settings, "ENABLE_GROUNDED_ANSWER_SYNTHESIS", True)
-    monkeypatch.setattr(settings, "ANSWER_SYNTHESIS_MAX_CONCURRENCY", 2)
+    monkeypatch.setattr(settings, "GROUNDED_ANSWER_ROLLOUT_PERCENT", 100)
+    monkeypatch.setattr(settings, "ANSWER_MODEL_CONCURRENCY", 2)
     results, ticks = asyncio.run(run())
     assert all(item.status == "generated" for item in results)
     assert ticks >= 10
@@ -265,6 +269,8 @@ def test_async_timeout_cancels_the_underlying_model_coroutine() -> None:
 
     result, cancelled = asyncio.run(run())
     assert result.status == "model_error"
+    assert result.synthesis_status == "model_timeout"
+    assert result.fallback_used is True
     assert result.fallback_reason == "model_timeout"
     assert cancelled is True
 
@@ -312,6 +318,8 @@ def test_exported_canonical_trace_contains_answer_synthesis_span(monkeypatch) ->
             "enabled": True,
             "attempted": True,
             "status": "model_error",
+            "synthesis_status": "model_timeout",
+            "fallback_used": True,
             "model_name": "answer-model",
             "duration_ms": 20,
             "fallback_reason": "model_timeout",
@@ -328,7 +336,7 @@ def test_exported_canonical_trace_contains_answer_synthesis_span(monkeypatch) ->
         user_message="状态",
     )
     span = next(item for item in captured["spans"] if item["name"] == "answer_synthesis")
-    assert span["attributes"]["status"] == "model_error"
+    assert span["attributes"]["synthesis_status"] == "model_timeout"
     assert span["attributes"]["fallback_reason"] == "model_timeout"
 
 
