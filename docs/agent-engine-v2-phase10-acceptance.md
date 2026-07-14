@@ -1,5 +1,7 @@
 # Agent Engine V2 Phase 10 验收报告
 
+> 历史验收快照。当前 canonical cutover 状态与命令以 [当前架构总览](./current-architecture.md) 为准；下列通过数只表示当时提交，不是当前基线。
+
 ## 当前态
 
 - 唯一主链路：Agent Engine V2。

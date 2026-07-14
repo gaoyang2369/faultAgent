@@ -1,192 +1,79 @@
-﻿# 当前架构总览
+# 当前架构总览
 
-faultAgent 当前是工业设备故障诊断系统，后端源码根是 `fault_diagnosis/`，前端是 `agent_fronted/`。后端唯一主链路是 Agent Engine V2，不是多 Agent 编排，也不是开放式 autonomous agent loop。旧执行链路已经删除，`AGENT_ENGINE_VERSION` 只兼容解析为 `v2`。
+faultAgent 是工业设备故障诊断系统：后端源码位于 `fault_diagnosis/`，前端位于 `agent_fronted/`。生产环境只有 Agent Engine V2 单 Agent 链路，不存在 legacy runtime、双轨 planner 或多 Agent 编排。
 
-## 主链路
-
-```text
-GET /chat/stream
-  -> server/http/routers/chat.py
-  -> ChatService.stream_chat
-  -> server/agent_gateway/streaming.token_stream_events
-  -> AgentEngineV2.build_plan_snapshot
-  -> runtime/plan_preparer
-  -> WorkflowRuntimeExecutor
-  -> typed nodes
-  -> EvidenceLedger
-  -> OutputFrame
-  -> SSE/artifact projection
-```
-
-Agent 内部核心链路：
+## Canonical 主链
 
 ```text
-user request
-  -> IntentFrame
-  -> ContextFrame
-  -> RewriteFrame
-  -> SkillRoute
-  -> AgentEngineV2 plan snapshot
-  -> WorkflowRuntimeExecutor
-  -> typed nodes
-  -> EvidenceLedger
-  -> OutputFrame
-  -> SSE/artifact projection
-  -> save artifact
+HTTP/SSE + trusted AuthContext + thread context
+  -> ProductionTurnCoordinator
+  -> CurrentUtteranceParse
+  -> CanonicalTurnRequest
+  -> PendingClarification transition preview/commit
+  -> per-goal authorization / readiness / source resolution
+  -> Canonical Goal -> validated ExecutionPlan DAG
+  -> ArtifactRoleBinding + exact artifact loading
+  -> typed nodes + EvidenceLedger
+  -> GoalExecutionResult
+  -> DeliverableResult / composite output
+  -> SSE, artifact persistence, trace, optional compatibility projection
 ```
 
-内部事实来源优先看：
+`IntentFrame`、`RewriteFrame`、`EffectiveRequestFrame`、旧 skill/workflow 字段只存在于历史组件接口、trace 或 `compatibility_debug`。它们从 canonical 结果单向投影，不能参与路由、编译、验证、运行或回答选择。
 
-- `IntentFrame`
-- `ContextFrame`
-- `RewriteFrame`
-- `SkillRoute`
-- `ExecutionPlan`
-- typed node results
-- `EvidenceLedger`
-- V2 artifacts
-- `OutputFrame`
-
-`workflow_*`、旧任务类型和旧意图字段只作为 SSE、artifact 和前端兼容投影存在，由 V2 output 层单向生成，不驱动 V2 skill routing、plan、节点启停或 readiness。
+详细合同、pending 状态机、版本兼容、artifact binding、ReportInputSnapshot、exact loading、输出边界和 Case A-D 解决方式见 [Agent Engine V2 当前生产架构](../fault_diagnosis/agent/README.md)。
 
 ## 后端分层
 
 ```text
-server/          HTTP/SSE、session、auth、用例编排、Agent gateway、devtools、bootstrap
-agent/           V2 understanding、skill routing、planning、runtime、output projection
-domain/          诊断/上下文/权限领域合同与规则
-platform/        persistence、tools、knowledge、integrations、observability、settings、paths
-shared/          无业务语义的通用编码与小工具
+server/    HTTP/SSE、session、auth、幂等、用例编排
+agent/     canonical planning、DAG runtime、evidence、output
+domain/    canonical turn、artifact、诊断、上下文、权限领域合同
+platform/  persistence、tools、knowledge、observability、settings
+shared/    无业务语义的通用工具
 ```
 
-HTTP 层不做诊断业务；`server/use_cases` 管 session/thread/history/stop stream；`server/agent_gateway` 只做 SSE 协议、取消和错误分类；`agent/` 不管理 Web 会话；`platform/` 不反向依赖 `server/` 或 `agent/`。
+- HTTP 层不推断诊断语义；
+- `agent/` 不管理 Web session；
+- `domain/` 不依赖 server；
+- `platform/` 提供持久化与外部能力，不拥有 Goal 决策权。
 
-## V2 Runtime
+## Runtime 与权限
 
-常规请求由 V2 plan 编译为 typed nodes：
+typed nodes 包括 `sql`、`rag`、`analysis`、`comparison`、`report`、`workorder`、`approval`。SQL 只读且受 table/asset ACL 约束；知识库证据不能冒充实时状态；工单只生成建议或草稿，不自动派发；系统不执行设备控制、告警关闭或配置写入。
 
-```text
-start
-  -> task_update
-  -> sql / rag / kg / analysis / report / workorder / approval
-  -> EvidenceLedger validation/projection
-  -> OutputFrame
-  -> token
-  -> complete
-```
-
-节点是否出现由 `SkillRoute` 和 `ExecutionPlan` 决定。缺设备、缺报告来源、权限不足或高风险动作由 V2 clarification/blocked/error 输出表达。
-
-当前 typed nodes：
-
-- `sql`：受 SQL ACL 保护的只读运行数据查询。
-- `rag`：知识库检索，受 RAG ACL 和当前 `AuthContext` 约束。
-- `kg`：KG 未配置时显式 skipped。
-- `analysis`：基于结构化 SQL/KB artifact 生成诊断分析。
-- `report`：只消费结构化 reportable payload 或 current artifacts。
-- `workorder`：只生成建议/草稿，不派发。
-- `approval`：高风险动作和工单边界阻断。
-
-## 权限模型
-
-真实授权来源是服务端 session / cookie 解析出的 `AuthContext`。前端 `user_identity` 不参与授权。
-
-权限模型：
-
-- `role`: `guest`、`engineer`、`admin`
-- `permissions`: workflow、tool、data、KB、admin 能力点
-- `asset_scope`: 设备范围
-- `table_scope`: 可访问表
-- `system_scope` / `location_scope`
-- `kb_scopes`: 知识库可见性
-
-检查覆盖：
-
-- thread ownership
-- SQL table / asset / time window / row limit
-- RAG 文档可见性
-- report write/read
-- workorder create/read/update
-- restricted tool call
-- high-risk action manual confirmation
-
-典型边界：
-
-- `guest` 只能做受限状态查询和公开知识库查询，不能生成报告、工单或根因诊断。
-- `engineer` 在授权设备和数据表范围内诊断、报告和创建待派单工单。
-- `admin` 可访问全部业务表、报告和管理员知识文件能力。
-
-## 工具与外部依赖
-
-当前工具白名单：
-
-- `sql_db_query_checker`
-- `sql_db_query`
-- `query_knowledge_base`
-- `save_report`
-
-运行依赖：
-
-- MySQL：运行数据。
-- OpenAI-compatible LLM：请求理解、SQL 规划降级、分析和最终回答。
-- Ollama / FAISS：PDF 知识库。
-- PostgreSQL：可选 diagnosis artifact backend。
-- 本地文件系统：报告、artifact、用户文件、历史索引、知识文件 registry、工单 mock、审计和 trace。
-
-SQL 当前只执行可安全重写的单表只读查询，白名单表为 `real_data_01`、`real_data_02`、`real_data_03`、`device_alarm`、`device_metric`、`device_fault_data`、`fault_records`。
-
-知识库只提供手册证据，不代表实时设备状态。实时状态必须来自 SQL 或其他运行数据证据。
-
-报告写入 `trash/run/reports/`，通过受保护的 `/reports/{filename}` 读取。
+授权只信任服务端解析的 `AuthContext`。用户提交的展示身份不参与权限判断。授权、就绪和来源解析均按 Goal 独立进行，因此一个 Goal 被拒绝不会抹掉其他独立结果。
 
 ## Artifact 与多轮上下文
 
-诊断 artifact 默认保存到：
+artifact 可使用 file、memory 或 postgres backend。运行输入必须由 `ArtifactRoleBinding` 指向 exact artifact ID，并校验 thread、owner、设备、类型和完整 lineage。
 
-```text
-trash/run/diagnosis_artifacts/*.jsonl
+`ArtifactLineage.source_artifact_ids` 只用于审计追溯；runtime 不会递归选择“兼容祖先”。报告读取绑定 Analysis artifact 内的 `ReportInputSnapshot`，不会重新猜测 SQL 来源或静默升级历史 artifact。
+
+PendingClarification 以 goal-scoped 状态机保存：纯槽位回复恢复原 Goal；混合回复恢复原 Goal 后再追加当前显式 Goal；preview 不提交 pending 或写 artifact。
+
+## 输出与兼容边界
+
+canonical deliverable 字段是 `goal_id`、`capability`、`status`、`structured_content`、`artifact_ids`、`evidence_ids`、`claim_ids`。presenter 只读取这些字段。
+
+历史 complete payload 所需的 `deliverable_type`、`payload`、`source_artifact_ids` 由独立 `LegacyDeliverableProjection` 在序列化边界生成，带 `compatibility_only=true`。旧字段不能反向写入 canonical model。
+
+`/chat/plan` 顶层以 canonical request、goals、per-goal decisions、execution plan 和 artifact bindings 为主；旧 Frame 和 workflow projection 统一放在 `compatibility_debug`，接口保持绝对只读。
+
+## 稳定版本
+
+新 ExecutionPlan 只写 `v2.canonical.validated`。历史 `v2.canonical-phase2/3/4.validated` 继续可读、可执行，并在 trace 中规范化为稳定版本；未知版本只允许查看，runtime 明确拒绝，不原地重写历史 plan/artifact。
+
+## 验收门槛
+
+默认 pytest 收集 Case A-D、pending、exact source、composite output、版本、preview schema 和 strict debt 回归。`tests/red_baseline` 是历史验收集，不是唯一覆盖。`legacy_authority_debt_allowlist.json` 保持空数组，严格扫描必须持续为零。
+
+```bash
+PYTHONPATH=. pytest -q
+PYTHONPATH=. pytest -q tests/red_baseline
+PYTHONPATH=. python tests/evals/run_plan_eval.py --tier core
+PYTHONPATH=. python tests/evals/run_context_goal_regressions.py
+PYTHONPATH=. python tests/evals/run_canonical_output_regressions.py
+PYTHONPATH=. python scripts/legacy_dependency_scan.py --strict --json
+PYTHONPATH=. python scripts/goal_native_cutover_check.py --strict
 ```
-
-可选 backend：
-
-- `file`
-- `memory`
-- `postgres`
-
-artifact 支撑这些续问：
-
-- “基于刚才结果生成报告”
-- “是不是要生成工单”
-- “刚才那个故障码什么意思”
-- “那 J2 呢”
-
-复用条件：
-
-- thread 一致
-- 权限范围允许
-- 设备没有被用户显式切换
-- evidence 不 stale，或者能刷新/披露
-- artifact 类型能支持本轮请求
-
-越权、设备切换、上下文歧义和 stale evidence 都不能静默继承上一轮结果。
-
-## 高风险动作边界
-
-工单和设备动作不能自动执行：
-
-- 不自动派发工单。
-- 不自动重启设备。
-- 不自动复位。
-- 不自动停机/启停。
-- 不自动修改参数。
-- 工单建议只表示建议创建或草稿，不表示已经创建或已派发。
-
-相关结构：
-
-- `WorkorderActionReadiness`
-- `ManualConfirmationRequirement`
-- `allowed_next_step`: `draft_only`、`ask_confirmation`、`refresh_data_first`、`deny`
-
-## 文档边界
-
-详细后端说明见 [fault_diagnosis/README.md](../fault_diagnosis/README.md)。

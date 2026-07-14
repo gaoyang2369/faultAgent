@@ -10,7 +10,7 @@
 
 - 提供 HTTP / SSE 接口，管理服务端 session、cookie、thread ownership 和历史记录。
 - 以服务端身份为准进行 RBAC + ABAC 授权，前端传入的 `user_identity` 不参与授权。
-- 调用 Agent Engine V2 完成诊断流水线，内部核心链路是 `IntentFrame -> ContextFrame -> RewriteFrame -> SkillRoute -> ExecutionPlan -> typed nodes -> EvidenceLedger -> OutputFrame -> output/artifact compat projection`。
+- 调用 Agent Engine V2 完成诊断流水线，唯一生产链路是 `CurrentUtteranceParse -> CanonicalTurnRequest -> per-goal decisions -> Canonical Goal DAG -> typed nodes -> GoalExecutionResult -> DeliverableResult -> composite output`。旧 Frame 只在 compatibility/debug 边界单向投影。
 - 读 MySQL 运行数据、查本地/上传知识文件 知识库、生成私有 HTML 报告，并保存线程级 diagnosis artifact。
 - 对工单和设备动作保持高风险边界：只能给建议、草稿和人工确认要求，不能自动派发工单，不能自动重启、停机、复位或修改参数。
 
@@ -315,15 +315,16 @@ npm run build
 
 当前主链路已经是 Agent Engine V2。`workflow_route`、`workflow_policy`、`workflow_result`、`workflow_envelope` 以及旧任务类型/旧意图投影可能仍会出现在 SSE、artifact 或前端适配里，但它们是兼容输出字段，不是内部事实来源。
 
-内部事实来源优先级是：
+当前内部事实链是：
 
 ```text
-IntentFrame
-  -> ContextFrame
-  -> RewriteFrame
-  -> SkillRoute
-  -> ExecutionPlan
-  -> typed node results
-  -> EvidenceLedger
-  -> OutputFrame
+CurrentUtteranceParse
+  -> CanonicalTurnRequest
+  -> per-goal authorization/readiness/source resolution
+  -> validated ExecutionPlan DAG
+  -> ArtifactRoleBinding / exact loading
+  -> GoalExecutionResult
+  -> DeliverableResult / composite output
 ```
+
+`IntentFrame`、`RewriteFrame`、`EffectiveRequestFrame` 和 `SkillRoute` 只保留为兼容/debug 投影，不是生产事实来源。

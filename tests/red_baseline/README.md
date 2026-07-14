@@ -1,5 +1,7 @@
 # Phase 0 V2-native red baseline
 
+Canonical cutover completed. This directory is retained as a historical regression set.
+
 The Canonical Turn Phase 4 cutover closed every originally assigned gap. These
 files remain as the historical Phase 0 acceptance set:
 
