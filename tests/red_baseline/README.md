@@ -1,15 +1,13 @@
 # Phase 0 V2-native red baseline
 
-After the Phase 2 cutover these explicitly collected files retain only assigned
-Phase 3/4 gaps:
+The Canonical Turn Phase 4 cutover closed every originally assigned gap. These
+files remain as the historical Phase 0 acceptance set:
 
 ```bash
 PYTHONPATH=. pytest -q tests/red_baseline --tb=no
 ```
 
-The baseline may fail only on the named semantic and architecture assertions.
-Collection errors, import errors, fixture errors, mock errors and environment
-errors invalidate the baseline. The normal regression command must use
-`--ignore=tests/red_baseline` until the assigned later phases turn these cases green.
-The shrinking list, target phase, and precise reasons are recorded in
-`expected_failures.json`; fixed Phase 2 cases also live in normal regression tests.
+The expected failure list is empty and all 23 cases must pass. Stable Phase 4
+output behavior is also collected by default in
+`tests/test_canonical_output_phase4.py`; this directory is no longer the only
+coverage for the original Case A-D and dependency/composite defects.

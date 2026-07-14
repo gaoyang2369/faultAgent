@@ -64,6 +64,26 @@ def _analysis() -> AnalysisStepArtifact:
     )
 
 
+def _goal(capability: str, *, goal_id: str = "goal_output") -> PlanGoal:
+    deliverable = {
+        "explain_fault_code": "fault_code_explanation",
+        "check_runtime_status": "runtime_status",
+        "compare_runtime_status": "runtime_comparison",
+        "diagnose_fault": "diagnosis",
+        "resolution_recommendation": "recommendations",
+        "generate_report": "report",
+        "create_workorder_draft": "workorder_draft",
+    }[capability]
+    return PlanGoal(
+        goal_id=goal_id,
+        capability=capability,
+        requested_deliverables=[deliverable],
+        origin="explicit",
+        user_requested=True,
+        user_visible=True,
+    )
+
+
 def _plan(nodes: list[dict] | None = None) -> ExecutionPlan:
     return ExecutionPlan(
         plan_id="plan.v2.output",
@@ -169,37 +189,39 @@ def test_build_output_frame_variants_are_stable() -> None:
     )
     report = ReportStepArtifact(success=True, report_filename="demo.html", report_url="/reports/demo.html")
 
-    status_frame = build_output_frame(status="completed", artifacts={"sql_artifact": sql}, evidence_bundle=_bundle())
+    status_frame = build_output_frame(status="completed", artifacts={"sql_artifact": sql}, evidence_bundle=_bundle(), goals=[_goal("check_runtime_status")])
     knowledge_frame = build_output_frame(
         status="completed",
         artifacts={"knowledge_artifact": knowledge},
         evidence_bundle=_bundle(),
+        goals=[_goal("explain_fault_code")],
     )
     diagnosis_frame = build_output_frame(
         status="completed",
         artifacts={"analysis_artifact": _analysis()},
         evidence_bundle=_bundle(),
+        goals=[_goal("diagnose_fault")],
     )
-    report_frame = build_output_frame(status="completed", artifacts={"report_artifact": report}, evidence_bundle=_bundle())
+    report_frame = build_output_frame(status="completed", artifacts={"report_artifact": report}, evidence_bundle=_bundle(), goals=[_goal("generate_report")])
     blocked_frame = build_output_frame(status="blocked", error={"message": "Approval boundary blocked execution."})
     error_frame = build_output_frame(status="failed", error={"message": "fake failure"})
-    clarification_frame = build_output_frame(status="completed", requested_variant="clarification")
+    clarification_frame = build_output_frame(status="completed")
 
-    assert status_frame.answer_variant == "status_brief"
+    assert status_frame.answer_variant == "runtime_status_answer"
     assert "SQL 查询完成" in status_frame.final_answer
-    assert knowledge_frame.answer_variant == "knowledge_answer"
+    assert knowledge_frame.answer_variant == "fault_code_answer"
     assert "A07089" in knowledge_frame.final_answer
     assert "未获得 A07089 的结构化手册解析结果" in knowledge_frame.final_answer
     assert "速度偏差" not in knowledge_frame.final_answer
     assert diagnosis_frame.answer_variant == "diagnosis_answer"
     assert "诊断结论" in diagnosis_frame.final_answer
-    assert report_frame.answer_variant == "report_ready"
+    assert report_frame.answer_variant == "report_answer"
     assert "/reports/demo.html" in report_frame.final_answer
-    assert blocked_frame.answer_variant == "blocked"
+    assert blocked_frame.answer_variant == "clarification_answer"
     assert "blocked" in blocked_frame.final_answer.lower()
-    assert error_frame.answer_variant == "error"
+    assert error_frame.answer_variant == "meta_answer"
     assert "fake failure" in error_frame.final_answer
-    assert clarification_frame.answer_variant == "clarification"
+    assert clarification_frame.answer_variant == "meta_answer"
     assert "补充" in clarification_frame.final_answer
 
 
@@ -220,7 +242,7 @@ def test_terminal_and_no_goal_compatibility_calls_use_single_presenter() -> None
             ],
         ),
         build_output_frame(status="cancelled", cancelled=True, cancel_reason="user_stop"),
-        build_output_frame(status="completed", artifacts={"sql_artifact": sql}),
+        build_output_frame(status="completed", artifacts={"sql_artifact": sql}, goals=[_goal("check_runtime_status")]),
     ]
 
     for frame in frames:
@@ -231,7 +253,7 @@ def test_terminal_and_no_goal_compatibility_calls_use_single_presenter() -> None
         ]
         assert observation["legacy_answer_template"] == ""
         assert frame.final_answer == frame.composite_output.content
-    assert frames[2].answer_variant == "permission_denied"
+    assert frames[2].answer_variant == "diagnosis_answer"
     assert frames[3].final_answer == ""
     assert "SQL 查询完成" in frames[4].final_answer
 
@@ -258,9 +280,10 @@ def test_workorder_output_frame_variant() -> None:
                 },
             }
         ],
+        goals=[_goal("create_workorder_draft")],
     )
 
-    assert frame.answer_variant == "workorder_draft_ready"
+    assert frame.answer_variant == "workorder_answer"
     assert frame.answer_variant != "clarification"
     assert "工单草稿" in frame.final_answer
     assert "未派发" in frame.final_answer
@@ -343,12 +366,12 @@ def test_report_to_workorder_final_answer() -> None:
     assert result.node_results[0].status == "completed"
     artifact_types = {item["artifact_type"] for item in result.evidence_ledger.artifact_refs}
     assert artifact_types == {"workorder_artifact"}
-    assert result.output_frame.answer_variant == "workorder_draft_ready"
+    assert result.output_frame.answer_variant == "workorder_answer"
     assert "需要补充设备、故障码或时间窗口" not in result.output_frame.final_answer
     for text in ["G120电机1", "A07089", "草稿", "人工确认", "未派发"]:
         assert text in result.output_frame.final_answer
     complete = result.complete_payload
-    assert complete["rendered_answer"]["answer_variant"] == "workorder_draft_ready"
+    assert complete["rendered_answer"]["answer_variant"] == "workorder_answer"
     assert complete["final_content"] == result.output_frame.final_answer
     assert complete["manual_confirmation"]["manual_confirmation_required"] is True
     assert complete["workorder_draft_payload"]["draft_only"] is True
@@ -365,9 +388,9 @@ def test_fault_code_answer_uses_concise_structured_template_by_default() -> None
         fault_code_entries=[_fault_code_entry()],
     )
 
-    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact})
+    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact}, goals=[_goal("explain_fault_code")])
 
-    assert frame.answer_variant == "knowledge_answer"
+    assert frame.answer_variant == "fault_code_answer"
     assert "一句话解释：A07089：转换单位后不能激活功能块" in frame.final_answer
     assert "可能原因：尝试激活功能块。转换单位后不允许此操作。" in frame.final_answer
     assert "手册处理：将单位恢复到出厂设置。" in frame.final_answer
@@ -385,7 +408,7 @@ def test_fault_code_presenter_does_not_read_query_to_expand_chunk_metadata() -> 
         fault_code_entries=[_fault_code_entry()],
     )
 
-    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact})
+    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact}, goals=[_goal("explain_fault_code")])
 
     assert "一句话解释：A07089" in frame.final_answer
     assert "详细手册信息：" not in frame.final_answer
@@ -401,7 +424,7 @@ def test_fault_code_answer_does_not_invent_missing_cause_or_remedy() -> None:
         fault_code_entries=[_fault_code_entry(cause="", remedy="")],
     )
 
-    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact})
+    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact}, goals=[_goal("explain_fault_code")])
 
     assert "可能原因：手册未明确给出" in frame.final_answer
     assert "手册处理：手册未明确给出" in frame.final_answer
@@ -415,7 +438,7 @@ def test_fault_code_answer_warns_when_no_exact_match() -> None:
         fault_code_entries=[_fault_code_entry(match_type="candidate_match")],
     )
 
-    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact})
+    frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact}, goals=[_goal("explain_fault_code")])
 
     assert "未找到精确匹配：A07088。" in frame.final_answer
     assert "候选：" in frame.final_answer
@@ -448,7 +471,8 @@ def test_runtime_complete_payload_contains_frontend_compat_fields() -> None:
     assert complete["decision"]["runtime_tools"] == ["sql.read", "rag.search"]
     assert complete["workflow_route"]["primary_task_type"] == complete["decision"]["primary_task_type"]
     assert complete["workflow_policy"]["allowed_tools"] == ["sql.read", "rag.search"]
-    assert complete["workflow_result"]["status"] == "completed"
+    assert complete["workflow_result"]["status"] == "failed"
+    assert complete["rendered_answer"]["composite_output"]["deliverables"][0]["error_code"] == "analysis_unavailable"
     assert complete["workflow_envelope"]["plan_id"] == "plan.v2.output"
     assert {todo["status"] for todo in complete["todos"]} <= {"pending", "running", "completed", "interrupted"}
     assert complete["evidence_bundle"]["bundle_id"]
@@ -485,6 +509,7 @@ def test_v2_artifact_projection_saves_existing_envelope_contract() -> None:
         status="completed",
         artifacts={"analysis_artifact": _analysis()},
         evidence_bundle=_bundle(),
+        goals=[_goal("diagnose_fault")],
     )
     envelope = save_thread_artifact(
         project_artifact_envelope(
@@ -584,18 +609,19 @@ def test_manifest_projection_never_infers_identity_or_lineage_from_analysis_pros
 def test_artifact_type_mapping_for_status_report_and_clarification() -> None:
     status = project_artifact_envelope(
         thread_id="thread.status",
-        output_frame=build_output_frame(status="completed", artifacts={"sql_artifact": SqlStepArtifact(success=True, summary="ok")}),
+        output_frame=build_output_frame(status="completed", artifacts={"sql_artifact": SqlStepArtifact(success=True, summary="ok")}, goals=[_goal("check_runtime_status")]),
     )
     report = project_artifact_envelope(
         thread_id="thread.report",
         output_frame=build_output_frame(
             status="completed",
-            artifacts={"report_artifact": ReportStepArtifact(success=True, report_filename="demo.html")},
-        ),
+                artifacts={"report_artifact": ReportStepArtifact(success=True, report_filename="demo.html")},
+                goals=[_goal("generate_report")],
+            ),
     )
     clarification = project_artifact_envelope(
         thread_id="thread.clarify",
-        output_frame=build_output_frame(status="completed", requested_variant="clarification"),
+        output_frame=build_output_frame(status="completed"),
     )
 
     assert status.workflow_type == DiagnosisArtifactType.STATUS_QUERY
@@ -606,6 +632,7 @@ def test_artifact_type_mapping_for_status_report_and_clarification() -> None:
         output_frame=build_output_frame(
             status="completed",
             artifacts={"knowledge_artifact": KnowledgeStepArtifact(success=True, query="A07089", snippets=["A07089 说明"])},
+            goals=[_goal("explain_fault_code")],
         ),
     )
     assert knowledge.workflow_type == DiagnosisArtifactType.KNOWLEDGE_QA

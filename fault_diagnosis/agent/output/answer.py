@@ -33,6 +33,8 @@ def build_output_frame(
     cancel_reason: str | None = None,
     output_contract: dict[str, Any] | None = None,
     goals: list[PlanGoal] | list[dict[str, Any]] | None = None,
+    plan_nodes: list[Any] | None = None,
+    goal_statuses: list[Any] | None = None,
 ) -> OutputFrame:
     """Build the public frame through assembler then the single presenter."""
 
@@ -60,18 +62,19 @@ def build_output_frame(
         bundle,
         output_contract=output_contract,
     )
-    deliverables = DeliverableAssembler().assemble(
+    deliverables, goal_execution_results = DeliverableAssembler().assemble(
         goals=goal_items,
         artifacts=artifact_map,
         node_results=node_result_items,
         workorder_payload=workorder_payload,
         status=status,
-        requested_variant=requested_variant,
+        evidence_bundle=bundle,
+        plan_nodes=plan_nodes,
+        goal_statuses=goal_statuses,
     )
     presented = CompositePresenter().present(
         deliverables=deliverables,
         status=status,
-        requested_variant=requested_variant,
         evidence_bundle=bundle,
         error=error,
         cancelled=cancelled,
@@ -124,6 +127,8 @@ def build_output_frame(
     guardrail["output_observation"] = build_output_observation(
         goals=goal_items,
         deliverables=deliverables,
+        goal_execution_results=goal_execution_results,
+        answer_variant=presented.answer_variant,
         selected_content=presented.content,
     )
     return OutputFrame(
@@ -137,6 +142,7 @@ def build_output_frame(
         runtime_status_assessment=_dump(runtime_assessment) or {},
         contract_validation=contract_validation,
         composite_output=composite,
+        goal_execution_results=goal_execution_results,
     )
 
 

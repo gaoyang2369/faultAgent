@@ -13,7 +13,14 @@ from fault_diagnosis.domain.diagnosis.contracts import (
     WorkOrderSuggestion,
 )
 
-from ..contracts import DeliverableResult, NodeResult, PlanGoal
+from ..contracts import DeliverableResult, GoalExecutionResult, NodeResult, PlanGoal
+from .goal_results import (
+    build_goal_execution_results,
+    dependency_closure,
+    ordered_user_goals,
+    refs_for_goal_closure,
+    source_metadata,
+)
 
 
 _DELIVERABLE_TYPES = {
@@ -28,6 +35,26 @@ _DELIVERABLE_TYPES = {
     "permission_denied",
 }
 
+_DELIVERABLE_BY_CAPABILITY = {
+    "explain_fault_code": "fault_code_explanation",
+    "check_runtime_status": "runtime_status",
+    "compare_runtime_status": "runtime_comparison",
+    "diagnose_fault": "diagnosis",
+    "resolution_recommendation": "recommendations",
+    "generate_report": "report",
+    "create_workorder_draft": "workorder_draft",
+}
+
+_TITLE_BY_CAPABILITY = {
+    "explain_fault_code": "故障码解释",
+    "check_runtime_status": "运行状态",
+    "compare_runtime_status": "运行比较",
+    "diagnose_fault": "故障诊断",
+    "resolution_recommendation": "处理建议",
+    "generate_report": "运行报告",
+    "create_workorder_draft": "工单草稿",
+}
+
 
 class DeliverableAssembler:
     """Assemble exactly one deliverable for each requested goal."""
@@ -40,8 +67,11 @@ class DeliverableAssembler:
         node_results: list[NodeResult] | list[dict[str, Any]],
         workorder_payload: dict[str, Any],
         status: str,
-        requested_variant: str | None = None,
-    ) -> list[DeliverableResult]:
+        evidence_bundle: EvidenceBundle | None = None,
+        plan_nodes: list[Any] | None = None,
+        goal_statuses: list[Any] | None = None,
+        goal_execution_results: list[GoalExecutionResult] | None = None,
+    ) -> tuple[list[DeliverableResult], list[GoalExecutionResult]]:
         knowledge = _model(artifacts.get("knowledge_artifact"), KnowledgeStepArtifact)
         analysis = _model(artifacts.get("analysis_artifact"), AnalysisStepArtifact)
         report = _model(artifacts.get("report_artifact"), ReportStepArtifact)
@@ -50,127 +80,117 @@ class DeliverableAssembler:
         if not assessments and artifacts.get("runtime_status_assessment") is not None:
             assessments = [artifacts["runtime_status_assessment"]]
         comparison = _as_dict(artifacts.get("comparison_artifact"))
-        clarification = _as_dict(artifacts.get("clarification"))
         sql = _as_dict(artifacts.get("sql_artifact"))
         sql_ids = [str(item) for item in artifacts.get("sql_artifact_ids", []) if str(item)]
-        node_by_goal = _node_results_by_goal(node_results)
-
-        normalized_goals = [_dump(goal) or {} for goal in goals]
-        has_deliverable_contract = any(
-            any(item in _DELIVERABLE_TYPES for item in (goal.get("requested_deliverables") or goal.get("expected_outputs") or []))
-            for goal in normalized_goals
+        normalized_goals = [_canonical_goal_projection(_dump(goal) or {}, index) for index, goal in enumerate(goals)]
+        executions = goal_execution_results or build_goal_execution_results(
+            goals=normalized_goals,
+            node_results=node_results,
+            artifacts=artifacts,
+            evidence_bundle=evidence_bundle,
+            status=status,
+            plan_nodes=plan_nodes,
+            goal_statuses=goal_statuses,
         )
-        if not has_deliverable_contract:
-            normalized_goals = self._compatibility_goals(
-                artifacts=artifacts,
-                status=status,
-                requested_variant=requested_variant,
-            )
+        execution_by_goal = {item.goal_id: item for item in executions}
 
         results: list[DeliverableResult] = []
-        for goal in normalized_goals:
-            goal_id = str(goal.get("goal_id") or "compat_primary")
-            if goal.get("authorization_status") == "denied":
-                results.append(
-                    DeliverableResult(
-                        goal_id=goal_id,
-                        deliverable_type="permission_denied",
-                        status="blocked",
-                        payload={"capability": goal.get("capability")},
-                        error_code=str(goal.get("drop_reason") or "capability_permission_denied"),
-                        error_message="当前身份无权执行该子目标。",
-                    )
-                )
-                continue
-            if clarification:
-                results.append(
-                    DeliverableResult(
-                        goal_id=goal_id,
-                        deliverable_type="clarification",
-                        status="blocked",
-                        payload=clarification,
-                        error_code="missing_required_slot",
-                        error_message=str(clarification.get("clarification_question") or "请确认缺失信息后继续。"),
-                    )
-                )
-                continue
-
+        for goal in ordered_user_goals(normalized_goals):
+            goal_id = str(goal.get("goal_id") or "")
+            capability = str(goal.get("capability") or "")
             kinds = list(goal.get("requested_deliverables") or goal.get("expected_outputs") or [])
-            kind = next((item for item in kinds if item in _DELIVERABLE_TYPES), None)
-            if kind is None:
-                continue
-            result = self._assemble_one(
-                goal_id=goal_id,
+            kind = _DELIVERABLE_BY_CAPABILITY.get(capability) or next(
+                (item for item in kinds if item in _DELIVERABLE_TYPES),
+                "clarification",
+            )
+            execution = execution_by_goal.get(goal_id)
+            terminal_status = execution.status if execution is not None else "failed"
+            dependency_ids = dependency_closure(goal_id, normalized_goals)
+            dependency_failures = [
+                item.goal_id
+                for item in executions
+                if item.goal_id in dependency_ids and item.status in {"failed", "blocked", "denied"}
+            ]
+            if dependency_failures and terminal_status not in {"completed", "denied"}:
+                terminal_status = "blocked"
+            payload, available, error_code, error_message = self._content_for_goal(
+                goal=goal,
                 kind=kind,
                 assessments=assessments,
                 comparison=comparison,
                 sql=sql,
-                sql_ids=sql_ids,
                 knowledge=knowledge,
                 analysis=analysis,
                 report=report,
                 workorder_payload=workorder_payload,
-                goal_node_results=node_by_goal.get(goal_id, []),
-                compatibility_call=bool(goal.get("compatibility_call")),
-                allow_empty_diagnosis=bool(goal.get("compatibility_call")) and requested_variant == "diagnosis_answer",
+                has_bound_claims=bool(execution and execution.claim_ids),
             )
-            results.append(result)
-        return results
+            if terminal_status == "completed" and not available:
+                terminal_status = "failed"
+            artifact_ids, evidence_ids, claim_ids = refs_for_goal_closure(
+                goal_id,
+                goals=normalized_goals,
+                executions=executions,
+            )
+            freshness, generated_at = source_metadata(goal_id, goals=normalized_goals, artifacts=artifacts)
+            denied = terminal_status == "denied"
+            blocked = terminal_status == "blocked"
+            results.append(
+                DeliverableResult(
+                    goal_id=goal_id,
+                    capability=capability,
+                    clause_index=int(goal.get("clause_index") or 0),
+                    user_requested=True,
+                    status=terminal_status,
+                    title=_TITLE_BY_CAPABILITY.get(capability, "请求结果"),
+                    summary=_summary(payload),
+                    structured_content=payload,
+                    artifact_ids=artifact_ids or (sql_ids if kind == "runtime_status" else []),
+                    evidence_ids=evidence_ids,
+                    claim_ids=claim_ids,
+                    dependency_goal_ids=dependency_ids,
+                    error_code=(
+                        str(goal.get("drop_reason") or "capability_permission_denied")
+                        if denied
+                        else "dependency_goal_blocked"
+                        if blocked and dependency_failures
+                        else execution.error_code
+                        if execution and execution.error_code
+                        else error_code
+                    ),
+                    error_message=(
+                        "当前身份无权执行该子目标。"
+                        if denied
+                        else f"依赖目标未完成：{'、'.join(dependency_failures)}。"
+                        if blocked and dependency_failures
+                        else execution.error_message
+                        if execution and execution.error_message
+                        else error_message
+                    ),
+                    blocking_goal_ids=dependency_failures or (execution.blocked_by_goal_ids if execution else []),
+                    source_freshness=freshness,
+                    source_generated_at=generated_at,
+                    deliverable_type=kind,
+                    payload=payload,
+                    source_artifact_ids=artifact_ids,
+                )
+            )
+        return results, executions
 
     @staticmethod
-    def _compatibility_goals(
+    def _content_for_goal(
         *,
-        artifacts: dict[str, Any],
-        status: str,
-        requested_variant: str | None,
-    ) -> list[dict[str, Any]]:
-        """Represent legacy no-goal calls as one synthetic deliverable."""
-
-        if status in {"failed", "blocked", "cancelled"}:
-            if requested_variant == "permission_denied":
-                return [{"goal_id": "compat_primary", "requested_deliverables": ["permission_denied"], "compatibility_call": True}]
-            return []
-        if requested_variant == "permission_denied":
-            return [{"goal_id": "compat_primary", "requested_deliverables": ["permission_denied"], "compatibility_call": True}]
-        if requested_variant == "clarification" and not artifacts:
-            return [{"goal_id": "compat_primary", "requested_deliverables": ["clarification"], "compatibility_call": True}]
-        if requested_variant == "diagnosis_answer" and not artifacts:
-            return [{"goal_id": "compat_primary", "requested_deliverables": ["diagnosis"], "compatibility_call": True}]
-        priorities = (
-            ("workorder_draft", "workorder_draft"),
-            ("workorder_suggestion", "workorder_draft"),
-            ("report_artifact", "report"),
-            ("analysis_artifact", "diagnosis"),
-            ("knowledge_artifact", "fault_code_explanation"),
-            ("comparison_artifact", "runtime_comparison"),
-            ("runtime_status_assessment", "runtime_status"),
-            ("runtime_status_assessments", "runtime_status"),
-            ("sql_artifact", "runtime_status"),
-            ("clarification", "clarification"),
-        )
-        for artifact_key, deliverable_type in priorities:
-            if artifacts.get(artifact_key) is not None:
-                return [{"goal_id": "compat_primary", "requested_deliverables": [deliverable_type], "compatibility_call": True}]
-        return []
-
-    @staticmethod
-    def _assemble_one(
-        *,
-        goal_id: str,
+        goal: dict[str, Any],
         kind: str,
         assessments: list[Any],
         comparison: dict[str, Any],
         sql: dict[str, Any],
-        sql_ids: list[str],
         knowledge: KnowledgeStepArtifact | None,
         analysis: AnalysisStepArtifact | None,
         report: ReportStepArtifact | None,
         workorder_payload: dict[str, Any],
-        goal_node_results: list[dict[str, Any]],
-        compatibility_call: bool,
-        allow_empty_diagnosis: bool,
-    ) -> DeliverableResult:
-        failure_status = _goal_failure_status(goal_node_results)
+        has_bound_claims: bool,
+    ) -> tuple[dict[str, Any], bool, str | None, str | None]:
         if kind == "fault_code_explanation":
             success = bool(knowledge and knowledge.success)
             payload = {
@@ -184,92 +204,41 @@ class DeliverableAssembler:
                     for entry in list(getattr(knowledge, "fault_code_entries", []) or [])
                 ],
             }
-            return DeliverableResult(
-                goal_id=goal_id,
-                deliverable_type=kind,
-                status="completed" if success else "failed",
-                payload=payload,
-                error_code=None if success else str(getattr(knowledge, "error_code", "") or "knowledge_unavailable"),
-                error_message=None if success else str(getattr(knowledge, "error", "") or "知识库未返回可靠释义。"),
+            return (
+                payload,
+                success,
+                None if success else str(getattr(knowledge, "error_code", "") or "knowledge_unavailable"),
+                None if success else str(getattr(knowledge, "error", "") or "知识库未返回可靠释义。"),
             )
         if kind == "runtime_status":
-            available = bool(assessments or (compatibility_call and sql))
-            return DeliverableResult(
-                goal_id=goal_id,
-                deliverable_type=kind,
-                status="completed" if available else failure_status,
-                payload={"assessments": [_dump(item) for item in assessments], "legacy_sql": sql},
-                source_artifact_ids=sql_ids,
-                error_code=None if available else "runtime_status_unavailable",
-            )
+            devices = {str(item) for item in goal.get("device_refs") or [] if str(item)}
+            scoped = [item for item in assessments if not devices or str(_as_dict(item).get("device") or "") in devices]
+            available = bool(scoped or sql)
+            return {"assessments": [_dump(item) for item in scoped], "legacy_sql": sql}, available, None if available else "runtime_status_unavailable", None
         if kind == "runtime_comparison":
-            return DeliverableResult(
-                goal_id=goal_id,
-                deliverable_type=kind,
-                status="completed" if comparison else failure_status,
-                payload=comparison,
-                source_artifact_ids=list(comparison.get("source_artifact_ids") or sql_ids),
-                error_code=None if comparison else "comparison_unavailable",
-            )
+            return comparison, bool(comparison), None if comparison else "comparison_unavailable", None
         if kind in {"diagnosis", "recommendations"}:
-            success = bool((analysis and analysis.success) or (kind == "diagnosis" and allow_empty_diagnosis))
-            degraded = bool(knowledge is not None and not knowledge.success)
+            success = bool((analysis and analysis.success) or (kind == "diagnosis" and has_bound_claims))
             payload = (
                 _dump(analysis) or {}
                 if kind == "diagnosis"
                 else {"recommendations": list(getattr(analysis, "recommendations", []) or [])}
             )
-            return DeliverableResult(
-                goal_id=goal_id,
-                deliverable_type=kind,
-                status="partial" if success and degraded else "completed" if success else failure_status,
-                payload=payload,
-                source_artifact_ids=sql_ids,
-                error_code="knowledge_evidence_unavailable" if success and degraded else None if success else "analysis_unavailable",
-            )
+            return payload, success, None if success else "analysis_unavailable", None
         if kind == "report":
             success = bool(report and report.success)
-            return DeliverableResult(
-                goal_id=goal_id,
-                deliverable_type=kind,
-                status="completed" if success else failure_status,
-                payload=_dump(report) or {},
-                source_artifact_ids=sql_ids,
-                error_code=None if success else "report_unavailable",
-            )
+            return _dump(report) or {}, success, None if success else "report_unavailable", None
         if kind == "workorder_draft":
             success = bool(
                 workorder_payload.get("workorder_draft")
                 or workorder_payload.get("draft")
                 or workorder_payload.get("draft_id")
-                or (compatibility_call and workorder_payload.get("workorder_suggestion"))
+                or workorder_payload.get("workorder_suggestion")
             )
-            return DeliverableResult(
-                goal_id=goal_id,
-                deliverable_type=kind,
-                status="completed" if success else failure_status,
-                payload=dict(workorder_payload),
-                source_artifact_ids=[
-                    str(item.get("artifact_id"))
-                    for item in workorder_payload.get("source_artifact_refs", [])
-                    if isinstance(item, dict) and item.get("artifact_id")
-                ],
-                error_code=None if success else "workorder_draft_unavailable",
-            )
-        if kind == "permission_denied":
-            return DeliverableResult(
-                goal_id=goal_id,
-                deliverable_type=kind,
-                status="blocked",
-                error_code="capability_permission_denied",
-                error_message="当前身份无权执行该子目标。",
-            )
-        return DeliverableResult(
-            goal_id=goal_id,
-            deliverable_type="clarification",
-            status="blocked",
-            error_code="missing_required_slot",
-            error_message="需要补充设备、故障码或时间窗口等关键信息后才能继续处理。",
+            return dict(workorder_payload), success, None if success else "workorder_draft_unavailable", None
+        clarification = _as_dict(goal.get("clarification"))
+        return clarification, False, "missing_required_slot", str(
+            clarification.get("clarification_question") or "需要补充设备、故障码或时间窗口等关键信息后才能继续处理。"
         )
 
 
@@ -341,23 +310,29 @@ def composite_status(deliverables: list[DeliverableResult], fallback: str) -> st
         return "completed"
     if statuses.intersection({"completed", "partial"}):
         return "partial"
-    if statuses == {"blocked"}:
+    if statuses <= {"blocked", "denied"}:
         return "blocked"
     return "failed"
 
 
-def _node_results_by_goal(node_results: list[Any]) -> dict[str, list[dict[str, Any]]]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for item in node_results:
-        dumped = _dump(item) or {}
-        for goal_id in dumped.get("goal_ids", []) or []:
-            grouped.setdefault(str(goal_id), []).append(dumped)
-    return grouped
+def _summary(payload: dict[str, Any]) -> str | None:
+    for key in ("summary", "conclusion", "message", "clarification_question"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return None
 
 
-def _goal_failure_status(results: list[dict[str, Any]]) -> str:
-    statuses = {str(item.get("status") or "") for item in results}
-    return "blocked" if statuses.intersection({"blocked", "skipped"}) else "failed"
+def _canonical_goal_projection(goal: dict[str, Any], index: int) -> dict[str, Any]:
+    """Upgrade pre-canonical PlanGoal fixtures without consulting artifacts or nodes."""
+
+    if not goal.get("goal_id"):
+        goal["goal_id"] = f"compat_goal_{index + 1}"
+    if not goal.get("capability"):
+        kinds = list(goal.get("requested_deliverables") or goal.get("expected_outputs") or [])
+        capability_by_kind = {value: key for key, value in _DELIVERABLE_BY_CAPABILITY.items()}
+        goal["capability"] = next((capability_by_kind[item] for item in kinds if item in capability_by_kind), "")
+    return goal
 
 
 def _approval_requirements_from_node_results(node_results: list[Any]) -> list[dict[str, Any]]:

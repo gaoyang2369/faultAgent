@@ -10,9 +10,10 @@ def test_goal_native_cutover_check_ratchets_exact_phase0_authority_debt() -> Non
 
     assert payload["schema_version"] == "goal_native_cutover_check.v2"
     assert summary["retired_internal_forbidden_hits"] == 0
-    assert summary["accepted_authority_debt_hits"] > 0
+    assert summary["accepted_authority_debt_hits"] == 0
     assert summary["unexpected_authority_hits"] == 0
     assert summary["stale_allowlist_entries"] == 0
+    assert all(value == 0 for value in summary["authority_debt_by_component"].values())
     assert set(summary["authority_debt_by_component"]) == {
         "Router",
         "Compiler",

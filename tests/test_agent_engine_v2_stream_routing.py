@@ -153,6 +153,6 @@ async def _assert_guest_diagnosis_preflight_returns_terminal_denial_without_runt
     assert not any(event.get("type") == "tool_start" for event in events)
     complete = next(event for event in events if event.get("type") == "chat_complete")
     assert complete["status"] == "blocked"
-    assert complete["rendered_answer"]["answer_variant"] == "permission_denied"
+    assert complete["rendered_answer"]["answer_variant"] == "diagnosis_answer"
     assert complete["output_guardrail"]["runtime_invoked"] is False
     assert not any(span["name"] == "workflow.execute" for span in complete["canonical_trace"]["spans"])

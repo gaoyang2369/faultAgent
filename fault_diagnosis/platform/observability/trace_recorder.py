@@ -208,6 +208,7 @@ class TraceRecorder:
             enabled_nodes=[node.node_id for node in plan.nodes if node.node_id not in {item["node_id"] for item in skipped_nodes}],
             skipped_nodes=skipped_nodes,
         )
+        self._add_canonical_plan_spans(snapshot)
 
     def add_runtime_result(self, *, plan: Any, result: Any) -> None:
         runtime_span = self._add_span(
@@ -287,6 +288,7 @@ class TraceRecorder:
 
         self._add_evidence_span(result, runtime_span.span_id)
         self._add_output_spans(result, runtime_span.span_id)
+        self._add_canonical_output_spans(plan=plan, result=result, parent_span_id=runtime_span.span_id)
         self._merge_metadata(
             executed_nodes=executed_nodes,
             skipped_nodes=skipped_nodes or self.metadata.get("skipped_nodes", []),
@@ -295,6 +297,177 @@ class TraceRecorder:
         self.errors.extend(list(result.trace.get("errors", [])) if isinstance(result.trace, dict) else [])
         self.evidence_refs = _evidence_refs(result)
         self.artifact_refs = _artifact_refs(result)
+
+    def _add_canonical_plan_spans(self, snapshot: Any) -> None:
+        metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+        trace = snapshot.trace if isinstance(snapshot.trace, dict) else {}
+        request = metadata.get("canonical_request") or trace.get("canonical_request") or {}
+        if not isinstance(request, dict):
+            return
+        goals = [item for item in request.get("goals", []) if isinstance(item, dict)]
+        auth = {
+            str(item.get("goal_id") or ""): item
+            for item in metadata.get("goal_authorization") or trace.get("goal_authorization") or []
+            if isinstance(item, dict)
+        }
+        readiness = {
+            str(item.get("goal_id") or ""): item
+            for item in metadata.get("goal_readiness") or trace.get("goal_readiness") or []
+            if isinstance(item, dict)
+        }
+        sources = {
+            str(item.get("goal_id") or ""): item
+            for item in metadata.get("goal_source_resolution") or trace.get("goal_source_resolution") or []
+            if isinstance(item, dict)
+        }
+        self._add_span(
+            span_id="span.canonical.request",
+            parent_span_id="span.chat.request",
+            name="canonical.request",
+            kind="planner",
+            attributes={
+                "request_id": request.get("request_id"),
+                "turn_id": request.get("turn_id"),
+                "message_id": request.get("message_id"),
+                "goal_ids": [item.get("goal_id") for item in goals],
+                "user_requested_goal_ids": [item.get("goal_id") for item in goals if _canonical_user_requested(item)],
+                "dependency_goal_ids": [item.get("goal_id") for item in goals if not _canonical_user_requested(item)],
+            },
+        )
+        plan = snapshot.execution_plan
+        for index, goal in enumerate(goals):
+            goal_id = str(goal.get("goal_id") or f"goal_{index + 1}")
+            safe_id = _span_safe_id(goal_id)
+            base = {
+                "goal_id": goal_id,
+                "capability": goal.get("capability"),
+                "origin": goal.get("origin"),
+                "user_requested": _canonical_user_requested(goal),
+                "clause_index": goal.get("clause_index"),
+            }
+            self._add_span(
+                span_id=f"span.canonical.goal.{safe_id}",
+                parent_span_id="span.canonical.request",
+                name="canonical.goal",
+                kind="planner",
+                attributes={**base, "dependencies": goal.get("dependencies", [])},
+            )
+            self._add_span(
+                span_id=f"span.goal.authorization.{safe_id}",
+                parent_span_id=f"span.canonical.goal.{safe_id}",
+                name="goal.authorization",
+                kind="guardrail",
+                status="blocked" if auth.get(goal_id, {}).get("status") == "denied" else "completed",
+                attributes={**base, **auth.get(goal_id, {})},
+            )
+            self._add_span(
+                span_id=f"span.goal.readiness.{safe_id}",
+                parent_span_id=f"span.canonical.goal.{safe_id}",
+                name="goal.readiness",
+                kind="planner",
+                status="blocked" if str(readiness.get(goal_id, {}).get("status") or "").startswith("blocked_") else "completed",
+                attributes={**base, **readiness.get(goal_id, {})},
+            )
+            self._add_span(
+                span_id=f"span.goal.source_resolution.{safe_id}",
+                parent_span_id=f"span.canonical.goal.{safe_id}",
+                name="goal.source_resolution",
+                kind="planner",
+                attributes={**base, **sources.get(goal_id, {})},
+            )
+            node_ids = [node.node_id for node in plan.nodes if goal_id in node.goal_ids]
+            self._add_span(
+                span_id=f"span.goal.plan.{safe_id}",
+                parent_span_id=f"span.canonical.goal.{safe_id}",
+                name="goal.plan",
+                kind="planner",
+                attributes={**base, "planned_node_ids": node_ids},
+            )
+
+    def _add_canonical_output_spans(self, *, plan: Any, result: Any, parent_span_id: str) -> None:
+        frame = result.output_frame
+        executions = list(getattr(frame, "goal_execution_results", []) or [])
+        deliverables = list(getattr(frame.composite_output, "deliverables", []) or [])
+        deliverable_by_goal = {item.goal_id: item for item in deliverables}
+        goal_by_id = {goal.goal_id: goal for goal in plan.goals}
+        for execution in executions:
+            goal = goal_by_id.get(execution.goal_id)
+            origin = getattr(goal, "origin", "") if goal is not None else ""
+            clause_index = getattr(goal, "clause_index", 0) if goal is not None else 0
+            safe_id = _span_safe_id(execution.goal_id)
+            base = {
+                "goal_id": execution.goal_id,
+                "capability": execution.capability,
+                "origin": origin,
+                "user_requested": execution.user_requested,
+                "clause_index": clause_index,
+            }
+            self._add_span(
+                span_id=f"span.goal.execution.{safe_id}",
+                parent_span_id=parent_span_id,
+                name="goal.execution",
+                kind="runtime",
+                status="blocked" if execution.status == "denied" else execution.status,
+                attributes={
+                    **base,
+                    "planned_node_ids": list(execution.planned_node_ids),
+                    "executed_node_ids": list(execution.executed_node_ids),
+                    "terminal_status": execution.status,
+                    "satisfied_by_artifact": execution.satisfied_by_artifact,
+                    "blocking_goal_ids": list(execution.blocked_by_goal_ids),
+                },
+                error={"code": execution.error_code, "message": execution.error_message}
+                if execution.error_code or execution.error_message
+                else None,
+            )
+            self._add_span(
+                span_id=f"span.goal.artifact.{safe_id}",
+                parent_span_id=f"span.goal.execution.{safe_id}",
+                name="goal.artifact",
+                kind="artifact",
+                attributes={**base, "artifact_ids": list(execution.artifact_ids)},
+            )
+            self._add_span(
+                span_id=f"span.goal.evidence.{safe_id}",
+                parent_span_id=f"span.goal.execution.{safe_id}",
+                name="goal.evidence",
+                kind="evidence",
+                attributes={
+                    **base,
+                    "evidence_ids": list(execution.evidence_ids),
+                    "claim_ids": list(execution.claim_ids),
+                },
+            )
+            deliverable = deliverable_by_goal.get(execution.goal_id)
+            if deliverable is None:
+                continue
+            self._add_span(
+                span_id=f"span.goal.deliverable.{safe_id}",
+                parent_span_id=f"span.goal.execution.{safe_id}",
+                name="goal.deliverable",
+                kind="output",
+                status="blocked" if deliverable.status == "denied" else deliverable.status,
+                attributes={
+                    **base,
+                    "deliverable_id": deliverable.deliverable_id,
+                    "deliverable_status": deliverable.status,
+                    "artifact_ids": list(deliverable.artifact_ids),
+                    "evidence_ids": list(deliverable.evidence_ids),
+                    "claim_ids": list(deliverable.claim_ids),
+                },
+            )
+        self._add_span(
+            span_id="span.answer.composition",
+            parent_span_id=parent_span_id,
+            name="answer.composition",
+            kind="output",
+            attributes={
+                "answer_variant": frame.answer_variant,
+                "deliverable_goal_ids": [item.goal_id for item in deliverables],
+                "deliverable_ids": [item.deliverable_id for item in deliverables],
+                "deliverable_status_by_goal": {item.goal_id: item.status for item in deliverables},
+            },
+        )
 
     def add_error(self, *, error: Exception | str, status: str = "failed", attributes: dict[str, Any] | None = None) -> None:
         payload = {"code": type(error).__name__, "message": str(error)} if isinstance(error, Exception) else {"message": str(error)}
@@ -895,3 +1068,12 @@ def _output_mode(answer_variant: str) -> str:
     if answer_variant == "report_ready":
         return "detailed"
     return "concise"
+
+
+def _canonical_user_requested(goal: dict[str, Any]) -> bool:
+    origin = str(goal.get("origin") or "")
+    return origin == "explicit" or (origin == "inferred" and goal.get("user_visible") is True)
+
+
+def _span_safe_id(value: str) -> str:
+    return "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in value) or "unknown"

@@ -4,6 +4,12 @@ This directory contains deterministic and trace-level regression checks for the 
 
 ## Running Evals
 
+Canonical Output Phase 4 regressions:
+
+```bash
+PYTHONPATH=. python tests/evals/run_canonical_output_regressions.py
+```
+
 PR plan eval:
 
 ```bash

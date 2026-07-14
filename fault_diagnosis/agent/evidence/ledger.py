@@ -67,17 +67,34 @@ class EvidenceLedgerWriter:
         self._update_counts()
         return LedgerCommitResult(refs=refs, added=added, deduped=deduped, filtered_unauthorized=filtered)
 
-    def commit_claims(self, claims: list[Any]) -> LedgerCommitResult:
+    def commit_claims(self, claims: list[Any], *, node: dict[str, Any] | None = None) -> LedgerCommitResult:
         refs: list[str] = []
         added = 0
         deduped = 0
         for index, raw in enumerate(claims, start=1):
-            claim = _normalize_claim(raw, index=index)
+            claim = _normalize_claim(raw, index=index, node=node)
             claim_id = str(claim.get("claim_id") or f"claim_{len(self.ledger.claims) + index}")
             claim["claim_id"] = claim_id
             existing = next((item for item in self.ledger.claims if item.get("claim_id") == claim_id), None)
             if existing is not None:
-                existing.update({key: value for key, value in claim.items() if value not in (None, "", [])})
+                existing_goal_ids = _strings(existing.get("goal_ids"))
+                existing_dependencies = _strings(existing.get("dependency_goal_ids"))
+                existing.update(
+                    {
+                        key: value
+                        for key, value in claim.items()
+                        if key not in {"goal_ids", "producer_goal_id", "dependency_goal_ids"}
+                        and value not in (None, "", [])
+                    }
+                )
+                existing["goal_ids"] = _dedupe([*existing_goal_ids, *_strings(claim.get("goal_ids"))])
+                existing["dependency_goal_ids"] = _dedupe(
+                    [*existing_dependencies, *_strings(claim.get("dependency_goal_ids"))]
+                )
+                producers = _dedupe(
+                    _strings(existing.get("producer_goal_id")) + _strings(claim.get("producer_goal_id"))
+                )
+                existing["producer_goal_id"] = producers[0] if len(producers) == 1 else None
                 refs.append(claim_id)
                 deduped += 1
                 continue
@@ -217,6 +234,10 @@ def _normalize_evidence(
     if node_type:
         item.setdefault("node_type", node_type)
     metadata = dict(item.get("metadata") or {}) if isinstance(item.get("metadata"), dict) else {}
+    goal_ids = _dedupe(_strings(item.get("goal_ids")) + _strings((node or {}).get("goal_ids")))
+    item["goal_ids"] = goal_ids
+    item.setdefault("producer_goal_id", goal_ids[0] if len(goal_ids) == 1 else None)
+    item.setdefault("dependency_goal_ids", [])
     if tool_call_refs:
         metadata["tool_call_refs"] = list(tool_call_refs)
     explicit_authorized = _explicit_authorized(item)
@@ -227,7 +248,7 @@ def _normalize_evidence(
     return item
 
 
-def _normalize_claim(raw: Any, *, index: int) -> dict[str, Any]:
+def _normalize_claim(raw: Any, *, index: int, node: dict[str, Any] | None = None) -> dict[str, Any]:
     claim = _model_dump(raw)
     claim.setdefault("claim_id", f"claim_{index}")
     claim.setdefault("claim_type", "generic")
@@ -237,6 +258,10 @@ def _normalize_claim(raw: Any, *, index: int) -> dict[str, Any]:
     claim.setdefault("missing_evidence", [])
     claim.setdefault("status", "candidate")
     claim.setdefault("created_by", "agent_engine_v2")
+    goal_ids = _dedupe(_strings(claim.get("goal_ids")) + _strings((node or {}).get("goal_ids")))
+    claim["goal_ids"] = goal_ids
+    claim.setdefault("producer_goal_id", goal_ids[0] if len(goal_ids) == 1 else None)
+    claim.setdefault("dependency_goal_ids", [])
     return claim
 
 
@@ -279,8 +304,23 @@ def _find_existing_evidence(ledger: EvidenceLedger, item: dict[str, Any]) -> dic
 def _merge_evidence(existing: dict[str, Any], item: dict[str, Any]) -> None:
     existing_metadata = dict(existing.get("metadata") or {}) if isinstance(existing.get("metadata"), dict) else {}
     item_metadata = dict(item.get("metadata") or {}) if isinstance(item.get("metadata"), dict) else {}
-    existing.update({key: value for key, value in item.items() if key != "metadata" and value not in (None, "", [])})
+    existing_goal_ids = _strings(existing.get("goal_ids"))
+    item_goal_ids = _strings(item.get("goal_ids"))
+    existing_dependencies = _strings(existing.get("dependency_goal_ids"))
+    item_dependencies = _strings(item.get("dependency_goal_ids"))
+    existing.update(
+        {
+            key: value
+            for key, value in item.items()
+            if key not in {"metadata", "goal_ids", "producer_goal_id", "dependency_goal_ids"}
+            and value not in (None, "", [])
+        }
+    )
     existing["metadata"] = {**existing_metadata, **item_metadata}
+    existing["goal_ids"] = _dedupe([*existing_goal_ids, *item_goal_ids])
+    existing["dependency_goal_ids"] = _dedupe([*existing_dependencies, *item_dependencies])
+    producers = _dedupe(_strings(existing.get("producer_goal_id")) + _strings(item.get("producer_goal_id")))
+    existing["producer_goal_id"] = producers[0] if len(producers) == 1 else None
 
 
 def _dedupe_key(item: dict[str, Any]) -> tuple[str, str, str]:

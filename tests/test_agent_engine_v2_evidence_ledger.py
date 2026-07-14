@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fault_diagnosis.agent import ExecutionPlan, WorkflowRuntimeExecutor
+from fault_diagnosis.agent import ExecutionPlan, PlanGoal, WorkflowRuntimeExecutor
 from fault_diagnosis.agent.output.answer import build_output_frame
 from fault_diagnosis.agent.evidence import (
     EvidenceLedgerWriter,
@@ -315,12 +315,17 @@ def test_final_answer_degrades_unsupported_final_claim() -> None:
                 supporting_evidence_ids=[],
                 status="final",
             )
-        ]
+        ],
+        node={"goal_ids": ["goal_diagnosis"]},
     )
     writer.finalize()
     bundle = project_ledger_to_evidence_bundle(ledger, trace_id="trace.output.gate")
 
-    frame = build_output_frame(status="completed", evidence_bundle=bundle, requested_variant="diagnosis_answer")
+    frame = build_output_frame(
+        status="completed",
+        evidence_bundle=bundle,
+        goals=[PlanGoal(goal_id="goal_diagnosis", capability="diagnose_fault", requested_deliverables=["diagnosis"])],
+    )
 
     assert "诊断结论：" not in frame.final_answer
     assert "待确认/需补充" in frame.final_answer
@@ -336,7 +341,8 @@ def test_stale_evidence_is_disclosed_in_final_answer_and_guardrail() -> None:
             summary="上一轮样本已滞后，不代表实时状态。",
             content={"currentness_level": "stale"},
             freshness="stale",
-        )
+        ),
+        node={"goal_ids": ["goal_diagnosis"]},
     )
     writer.commit_claims(
         [
@@ -347,12 +353,17 @@ def test_stale_evidence_is_disclosed_in_final_answer_and_guardrail() -> None:
                 supporting_evidence_ids=["ev_stale_metric"],
                 status="final",
             )
-        ]
+        ],
+        node={"goal_ids": ["goal_diagnosis"]},
     )
     writer.finalize()
     bundle = project_ledger_to_evidence_bundle(ledger, trace_id="trace.output.stale")
 
-    frame = build_output_frame(status="completed", evidence_bundle=bundle, requested_variant="diagnosis_answer")
+    frame = build_output_frame(
+        status="completed",
+        evidence_bundle=bundle,
+        goals=[PlanGoal(goal_id="goal_diagnosis", capability="diagnose_fault", requested_deliverables=["diagnosis"])],
+    )
 
     assert "时效性提示" in frame.final_answer
     assert frame.guardrail_result["stale_evidence"]

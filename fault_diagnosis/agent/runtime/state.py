@@ -83,8 +83,11 @@ class RuntimeState(BaseModel):
             node=node,
         ).refs
 
-    def commit_claims(self, claims: list[dict[str, Any]]) -> list[str]:
-        return EvidenceLedgerWriter(self.evidence_ledger, auth_context=self.auth_context).commit_claims(claims).refs
+    def commit_claims(self, node: dict[str, Any], claims: list[dict[str, Any]]) -> list[str]:
+        return EvidenceLedgerWriter(self.evidence_ledger, auth_context=self.auth_context).commit_claims(
+            claims,
+            node=node,
+        ).refs
 
     def initialize_ledger(self) -> None:
         if self.evidence_ledger.ledger_id:

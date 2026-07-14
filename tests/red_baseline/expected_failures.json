@@ -1,17 +1,6 @@
 {
   "schema_version": "phase0_red_baseline.v1",
-  "expected_failed": [
-    {
-      "node_id": "phase0_v2_native_red.py::test_case_b_output_uses_composite_variant_and_execution_observation",
-      "target_phase": "Phase 4",
-      "reason": "output still selects the legacy answer variant and has no per-goal execution observation"
-    },
-    {
-      "node_id": "phase0_architecture_invariants_red.py::test_dependency_goal_has_terminal_state_but_no_user_deliverable",
-      "target_phase": "Phase 4",
-      "reason": "legacy output still creates a user-visible deliverable for a dependency goal"
-    }
-  ],
+  "expected_failed": [],
   "expected_passed": [
     "phase0_v2_native_red.py::test_case_a_source_phrase_is_not_a_new_diagnosis_goal",
     "phase0_v2_native_red.py::test_case_a_reuses_exact_analysis_without_sql_or_analysis_nodes",
@@ -33,6 +22,8 @@
     "phase0_architecture_invariants_red.py::test_pending_clarification_repository_has_waiting_cas_and_idempotency_boundary",
     "phase0_architecture_invariants_red.py::test_source_selector_reports_satisfaction_not_merely_candidate_selection",
     "phase0_architecture_invariants_red.py::test_source_selector_does_not_recursively_guess_a_compatible_ancestor",
-    "phase0_architecture_invariants_red.py::test_requested_goals_record_origin_and_clause_order"
+    "phase0_architecture_invariants_red.py::test_requested_goals_record_origin_and_clause_order",
+    "phase0_architecture_invariants_red.py::test_dependency_goal_has_terminal_state_but_no_user_deliverable",
+    "phase0_v2_native_red.py::test_case_b_output_uses_composite_variant_and_execution_observation"
   ]
 }

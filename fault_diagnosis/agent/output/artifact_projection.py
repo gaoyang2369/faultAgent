@@ -72,13 +72,13 @@ def project_artifact_envelope(
 
 
 def _artifact_type(variant: str) -> DiagnosisArtifactType:
-    if variant == "clarification":
+    if variant in {"clarification", "clarification_answer", "meta_answer"}:
         return DiagnosisArtifactType.CLARIFICATION
-    if variant in {"status_brief", "status_brief_v2", "status_incomplete"}:
+    if variant in {"status_brief", "status_brief_v2", "status_incomplete", "runtime_status_answer", "comparison_answer"}:
         return DiagnosisArtifactType.STATUS_QUERY
-    if variant == "report_ready":
+    if variant in {"report_ready", "report_answer"}:
         return DiagnosisArtifactType.REPORT_GENERATION
-    if variant == "knowledge_answer":
+    if variant in {"knowledge_answer", "fault_code_answer"}:
         return DiagnosisArtifactType.KNOWLEDGE_QA
     return DiagnosisArtifactType.FAULT_DIAGNOSIS
 

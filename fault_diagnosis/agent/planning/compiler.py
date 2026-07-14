@@ -79,6 +79,9 @@ class PlanCompiler:
                 "user_visible": goal.user_visible,
                 "readiness_status": ready[goal.goal_id].status,
                 "source_resolution_status": source[goal.goal_id].status,
+                "source_artifact_id": source[goal.goal_id].artifact_id or "",
+                "source_artifact_type": source[goal.goal_id].artifact_type or "",
+                "source_freshness": source[goal.goal_id].source_freshness,
             }
             for goal in request.goals
         ]

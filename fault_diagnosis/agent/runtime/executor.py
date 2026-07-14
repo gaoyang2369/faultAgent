@@ -18,7 +18,7 @@ from .state import (
 )
 from ..output.answer import build_output_frame
 from ..evidence import project_ledger_to_evidence_bundle
-from ..artifacts import allocate_node_artifact_id, build_node_artifact_envelope
+from ..artifacts import ArtifactPayloadError, allocate_node_artifact_id, build_node_artifact_envelope, load_exact_artifact
 from ..observability.cutover_observation import summarize_runtime_artifacts
 from fault_diagnosis.domain.artifacts import ArtifactEnvelope, ArtifactPayload
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.store import commit_artifact
@@ -153,6 +153,7 @@ class WorkflowRuntimeExecutor:
                 code="validated_plan_required",
                 message="V2 runtime only executes validated plans.",
             )
+        _load_satisfied_goal_artifacts(state)
         try:
             graph = RuntimeGraph(plan)
         except RuntimeGraphError as exc:
@@ -317,7 +318,7 @@ class WorkflowRuntimeExecutor:
                 evidence_refs: list[str] = []
                 if output.status == "completed":
                     evidence_refs = state.commit_evidence(node, output.proposed_evidence)
-                    state.commit_claims(output.proposed_claims)
+                    state.commit_claims(node, output.proposed_claims)
                 envelope = output.reused_artifact_envelope or build_node_artifact_envelope(
                     node=node,
                     state=state,
@@ -567,8 +568,64 @@ def _runtime_output_frame(state: RuntimeState, *, status: str, cancelled: bool =
         cancelled=cancelled,
         cancel_reason=state.cancel_token.reason if cancelled else None,
         output_contract=state.plan.output_contract,
-        goals=state.plan.goals,
+        goals=_output_goals(state.plan),
+        plan_nodes=state.plan.nodes,
     )
+
+
+def _output_goals(plan: ExecutionPlan) -> list[dict[str, Any]]:
+    """Project old typed-plan fixtures into canonical-shaped goals upstream of Output."""
+
+    capability_by_output = {
+        "fault_code_explanation": "explain_fault_code",
+        "runtime_status": "check_runtime_status",
+        "runtime_comparison": "compare_runtime_status",
+        "diagnosis": "diagnose_fault",
+        "recommendations": "resolution_recommendation",
+        "report": "generate_report",
+        "workorder_draft": "create_workorder_draft",
+    }
+    projected: list[dict[str, Any]] = []
+    for index, raw in enumerate(plan.goals):
+        goal = raw.model_dump(mode="json", exclude_none=True)
+        if not goal.get("goal_id"):
+            goal["goal_id"] = f"compat_goal_{index + 1}"
+        if not goal.get("capability"):
+            outputs = list(goal.get("requested_deliverables") or goal.get("expected_outputs") or plan.expected_outputs)
+            goal["requested_deliverables"] = outputs
+            goal["capability"] = next(
+                (capability_by_output[value] for value in outputs if value in capability_by_output),
+                "",
+            )
+        projected.append(goal)
+    return projected
+
+
+def _load_satisfied_goal_artifacts(state: RuntimeState) -> None:
+    """Load exact reusable results for satisfied Goals without executing nodes."""
+
+    for goal in state.plan.goals:
+        if goal.readiness_status != "satisfied_by_artifact":
+            continue
+        artifact_id = str(goal.source_artifact_id or "")
+        artifact_type = str(goal.source_artifact_type or "")
+        if not artifact_id or not artifact_type:
+            goal.readiness_status = "blocked_source"
+            goal.execution_error_code = "source_artifact_binding_missing"
+            goal.execution_error_message = "Satisfied Goal is missing its exact source artifact binding."
+            continue
+        try:
+            load_exact_artifact(
+                state=state,
+                artifact_id=artifact_id,
+                expected_type=artifact_type,
+                expected_devices=list(goal.device_refs),
+            )
+        except ArtifactPayloadError as exc:
+            goal.readiness_status = "blocked_source"
+            goal.execution_error_code = exc.code
+            goal.execution_error_message = exc.message
+            state.errors.append({"code": exc.code, "message": exc.message, "goal_id": goal.goal_id})
 
 
 def _is_executable_validated_plan(plan: ExecutionPlan) -> bool:

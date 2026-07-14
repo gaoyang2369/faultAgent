@@ -165,7 +165,7 @@ def test_four_goal_composite_has_one_renderer_path_and_no_legacy_template(produc
     assert observation["legacy_answer_template"] == ""
     assert observation["answer_template"] == "composite_presenter_v1"
     assert turn.visible_content.count("【故障码解释】") == 1
-    assert turn.visible_content.count("【综合诊断】") == 1
+    assert turn.visible_content.count("【故障诊断】") == 1
     assert turn.visible_content.count("【运行状态】") == 1
     assert turn.visible_content.count("【处理建议】") == 1
 

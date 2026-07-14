@@ -296,6 +296,11 @@ class PlanGoal(_DictCompatContract):
     user_visible: bool = True
     readiness_status: str = "ready"
     source_resolution_status: str = "requires_execution"
+    source_artifact_id: str = ""
+    source_artifact_type: str = ""
+    source_freshness: str = "unknown"
+    execution_error_code: str = ""
+    execution_error_message: str = ""
 
 
 class PlanEdge(_DictCompatContract):
@@ -534,9 +539,50 @@ class EvidenceLedger(AgentEngineContract):
     authorization_refs: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class GoalExecutionResult(AgentEngineContract):
+    """Goal-scoped terminal execution projection consumed by Output and trace."""
+
+    schema_version: str = "goal_execution_result.v1"
+    goal_id: str
+    capability: str
+    user_requested: bool
+    status: Literal["pending", "completed", "failed", "blocked", "denied"]
+    planned_node_ids: list[str] = Field(default_factory=list)
+    executed_node_ids: list[str] = Field(default_factory=list)
+    artifact_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    claim_ids: list[str] = Field(default_factory=list)
+    satisfied_by_artifact: bool = False
+    blocked_by_goal_ids: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+    error_message: str | None = None
+
+
 class DeliverableResult(AgentEngineContract):
-    schema_version: str = "deliverable_result.v1"
+    """Exactly one user-visible terminal result for one canonical Goal."""
+
+    schema_version: str = "deliverable_result.v2"
+    deliverable_id: str = ""
     goal_id: str = ""
+    capability: str = ""
+    clause_index: int = 0
+    user_requested: bool = True
+    status: Literal["completed", "partial", "failed", "blocked", "denied"]
+    title: str = ""
+    summary: str | None = None
+    structured_content: dict[str, Any] = Field(default_factory=dict)
+    artifact_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    claim_ids: list[str] = Field(default_factory=list)
+    dependency_goal_ids: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+    error_message: str | None = None
+    blocking_goal_ids: list[str] = Field(default_factory=list)
+    source_freshness: str | None = None
+    source_generated_at: str | None = None
+
+    # Boundary-only compatibility projection. Output decisions use the fields
+    # above; these aliases remain for older SSE/front-end consumers.
     deliverable_type: Literal[
         "fault_code_explanation",
         "runtime_status",
@@ -547,12 +593,24 @@ class DeliverableResult(AgentEngineContract):
         "workorder_draft",
         "clarification",
         "permission_denied",
-    ]
-    status: Literal["completed", "partial", "failed", "blocked"]
+    ] = "clarification"
     payload: dict[str, Any] = Field(default_factory=dict)
     source_artifact_ids: list[str] = Field(default_factory=list)
-    error_code: str | None = None
-    error_message: str | None = None
+    compatibility_only: bool = True
+
+    @model_validator(mode="after")
+    def project_compatibility_fields(self) -> "DeliverableResult":
+        if not self.deliverable_id and self.goal_id:
+            self.deliverable_id = f"deliverable:{self.goal_id}"
+        if not self.structured_content and self.payload:
+            self.structured_content = dict(self.payload)
+        if not self.payload and self.structured_content:
+            self.payload = dict(self.structured_content)
+        if not self.artifact_ids and self.source_artifact_ids:
+            self.artifact_ids = list(self.source_artifact_ids)
+        if not self.source_artifact_ids and self.artifact_ids:
+            self.source_artifact_ids = list(self.artifact_ids)
+        return self
 
 
 class CompositeOutputFrame(AgentEngineContract):
@@ -586,6 +644,7 @@ class OutputFrame(AgentEngineContract):
     runtime_status_assessment: dict[str, Any] = Field(default_factory=dict)
     contract_validation: dict[str, Any] = Field(default_factory=dict)
     composite_output: CompositeOutputFrame = Field(default_factory=CompositeOutputFrame)
+    goal_execution_results: list[GoalExecutionResult] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_status_brief_v2_contract(self) -> "OutputFrame":

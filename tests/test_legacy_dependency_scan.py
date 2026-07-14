@@ -19,7 +19,7 @@ def test_legacy_dependency_scan_reports_new_summary_buckets() -> None:
     }
     assert summary["internal_forbidden_hits"] == 0
     assert summary["compat_allowed_hits"] >= 0
-    assert summary["accepted_authority_debt_hits"] > 0
+    assert summary["accepted_authority_debt_hits"] == 0
     assert summary["unexpected_authority_hits"] == 0
     assert summary["stale_allowlist_entries"] == 0
     assert set(summary["authority_debt_by_component"]) == {name for name, _ in COMPONENT_PATHS}
@@ -29,28 +29,13 @@ def test_legacy_authority_debt_is_precise_and_grouped_by_component() -> None:
     payload = run_scan(Path(__file__).resolve().parents[1])
     entries = payload["accepted_authority_debt"]
 
-    assert entries
-    assert all(
-        {
-            "component",
-            "path",
-            "line",
-            "symbol",
-            "authority",
-            "usage",
-            "purpose",
-            "expression",
-        }.issubset(item)
-        for item in entries
-    )
-    assert {item["component"] for item in entries} == {"Output"}
-    assert len(entries) == 15
+    assert entries == []
     assert payload["summary"]["authority_debt_by_component"] == {
         "Router": 0,
         "Compiler": 0,
         "Validator": 0,
         "Runtime": 0,
-        "Output": 15,
+        "Output": 0,
         "Transport": 0,
     }
 

@@ -95,6 +95,9 @@ class EvidenceItem(BaseModel):
     summary: str = Field(default="", description="给 LLM、报告和前端使用的短摘要")
     quality: EvidenceQuality = Field(default_factory=EvidenceQuality, description="证据质量")
     metadata: dict[str, Any] = Field(default_factory=dict, description="来源追踪元数据")
+    goal_ids: list[str] = Field(default_factory=list, description="该证据支持的 canonical Goal")
+    producer_goal_id: str | None = Field(default=None, description="直接生成该证据的 Goal")
+    dependency_goal_ids: list[str] = Field(default_factory=list, description="证据涉及的依赖 Goal")
 
     # Legacy display fields.
     title: str = Field(default="", description="兼容旧前端的证据标题")
@@ -130,6 +133,9 @@ class Claim(BaseModel):
     created_by: str = Field(default="agent_engine_v2", description="创建节点")
     decision: str | None = Field(default=None, description="决策类 Claim 的决策值")
     reason_codes: list[str] = Field(default_factory=list, description="规则或原因编码")
+    goal_ids: list[str] = Field(default_factory=list, description="该判断支持的 canonical Goal")
+    producer_goal_id: str | None = Field(default=None, description="直接生成该判断的 Goal")
+    dependency_goal_ids: list[str] = Field(default_factory=list, description="判断涉及的依赖 Goal")
 
 
 class EvidenceBundle(BaseModel):

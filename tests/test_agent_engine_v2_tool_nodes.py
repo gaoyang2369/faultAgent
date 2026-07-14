@@ -47,14 +47,41 @@ def _plan(nodes: list[dict[str, Any]], *, edges: list[dict[str, Any]] | None = N
                 )
         inputs["artifact_role_bindings"] = bindings
         node["inputs"] = inputs
+    terminal_type = str(nodes[-1].get("node_type") or "") if nodes else ""
+    capability = {
+        "rag": "explain_fault_code",
+        "sql": "check_runtime_status",
+        "analysis": "diagnose_fault",
+        "comparison": "compare_runtime_status",
+        "report": "generate_report",
+        "workorder": "create_workorder_draft",
+    }.get(terminal_type, "")
+    deliverable_by_capability = {
+        "explain_fault_code": "fault_code_explanation",
+        "check_runtime_status": "runtime_status",
+        "diagnose_fault": "diagnosis",
+        "compare_runtime_status": "runtime_comparison",
+        "generate_report": "report",
+        "create_workorder_draft": "workorder_draft",
+    }
+    deliverable = deliverable_by_capability.get(capability, "")
     return ExecutionPlan(
         plan_id="plan.phase6.validated",
         plan_version="v2.phase6.validated",
+        goals=[{
+            "goal_id": "goal_test",
+            "capability": capability,
+            "requested_deliverables": [deliverable],
+            "origin": "explicit",
+            "user_requested": True,
+            "user_visible": True,
+        }] if capability else [],
         nodes=nodes,
         edges=edges,
         allowed_tools=["sql.read", "kb.search", "report.write_draft", "workorder.propose_draft"],
         required_evidence=["latest_runtime_status"],
         approval_requirements=approvals or [],
+        expected_outputs=[deliverable] if deliverable else [],
     )
 
 

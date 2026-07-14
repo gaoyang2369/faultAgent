@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from fault_diagnosis.agent import AgentEngineV2, WorkflowRuntimeExecutor
-from fault_diagnosis.agent.contracts import OutputFrame
+from fault_diagnosis.agent.contracts import OutputFrame, PlanGoal
 from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_validation
 from fault_diagnosis.agent.output.answer import build_output_frame
 from fault_diagnosis.domain.diagnosis.contracts import EvidenceBundle, EvidenceItem, EvidenceQuality
@@ -194,6 +194,7 @@ def test_v02_status_output_requires_typed_assessment_and_claim() -> None:
                 source_type="sql",
                 source_name="real_data_01",
                 summary="状态证据",
+                goal_ids=["goal_status"],
             )
         ],
         claims=[
@@ -204,6 +205,7 @@ def test_v02_status_output_requires_typed_assessment_and_claim() -> None:
                 "statement": "设备运行状态需关注。",
                 "supporting_evidence_ids": ["ev_window"],
                 "status": "final",
+                "goal_ids": ["goal_status"],
             }
         ],
         final_claim_ids=["claim_status"],
@@ -211,9 +213,9 @@ def test_v02_status_output_requires_typed_assessment_and_claim() -> None:
     frame = build_output_frame(
         artifacts={"runtime_status_assessment": assessment},
         evidence_bundle=bundle,
-        requested_variant="status_brief_v2",
+        goals=[PlanGoal(goal_id="goal_status", capability="check_runtime_status", requested_deliverables=["runtime_status"])],
     )
-    assert frame.answer_variant == "status_brief_v2"
+    assert frame.answer_variant == "runtime_status_answer"
     assert "数据状态：ok" not in frame.final_answer
     assert "A07089" in frame.final_answer
     assert frame.guardrail_result["contract_satisfied"] is True

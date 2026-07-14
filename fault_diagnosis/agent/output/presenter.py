@@ -42,52 +42,74 @@ class CompositePresenter:
         "permission_denied": "当前身份无权执行该子目标。",
         "clarification": "请确认缺失信息后继续。",
     }
+    _VARIANT_BY_CAPABILITY = {
+        "explain_fault_code": "fault_code_answer",
+        "check_runtime_status": "runtime_status_answer",
+        "compare_runtime_status": "comparison_answer",
+        "diagnose_fault": "diagnosis_answer",
+        "resolution_recommendation": "recommendation_answer",
+        "generate_report": "report_answer",
+        "create_workorder_draft": "workorder_answer",
+    }
+    _LEGACY_CAPABILITY_BY_TYPE = {
+        "fault_code_explanation": "explain_fault_code",
+        "runtime_status": "check_runtime_status",
+        "runtime_comparison": "compare_runtime_status",
+        "diagnosis": "diagnose_fault",
+        "recommendations": "resolution_recommendation",
+        "report": "generate_report",
+        "workorder_draft": "create_workorder_draft",
+    }
 
     def present(
         self,
         *,
         deliverables: list[DeliverableResult],
         status: str,
-        requested_variant: str | None = None,
         evidence_bundle: EvidenceBundle | None = None,
         error: dict[str, Any] | None = None,
         cancelled: bool = False,
         cancel_reason: str | None = None,
-        contract_validation: dict[str, Any] | None = None,
+        contract_validation: dict[str, Any] | None = None,  # compatibility serialization only
         degraded_notice: str = "",
     ) -> PresentedOutput:
-        variant = self._compatibility_variant(
-            deliverables=deliverables,
-            status=status,
-            requested_variant=requested_variant,
-            contract_validation=contract_validation or {},
-            cancelled=cancelled,
-        )
+        ordered = [
+            item
+            for _, item in sorted(
+                enumerate(deliverables),
+                key=lambda pair: (pair[1].clause_index, pair[0], pair[1].goal_id),
+            )
+        ]
+        variant = self._answer_variant(deliverables=ordered, status=status, cancelled=cancelled)
         if cancelled:
             return PresentedOutput(content="", answer_variant=variant, status_brief="")
-        if not deliverables:
+        if not ordered:
             content = self._terminal_body(
                 status=status,
-                requested_variant=requested_variant,
                 error=error,
                 cancel_reason=cancel_reason,
             )
             return PresentedOutput(content=content, answer_variant=variant, status_brief=content)
 
         sections: list[str] = []
-        for item in deliverables:
-            if item.status in {"failed", "blocked"}:
+        for item in ordered:
+            if item.status in {"failed", "blocked", "denied"}:
                 body = item.error_message or self._FAILURE_TEXT.get(item.deliverable_type, "该交付物未完成。")
             else:
-                body = self._body(item, evidence_bundle=evidence_bundle, degraded_notice=degraded_notice)
+                body = self._body(
+                    item,
+                    evidence_bundle=_bundle_for_deliverable(evidence_bundle, item),
+                    degraded_notice=degraded_notice,
+                )
                 if item.status == "partial" and item.error_code:
                     body = f"{body}\n说明：部分证据不可用，结论已降级。".strip()
-            sections.append(f"【{self._HEADINGS[item.deliverable_type]}】\n{body}".strip())
+            heading = item.title or self._HEADINGS[item.deliverable_type]
+            sections.append(f"【{heading}】\n{body}".strip())
         content = "\n\n".join(sections)
         return PresentedOutput(
             content=content,
             answer_variant=variant,
-            status_brief=self._status_brief(deliverables, status=status),
+            status_brief=self._status_brief(ordered, status=status),
         )
 
     def _body(
@@ -119,55 +141,31 @@ class CompositePresenter:
         return str(payload.get("message") or "已完成。")
 
     @staticmethod
-    def _compatibility_variant(
+    def _answer_variant(
         *,
         deliverables: list[DeliverableResult],
         status: str,
-        requested_variant: str | None,
-        contract_validation: dict[str, Any],
         cancelled: bool,
     ) -> str:
-        if cancelled or status == "cancelled":
-            return "blocked"
-        if status == "failed":
-            return "error"
-        if requested_variant == "permission_denied" or any(item.deliverable_type == "permission_denied" for item in deliverables):
-            return "permission_denied"
-        if status == "blocked" and not deliverables:
-            return "blocked"
-        kinds = {item.deliverable_type for item in deliverables}
-        if "workorder_draft" in kinds:
-            payload = next(item.payload for item in deliverables if item.deliverable_type == "workorder_draft")
-            return "workorder_draft_ready" if payload.get("workorder_draft") or payload.get("draft") else "workorder_suggestion"
-        if "report" in kinds:
-            return "report_ready"
-        if kinds.intersection({"diagnosis", "recommendations"}):
-            return "diagnosis_answer"
-        if "fault_code_explanation" in kinds:
-            return "knowledge_answer"
-        if "runtime_comparison" in kinds:
-            return "status_brief"
-        if "runtime_status" in kinds:
-            has_typed = any(item.payload.get("assessments") for item in deliverables if item.deliverable_type == "runtime_status")
-            if has_typed and contract_validation.get("contract_satisfied") is not True:
-                return "status_incomplete"
-            return "status_brief_v2" if has_typed else "status_brief"
-        if "clarification" in kinds or requested_variant == "clarification":
-            return "clarification"
-        return requested_variant or "clarification"
+        if len(deliverables) > 1:
+            return "composite_answer"
+        if not deliverables:
+            return "clarification_answer" if cancelled or status in {"blocked", "cancelled"} else "meta_answer"
+        item = deliverables[0]
+        capability = item.capability or CompositePresenter._LEGACY_CAPABILITY_BY_TYPE.get(item.deliverable_type, "")
+        return CompositePresenter._VARIANT_BY_CAPABILITY.get(capability, "clarification_answer")
 
     @staticmethod
     def _terminal_body(
         *,
         status: str,
-        requested_variant: str | None,
         error: dict[str, Any] | None,
         cancel_reason: str | None,
     ) -> str:
         message = str((error or {}).get("message") or "").strip()
         if status == "failed":
             return message or "V2 执行失败，未生成可靠诊断结果。"
-        if status == "blocked" or requested_variant in {"blocked", "permission_denied"}:
+        if status == "blocked":
             return message or "当前请求被安全边界阻止，未执行受限动作。"
         if cancel_reason:
             return f"需要补充信息后才能继续处理。当前停止原因：{cancel_reason}"
@@ -358,6 +356,23 @@ def _missing_evidence(bundle: EvidenceBundle | None, payload: dict[str, Any]) ->
             values.extend(bundle.quality_checks["missing_evidence"])
     values.extend(_text_list(payload.get("missing_information")))
     return _dedupe(values)
+
+
+def _bundle_for_deliverable(
+    bundle: EvidenceBundle | None,
+    item: DeliverableResult,
+) -> EvidenceBundle | None:
+    if bundle is None:
+        return None
+    evidence_ids = set(item.evidence_ids)
+    claim_ids = set(item.claim_ids)
+    evidence = [value for value in bundle.evidence_items if value.evidence_id in evidence_ids]
+    claims = [value for value in bundle.claims if value.claim_id in claim_ids]
+    final_ids = [value for value in bundle.final_claim_ids if value in claim_ids]
+    return bundle.model_copy(
+        update={"evidence_items": evidence, "claims": claims, "final_claim_ids": final_ids},
+        deep=True,
+    )
 
 
 def _stale_lines(bundle: EvidenceBundle | None) -> list[str]:

@@ -167,7 +167,7 @@ def test_e03_four_goals_have_four_unique_deliverables_and_no_raw_chunk_metadata(
         assert len({item["goal_id"] for item in deliverables}) == 4
         assert complete["content"].count("【故障码解释】") == 1
         assert complete["content"].count("【运行状态】") == 1
-        assert complete["content"].count("【综合诊断】") == 1
+        assert complete["content"].count("【故障诊断】") == 1
         assert complete["content"].count("【处理建议】") == 1
         assert "internal-chunk-should-not-render.pdf" not in complete["content"]
         assert "raw_output" not in complete["content"]
