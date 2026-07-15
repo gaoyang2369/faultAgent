@@ -3,6 +3,7 @@ import { ref, type Ref } from 'vue'
 import { chatAPI } from '@/services/api'
 import {
   completeTaskSnapshot,
+  createInitialDiagnosisTaskSnapshot,
   createTaskSnapshot,
   hasVisibleTaskSnapshot,
   interruptTaskSnapshot
@@ -386,6 +387,12 @@ export const useChatStream = ({
     // The backend switches to the selected role's own signed session.  Keep
     // the cache; server history below determines which signed threads belong
     // to this role and the active view is rebuilt from that scope.
+    if (typeof currentChatId.value === 'string' && currentChatId.value) {
+      persistConversationCache(
+        currentChatId.value,
+        localCacheOnly.value ? 'local-cache' : 'server'
+      )
+    }
     deletedChatIds.clear()
     chatHistory.value = []
     historyError.value = ''
@@ -762,6 +769,14 @@ export const useChatStream = ({
   ) => {
     syncExternalThread(threadId)
     voiceAccumulatedText = ''
+    const initialTaskSnapshot = createInitialDiagnosisTaskSnapshot(
+      content,
+      typeof requestedThreadId === 'string' && requestedThreadId
+        ? requestedThreadId
+        : `request-${Date.now()}`
+    )
+    assignTodosState(initialTaskSnapshot.todos, initialTaskSnapshot.summary)
+
     currentMessages.value.push({
       role: 'assistant',
       ...buildAssistantMessageMetadata(),
@@ -775,7 +790,7 @@ export const useChatStream = ({
       streamState: 'reasoning',
       statusText,
       toolEvents: [],
-      taskSnapshot: null,
+      taskSnapshot: initialTaskSnapshot,
       voiceSessionActive: true
     })
     await scrollToBottom({ force: true, markNewContent: false })
@@ -1134,13 +1149,16 @@ export const useChatStream = ({
               activeToolCount += 1
               updateAssistantState('tool_running', PUBLIC_THINKING_STATUS)
               if (toolData.tool === 'write_todos') {
-                updateAssistantTaskSnapshot(
-                  createTaskSnapshot([], null, {
+                const existingSnapshot = currentMessages.value[getLastAssistantIndex()]?.taskSnapshot
+                updateAssistantTaskSnapshot(createTaskSnapshot(
+                  existingSnapshot?.todos || initialTaskSnapshot.todos,
+                  existingSnapshot?.summary || initialTaskSnapshot.summary,
+                  {
                     threadId: typeof currentChatId.value === 'string' ? currentChatId.value : requestedThreadId,
                     isLoading: true,
-                    statusHint: '规划中'
-                  })
-                )
+                    statusHint: '正在细化任务'
+                  }
+                ))
               }
             } else if (toolData.type === 'tool_end') {
               activeToolCount = Math.max(0, activeToolCount - 1)

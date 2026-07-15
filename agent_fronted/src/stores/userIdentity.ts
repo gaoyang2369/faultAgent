@@ -53,6 +53,7 @@ export const useUserIdentityStore = defineStore('userIdentity', () => {
   const userId = ref<string | null>(null)
   const userRole = ref<string | null>(null)
   const rawDisplayName = ref<string | null>(null)
+  const isAdmin = ref(false)
   const status = ref<ConnectionStatus>('idle')
 
   const hasIdentity = computed(() => Boolean(userId.value))
@@ -72,10 +73,16 @@ export const useUserIdentityStore = defineStore('userIdentity', () => {
     return `${identityLabel}身份识别已完成`
   })
 
-  const setUserInfo = (payload: { userId?: string | null; userRole?: string | null; displayName?: string | null }) => {
+  const setUserInfo = (payload: {
+    userId?: string | null
+    userRole?: string | null
+    displayName?: string | null
+    isAdmin?: boolean | null
+  }) => {
     userId.value = payload.userId ?? null
     userRole.value = payload.userRole ?? null
     rawDisplayName.value = payload.displayName ?? null
+    isAdmin.value = payload.isAdmin === true
   }
 
   const setStatus = (nextStatus: ConnectionStatus) => {
@@ -86,12 +93,14 @@ export const useUserIdentityStore = defineStore('userIdentity', () => {
     userId.value = null
     userRole.value = null
     rawDisplayName.value = null
+    isAdmin.value = false
   }
 
   return {
     userId,
     userRole,
     rawDisplayName,
+    isAdmin,
     status,
     hasIdentity,
     speakerName,

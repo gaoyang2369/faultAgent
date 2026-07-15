@@ -49,6 +49,7 @@ export const normalizeTodoStatus = (status?: string): NormalizedTodoStatus => {
   if (!status) return 'pending'
   const value = String(status).trim().toLowerCase()
   if (value === 'in-progress') return 'in_progress'
+  if (value === 'running') return 'in_progress'
   if (value === 'done') return 'completed'
   if (value === 'completed') return 'completed'
   if (value === 'in_progress') return 'in_progress'
@@ -188,6 +189,33 @@ export const createTaskSnapshot = (
     lifecycleState: options.lifecycleState || '',
     updatedAt: new Date().toISOString()
   }
+}
+
+export const createInitialDiagnosisTaskSnapshot = (
+  question = '',
+  threadId = 'pending'
+): TaskSnapshot => {
+  const questionPreview = String(question || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+  return createTaskSnapshot([
+    {
+      id: `${threadId}-understand`,
+      title: '理解问题并确认诊断范围',
+      description: questionPreview ? `分析本轮问题：${questionPreview}` : '分析本轮问题、对象与期望输出',
+      status: 'in_progress'
+    },
+    {
+      id: `${threadId}-evidence`,
+      title: '收集运行数据与知识依据',
+      description: '根据问题选择运行数据、故障知识或设备资料',
+      status: 'pending'
+    },
+    {
+      id: `${threadId}-diagnosis`,
+      title: '分析原因并形成处理建议',
+      description: '综合证据，输出诊断结论、风险说明和下一步建议',
+      status: 'pending'
+    }
+  ], null, { threadId })
 }
 
 export const interruptTaskSnapshot = (

@@ -58,7 +58,7 @@ let desktopPetIdentityCloseTimer: ReturnType<typeof window.setTimeout> | null = 
 let desktopPetVoiceQueueReplayTimer: ReturnType<typeof window.setTimeout> | null = null
 
 const userIdentityStore = useUserIdentityStore()
-const { displayName, status, hasIdentity, userId, userRole } = storeToRefs(userIdentityStore)
+const { displayName, status, hasIdentity, userId, userRole, isAdmin } = storeToRefs(userIdentityStore)
 
 const voiceAuthLaunchValues = ['1', 'true', 'yes', 'open']
 const desktopPetSources = ['desktop-pet', 'desktoppet', 'xiaofei', '小飞']
@@ -112,6 +112,7 @@ const applyBackendIdentity = (identity: BackendIdentity) => {
     userId: identity.user_id || fallbackUserId,
     userRole: identity.user_role || fallbackUserRole,
     displayName: identity.display_name || identity.user_role || fallbackUserRole,
+    isAdmin: identity.is_admin === true || nextRole === 'admin',
   })
   userIdentityStore.setStatus('connected')
   devIdentityRole.value = nextRole
@@ -119,6 +120,14 @@ const applyBackendIdentity = (identity: BackendIdentity) => {
 
 const switchDevIdentity = async () => {
   if (isSwitchingDevIdentity.value) return
+  const previousIdentity = {
+    userId: userId.value,
+    userRole: userRole.value,
+    role: resolveBackendIdentityRole({
+      user_id: userId.value,
+      user_role: userRole.value
+    })
+  }
   isSwitchingDevIdentity.value = true
   userIdentityStore.setStatus('connecting')
 
@@ -126,7 +135,16 @@ const switchDevIdentity = async () => {
     await adminAuthAPI.devLogin(devIdentityRole.value)
     const identity = await adminAuthAPI.getIdentity()
     applyBackendIdentity(identity)
-    window.dispatchEvent(new CustomEvent('dcma:identity-session-changed'))
+    window.dispatchEvent(new CustomEvent('dcma:identity-session-changed', {
+      detail: {
+        previousIdentity,
+        nextIdentity: {
+          userId: userId.value,
+          userRole: userRole.value,
+          role: devIdentityRole.value
+        }
+      }
+    }))
     const option = devIdentityOptions.find(item => item.value === devIdentityRole.value)
     ElMessage.success(`已切换为${option?.label || '开发'}身份`)
   } catch (error) {
@@ -299,7 +317,8 @@ const applyDesktopPetUserInfo = (payload: DesktopPetPayload) => {
   userIdentityStore.setUserInfo({
     userId: resolvedRole.role === '访客' ? 'guest' : nextUserId,
     userRole: resolvedRole.role,
-    displayName: resolvedRole.role
+    displayName: resolvedRole.role,
+    isAdmin: false
   })
   userIdentityStore.setStatus('connected')
 
@@ -439,6 +458,7 @@ const onVoiceAuthSuccess = async (payload: VoiceAuthSuccessPayload | string) => 
     userId: normalizedPayload.userId || (isAdmin ? 'admin' : 'guest'),
     userRole: normalizedPayload.userRole || (isAdmin ? '管理员' : '访客'),
     displayName: normalizedPayload.displayName || normalizedPayload.userRole || (isAdmin ? '管理员' : '访客'),
+    isAdmin,
   })
   userIdentityStore.setStatus('connected')
 
@@ -513,8 +533,16 @@ const isVisitorIdentity = computed(() => {
   )
 })
 
+const isAdminIdentity = computed(() => {
+  return isAdmin.value
+})
+
 const canUploadFile = computed(() => {
-  return hasIdentity.value && !isVisitorIdentity.value
+  return hasIdentity.value && isAdminIdentity.value
+})
+
+watch(canUploadFile, (allowed) => {
+  if (!allowed) showUploadDialog.value = false
 })
 </script>
 
@@ -597,11 +625,11 @@ const canUploadFile = computed(() => {
     />
     <AdminAuthDialog
       v-model="showAdminAuthDialog"
-      :is-admin="!isVisitorIdentity && hasIdentity"
+      :is-admin="isAdminIdentity && hasIdentity"
       :display-name="displayName"
       @authenticated="onAdminAuthenticated"
       @logged-out="onAdminLoggedOut"
-      @open-upload="showUploadDialog = true"
+      @open-upload="openUploadDialog"
     />
     <DesktopPetIdentityDialog
       v-model="showDesktopPetIdentityDialog"
@@ -611,7 +639,7 @@ const canUploadFile = computed(() => {
       :permission-hint="desktopPetPermissionHint"
       :message="desktopPetDialogMessage"
     />
-    <FileUploadDialog v-model="showUploadDialog" />
+    <FileUploadDialog v-if="canUploadFile" v-model="showUploadDialog" />
   </div>
 </template>
 

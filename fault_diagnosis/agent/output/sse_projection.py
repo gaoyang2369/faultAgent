@@ -238,11 +238,13 @@ def _todos_from_plan_and_results(plan: ExecutionPlan, node_results: list[NodeRes
     for index, node in enumerate(plan.nodes, start=1):
         node_id = str(node.get("node_id") or f"node_{index}")
         node_type = str(node.get("node_type") or node.get("type") or "node")
+        default_status = "running" if not node_results and index == 1 else "pending"
         todos.append(
             {
                 "id": node_id,
                 "title": _node_title(node_type),
-                "status": _todo_status(by_id.get(node_id, "pending")),
+                "description": _node_description(node_type),
+                "status": _todo_status(by_id.get(node_id, default_status)),
             }
         )
     return todos
@@ -444,6 +446,19 @@ def _node_title(node_type: str) -> str:
         "approval": "等待人工确认",
         "clarification": "澄清问题",
     }.get(node_type, node_type or "执行节点")
+
+
+def _node_description(node_type: str) -> str:
+    return {
+        "sql": "查询与本轮问题相关的设备状态、指标和告警数据",
+        "rag": "从故障手册和已授权知识库中检索相关依据",
+        "kg": "查询设备、故障现象与原因之间的关联关系",
+        "analysis": "综合数据与知识证据，判断可能原因和风险",
+        "report": "整理诊断过程、证据和结论，生成可查看的报告",
+        "workorder": "根据诊断结论生成待人工确认的处置建议",
+        "approval": "等待具备权限的人员确认后续操作",
+        "clarification": "补充诊断所需的设备、现象或时间范围信息",
+    }.get(node_type, "执行计划中的当前诊断步骤")
 
 
 def _tool_name(node_type: str) -> str:
