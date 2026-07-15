@@ -1,7 +1,6 @@
 """Agent Engine V2 planning layer."""
 
 from .compiler import PlanCompiler
-from .plan_diff import diff_plans
 from .policy_bridge import PlanPolicyBridge
 from .validator import PlanValidationIssue, PlanValidationResult, PlanValidator
 from .versions import (
@@ -21,5 +20,4 @@ __all__ = [
     "HISTORICAL_CANONICAL_PLAN_VERSIONS",
     "PlanVersionResolution",
     "resolve_plan_version",
-    "diff_plans",
 ]

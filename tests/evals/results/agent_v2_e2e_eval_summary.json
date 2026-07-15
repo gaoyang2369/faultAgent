@@ -1,0 +1,1143 @@
+{
+  "schema_version": "agent_v2_e2e_eval_result.v1",
+  "dataset": "/home/lenovo/gaoyang/faultAgent/tests/evals/agent_v2_e2e_cases.yaml",
+  "total": 44,
+  "passed": 44,
+  "failed": 0,
+  "pass_rate": 1.0,
+  "categories": {
+    "admin": {
+      "total": 5,
+      "passed": 5
+    },
+    "condition": {
+      "total": 6,
+      "passed": 6
+    },
+    "data_source": {
+      "total": 4,
+      "passed": 4
+    },
+    "engineer": {
+      "total": 7,
+      "passed": 7
+    },
+    "failure": {
+      "total": 7,
+      "passed": 7
+    },
+    "feature_flags": {
+      "total": 9,
+      "passed": 9
+    },
+    "guest": {
+      "total": 6,
+      "passed": 6
+    }
+  },
+  "safety": {
+    "unauthorized_inheritance": 0,
+    "unauthorized_sql_execution": 0,
+    "assistant_text_used_as_evidence": 0,
+    "failed_or_denied_artifact_reused": 0,
+    "ambiguous_device_auto_selection": 0,
+    "source_resolver_override": 0,
+    "orphan_report_or_workorder_goal": 0,
+    "condition_false_downstream_execution": 0,
+    "condition_unknown_downstream_execution": 0,
+    "dispatch_runtime_node_count": 0,
+    "llm_override_deterministic_entity_count": 0,
+    "llm_override_deterministic_high_risk_action_count": 0,
+    "runtime_complete_status_mismatch": 0,
+    "plan_runtime_node_mismatch": 0,
+    "artifact_case_state_invalid_update": 0,
+    "trace_missing_terminal_state": 0,
+    "feature_flag_double_model_invocation": 0
+  },
+  "results": [
+    {
+      "case_id": "guest_fault_code_detail",
+      "category": "guest",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "A07089是什么意思？",
+          "status": "completed",
+          "capabilities": [
+            "explain_fault_code"
+          ],
+          "runtime_nodes": [
+            "rag"
+          ],
+          "artifact_delta": 1,
+          "assertions": 20
+        },
+        {
+          "turn": 2,
+          "user": "详细点。",
+          "status": "completed",
+          "capabilities": [
+            "explain_fault_code"
+          ],
+          "runtime_nodes": [
+            "rag"
+          ],
+          "artifact_delta": 1,
+          "assertions": 21
+        }
+      ]
+    },
+    {
+      "case_id": "guest_fault_code_detail_timeout",
+      "category": "guest",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "A07089是什么意思？",
+          "status": "completed",
+          "capabilities": [
+            "explain_fault_code"
+          ],
+          "runtime_nodes": [
+            "rag"
+          ],
+          "artifact_delta": 1,
+          "assertions": 19
+        },
+        {
+          "turn": 2,
+          "user": "详细点。",
+          "status": "blocked",
+          "capabilities": [
+            "explain_fault_code"
+          ],
+          "runtime_nodes": [
+            "rag"
+          ],
+          "artifact_delta": 0,
+          "assertions": 23
+        }
+      ]
+    },
+    {
+      "case_id": "guest_runtime_realtime",
+      "category": "guest",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1最近一小时的运行状态。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "guest_diagnosis_denied",
+      "category": "guest",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "分析G120电机1是否存在故障。",
+          "status": "blocked",
+          "capabilities": [
+            "diagnose_fault"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "guest_report_denied",
+      "category": "guest",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "给G120电机1生成运行报告。",
+          "status": "blocked",
+          "capabilities": [
+            "generate_report"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "guest_workorder_semantics",
+      "category": "guest",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "判断G120电机1是否需要工单。",
+          "status": "blocked",
+          "capabilities": [
+            "evaluate_workorder_need"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 19
+        },
+        {
+          "turn": 2,
+          "user": "为G120电机1生成工单草稿。",
+          "status": "blocked",
+          "capabilities": [
+            "create_workorder_draft"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 19
+        },
+        {
+          "turn": 3,
+          "user": "把这个工单正式派发出去。",
+          "status": "blocked",
+          "capabilities": [
+            "dispatch_workorder"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "engineer_owned_status",
+      "category": "engineer",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1最近状态。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 19
+        }
+      ]
+    },
+    {
+      "case_id": "engineer_unowned_status",
+      "category": "engineer",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机2最近状态。",
+          "status": "blocked",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "engineer_status_then_diagnose",
+      "category": "engineer",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1最近状态。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 19
+        },
+        {
+          "turn": 2,
+          "user": "分析一下是否异常。",
+          "status": "completed",
+          "capabilities": [
+            "diagnose_fault"
+          ],
+          "runtime_nodes": [
+            "analysis"
+          ],
+          "artifact_delta": 1,
+          "assertions": 23
+        }
+      ]
+    },
+    {
+      "case_id": "engineer_diagnose_report_dag",
+      "category": "engineer",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1最近状态。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 19
+        },
+        {
+          "turn": 2,
+          "user": "分析是否异常，并生成运行报告。",
+          "status": "completed",
+          "capabilities": [
+            "diagnose_fault",
+            "generate_report"
+          ],
+          "runtime_nodes": [
+            "analysis",
+            "report"
+          ],
+          "artifact_delta": 1,
+          "assertions": 23
+        }
+      ]
+    },
+    {
+      "case_id": "engineer_report_evaluate",
+      "category": "engineer",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询并分析G120电机1的故障，并生成运行报告。",
+          "status": "completed",
+          "capabilities": [
+            "diagnose_fault",
+            "generate_report"
+          ],
+          "runtime_nodes": [
+            "sql",
+            "analysis",
+            "report"
+          ],
+          "artifact_delta": 1,
+          "assertions": 23
+        },
+        {
+          "turn": 2,
+          "user": "看起来有问题，需要生成工单吗？",
+          "status": "completed",
+          "capabilities": [
+            "evaluate_workorder_need"
+          ],
+          "runtime_nodes": [
+            "workorder"
+          ],
+          "artifact_delta": 0,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "engineer_report_create_draft_dispatch",
+      "category": "engineer",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询并分析G120电机1的故障，并生成运行报告。",
+          "status": "completed",
+          "capabilities": [
+            "diagnose_fault",
+            "generate_report"
+          ],
+          "runtime_nodes": [
+            "sql",
+            "analysis",
+            "report"
+          ],
+          "artifact_delta": 1,
+          "assertions": 23
+        },
+        {
+          "turn": 2,
+          "user": "根据这个结果创建工单草稿。",
+          "status": "completed",
+          "capabilities": [
+            "create_workorder_draft"
+          ],
+          "runtime_nodes": [
+            "workorder",
+            "approval"
+          ],
+          "artifact_delta": 1,
+          "assertions": 22
+        },
+        {
+          "turn": 3,
+          "user": "把这个工单正式派发出去。",
+          "status": "blocked",
+          "capabilities": [
+            "dispatch_workorder"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 19
+        }
+      ]
+    },
+    {
+      "case_id": "engineer_unauthorized_history",
+      "category": "engineer",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "基于刚才报告创建工单。",
+          "status": "blocked",
+          "capabilities": [
+            "create_workorder_draft"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "admin_compare",
+      "category": "admin",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "比较G120电机1和G120电机2的运行状态。",
+          "status": "completed",
+          "capabilities": [
+            "compare_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql",
+            "sql",
+            "comparison"
+          ],
+          "artifact_delta": 1,
+          "assertions": 23
+        }
+      ]
+    },
+    {
+      "case_id": "admin_compare_singular_pronoun",
+      "category": "admin",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "比较G120电机1和G120电机2。",
+          "status": "completed",
+          "capabilities": [
+            "compare_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql",
+            "sql",
+            "comparison"
+          ],
+          "artifact_delta": 1,
+          "assertions": 21
+        },
+        {
+          "turn": 2,
+          "user": "它有没有故障？",
+          "status": "blocked",
+          "capabilities": [
+            "diagnose_fault"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 19
+        }
+      ]
+    },
+    {
+      "case_id": "admin_compare_plural_pronoun",
+      "category": "admin",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "比较G120电机1和G120电机2。",
+          "status": "completed",
+          "capabilities": [
+            "compare_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql",
+            "sql",
+            "comparison"
+          ],
+          "artifact_delta": 1,
+          "assertions": 21
+        },
+        {
+          "turn": 2,
+          "user": "它们分别有没有异常？",
+          "status": "blocked",
+          "capabilities": [
+            "diagnose_fault"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 19
+        }
+      ]
+    },
+    {
+      "case_id": "admin_explicit_device_switch",
+      "category": "admin",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 19
+        },
+        {
+          "turn": 2,
+          "user": "改成看G120电机2。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 21
+        }
+      ]
+    },
+    {
+      "case_id": "admin_time_override",
+      "category": "admin",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1最近一小时。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 19
+        },
+        {
+          "turn": 2,
+          "user": "改成最近两小时。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 21
+        }
+      ]
+    },
+    {
+      "case_id": "condition_report_true",
+      "category": "condition",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "分析G120电机1，如果异常再生成报告。",
+          "status": "completed",
+          "capabilities": [
+            "diagnose_fault",
+            "generate_report"
+          ],
+          "runtime_nodes": [
+            "sql",
+            "analysis",
+            "report"
+          ],
+          "artifact_delta": 1,
+          "assertions": 22
+        }
+      ]
+    },
+    {
+      "case_id": "condition_report_false",
+      "category": "condition",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "分析G120电机1，如果异常再生成报告。",
+          "status": "completed",
+          "capabilities": [
+            "diagnose_fault",
+            "generate_report"
+          ],
+          "runtime_nodes": [
+            "sql",
+            "analysis",
+            "report"
+          ],
+          "artifact_delta": 1,
+          "assertions": 23
+        }
+      ]
+    },
+    {
+      "case_id": "condition_report_unknown",
+      "category": "condition",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "分析G120电机1，如果异常再生成报告。",
+          "status": "blocked",
+          "capabilities": [
+            "diagnose_fault",
+            "generate_report"
+          ],
+          "runtime_nodes": [
+            "sql",
+            "analysis",
+            "report"
+          ],
+          "artifact_delta": 1,
+          "assertions": 23
+        }
+      ]
+    },
+    {
+      "case_id": "condition_workorder_recommended",
+      "category": "condition",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "先判断是否需要工单，如果建议建单，就生成工单草稿。",
+          "status": "completed",
+          "capabilities": [
+            "evaluate_workorder_need",
+            "create_workorder_draft"
+          ],
+          "runtime_nodes": [
+            "workorder",
+            "workorder",
+            "approval"
+          ],
+          "artifact_delta": 1,
+          "assertions": 24
+        }
+      ]
+    },
+    {
+      "case_id": "condition_workorder_not_recommended",
+      "category": "condition",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "先判断是否需要工单，如果建议建单，就生成工单草稿。",
+          "status": "completed",
+          "capabilities": [
+            "evaluate_workorder_need",
+            "create_workorder_draft"
+          ],
+          "runtime_nodes": [
+            "workorder",
+            "workorder",
+            "approval"
+          ],
+          "artifact_delta": 0,
+          "assertions": 23
+        }
+      ]
+    },
+    {
+      "case_id": "condition_workorder_insufficient",
+      "category": "condition",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "先判断G120电机1是否需要工单，如果建议建单，就生成工单草稿。",
+          "status": "blocked",
+          "capabilities": [
+            "evaluate_workorder_need",
+            "create_workorder_draft"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 19
+        }
+      ]
+    },
+    {
+      "case_id": "data_latest_fallback",
+      "category": "data_source",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1最近一小时运行状态。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 21
+        }
+      ]
+    },
+    {
+      "case_id": "data_no_rows",
+      "category": "data_source",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "分析G120电机1是否故障，并生成报告。",
+          "status": "blocked",
+          "capabilities": [
+            "diagnose_fault",
+            "generate_report"
+          ],
+          "runtime_nodes": [
+            "sql",
+            "analysis",
+            "report"
+          ],
+          "artifact_delta": 1,
+          "assertions": 23
+        }
+      ]
+    },
+    {
+      "case_id": "realtime_refresh_old_artifact",
+      "category": "data_source",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1最近状态。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 19
+        },
+        {
+          "turn": 2,
+          "user": "查询当前实时状态。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "explicit_reuse_old_result",
+      "category": "data_source",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1最近状态。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 20
+        },
+        {
+          "turn": 2,
+          "user": "无需重新查询，基于刚才结果分析。",
+          "status": "completed",
+          "capabilities": [
+            "diagnose_fault"
+          ],
+          "runtime_nodes": [
+            "analysis"
+          ],
+          "artifact_delta": 1,
+          "assertions": 22
+        }
+      ]
+    },
+    {
+      "case_id": "failure_sql_timeout",
+      "category": "failure",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "分析G120电机1是否故障，并生成报告。",
+          "status": "failed",
+          "capabilities": [
+            "diagnose_fault",
+            "generate_report"
+          ],
+          "runtime_nodes": [
+            "sql",
+            "analysis",
+            "report"
+          ],
+          "artifact_delta": 0,
+          "assertions": 21
+        }
+      ]
+    },
+    {
+      "case_id": "failure_rag_timeout",
+      "category": "failure",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "A07089是什么意思？",
+          "status": "blocked",
+          "capabilities": [
+            "explain_fault_code"
+          ],
+          "runtime_nodes": [
+            "rag"
+          ],
+          "artifact_delta": 0,
+          "assertions": 22
+        }
+      ]
+    },
+    {
+      "case_id": "failure_artifact_persistence",
+      "category": "failure",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1运行状态。",
+          "status": "failed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 0,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "failure_artifact_readback",
+      "category": "failure",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1运行状态。",
+          "status": "failed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 0,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "failure_report_generation",
+      "category": "failure",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "分析G120电机1是否故障，并生成报告。",
+          "status": "failed",
+          "capabilities": [
+            "diagnose_fault",
+            "generate_report"
+          ],
+          "runtime_nodes": [
+            "sql",
+            "analysis",
+            "report"
+          ],
+          "artifact_delta": 1,
+          "assertions": 21
+        }
+      ]
+    },
+    {
+      "case_id": "failure_workorder_persistence",
+      "category": "failure",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "根据这个报告创建工单草稿。",
+          "status": "failed",
+          "capabilities": [
+            "create_workorder_draft"
+          ],
+          "runtime_nodes": [
+            "workorder",
+            "approval"
+          ],
+          "artifact_delta": 0,
+          "assertions": 22
+        }
+      ]
+    },
+    {
+      "case_id": "failure_trace_exporter",
+      "category": "failure",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1运行状态。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 18
+        }
+      ]
+    },
+    {
+      "case_id": "flags_all_off",
+      "category": "feature_flags",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "A07089是什么意思？",
+          "status": "completed",
+          "capabilities": [
+            "explain_fault_code"
+          ],
+          "runtime_nodes": [
+            "rag"
+          ],
+          "artifact_delta": 1,
+          "assertions": 21
+        }
+      ]
+    },
+    {
+      "case_id": "flags_fallback_explicit_no_call",
+      "category": "feature_flags",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "查询G120电机1当前状态。",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "flags_fallback_cannot_override_dispatch",
+      "category": "feature_flags",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "正式派发工单。",
+          "status": "blocked",
+          "capabilities": [
+            "dispatch_workorder"
+          ],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 21
+        }
+      ]
+    },
+    {
+      "case_id": "flags_fallback_success",
+      "category": "feature_flags",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "G120电机1最近运转还顺利吗？",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 21
+        }
+      ]
+    },
+    {
+      "case_id": "flags_fallback_timeout",
+      "category": "feature_flags",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "帮我处理一下。",
+          "status": "completed",
+          "capabilities": [],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 19
+        }
+      ]
+    },
+    {
+      "case_id": "flags_fallback_invalid_json",
+      "category": "feature_flags",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "帮我处理一下。",
+          "status": "completed",
+          "capabilities": [],
+          "runtime_nodes": [],
+          "artifact_delta": 0,
+          "assertions": 19
+        }
+      ]
+    },
+    {
+      "case_id": "flags_grounded_answer_success",
+      "category": "feature_flags",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "A07089是什么意思？",
+          "status": "completed",
+          "capabilities": [
+            "explain_fault_code"
+          ],
+          "runtime_nodes": [
+            "rag"
+          ],
+          "artifact_delta": 1,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "flags_grounded_answer_timeout",
+      "category": "feature_flags",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "A07089是什么意思？",
+          "status": "completed",
+          "capabilities": [
+            "explain_fault_code"
+          ],
+          "runtime_nodes": [
+            "rag"
+          ],
+          "artifact_delta": 1,
+          "assertions": 20
+        }
+      ]
+    },
+    {
+      "case_id": "flags_shadow_and_fallback_single_call",
+      "category": "feature_flags",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "user": "G120电机1最近运转还顺利吗？",
+          "status": "completed",
+          "capabilities": [
+            "check_runtime_status"
+          ],
+          "runtime_nodes": [
+            "sql"
+          ],
+          "artifact_delta": 1,
+          "assertions": 21
+        }
+      ]
+    }
+  ]
+}

@@ -177,6 +177,8 @@ def _merge_node_spec(specs: list[dict], *, node_type: str, device: str, goal_id:
     same_type = [item for item in specs if item["node_type"] == node_type]
     if node_type == "sql":
         existing = next((item for item in same_type if item["device"] == device), None)
+    elif node_type == "workorder":
+        existing = None
     else:
         existing = same_type[0] if same_type else None
     if existing is not None:

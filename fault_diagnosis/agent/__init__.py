@@ -40,7 +40,7 @@ from .contracts import (
 from .context import ContextFrameAdapter
 from .engine import AgentEngineV2
 from .evidence import EvidenceLedgerWriter, LedgerCommitResult, LedgerValidationResult, project_ledger_to_evidence_bundle
-from .flags import AgentEngineFlags, effective_skill_mode, load_agent_engine_flags, should_build_v2_compare
+from .flags import AgentEngineFlags, effective_skill_mode, load_agent_engine_flags
 from .output import (
     build_output_frame,
     build_reportable_payload,
@@ -132,5 +132,4 @@ __all__ = [
     "project_token",
     "project_tool_end",
     "project_tool_start",
-    "should_build_v2_compare",
 ]

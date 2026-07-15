@@ -70,12 +70,25 @@ class RagNode:
         token = set_current_auth_context(auth)
         started_at = _utc_now_iso()
         started = time.monotonic()
+        timed_out = False
         try:
             raw_output = self.tool_runtime.query_knowledge_base(query)
+        except TimeoutError:
+            raw_output = None
+            timed_out = True
         finally:
             duration_ms = max(0.1, round((time.monotonic() - started) * 1000, 1))
             ended_at = _utc_now_iso()
             reset_current_auth_context(token)
+
+        if timed_out:
+            message = "知识库检索超时，未获得可靠证据，请稍后重试或缩小查询范围。"
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"success": False, "error": {"code": "kb_timeout", "message": message}},
+                tool_call_refs=["query_knowledge_base"],
+                error={"code": "kb_timeout", "message": message},
+            )
 
         classified = _classify_kb_output(raw_output)
         text = classified["text"]

@@ -123,7 +123,15 @@ class CanonicalContextBinder:
     """The sole production authority for binding existing context to Goals."""
 
     def bind(self, request: CanonicalTurnRequest, candidates: list[ContextCandidate]) -> BoundCanonicalTurn:
-        bindings = [self._bind_goal(request, goal, candidates) for goal in request.goals]
+        bindings: list[GoalContextBinding] = []
+        by_goal: dict[str, GoalContextBinding] = {}
+        for goal in request.goals:
+            binding = self._bind_goal(request, goal, candidates)
+            dependencies = [by_goal[item] for item in goal.dependencies if item in by_goal]
+            if len(dependencies) == 1:
+                binding = _inherit_dependency_context(binding, dependencies[0])
+            bindings.append(binding)
+            by_goal[goal.goal_id] = binding
         return BoundCanonicalTurn(canonical_turn=request, goal_bindings=bindings)
 
     def _bind_goal(self, request, goal, candidates) -> GoalContextBinding:  # noqa: ANN001
@@ -236,6 +244,37 @@ def _select(candidates: list[ContextCandidate], types: tuple[str, ...], explicit
     best = min(rank(item) for item in candidates)
     matches = [item for item in candidates if rank(item) == best]
     return (matches[0], False) if len(matches) == 1 else (None, True)
+
+
+def _inherit_dependency_context(binding: GoalContextBinding, dependency: GoalContextBinding) -> GoalContextBinding:
+    """Carry canonical sibling context across an explicit Goal dependency."""
+
+    slot_by_name = {item.slot_name: item for item in dependency.slots}
+    slots = [
+        slot_by_name[item.slot_name].model_copy(update={"status": "inherited"}, deep=True)
+        if item.status == "unbound" and item.slot_name in slot_by_name and slot_by_name[item.slot_name].values
+        else item
+        for item in binding.slots
+    ]
+    assets = binding.asset_refs or dependency.asset_refs
+    sources = binding.source_artifact_refs or dependency.source_artifact_refs
+    blockers = [
+        item for item in binding.blockers
+        if not (item == "missing_asset" and assets) and not (item == "missing_source" and sources)
+    ]
+    clarification = binding.clarification
+    if clarification and clarification.reason_code in {"missing_asset", "missing_source"} and not blockers:
+        clarification = None
+    return binding.model_copy(update={
+        "asset_refs": assets,
+        "fault_codes": binding.fault_codes or dependency.fault_codes,
+        "time_window": binding.time_window or dependency.time_window,
+        "source_artifact_refs": sources,
+        "slots": slots,
+        "blockers": blockers,
+        "clarification": clarification,
+        "binding_status": "bound" if not blockers else binding.binding_status,
+    }, deep=True)
 
 
 def _focus_candidates(candidates: list[ContextCandidate]) -> list[ContextCandidate]:

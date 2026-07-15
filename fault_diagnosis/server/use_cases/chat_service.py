@@ -358,7 +358,8 @@ class ChatService:
         if config.ENABLE_LLM_INTENT_SHADOW:
             from fault_diagnosis.agent.canonical_turn.intent_shadow_service import IntentShadowService
 
-            intent_shadow = IntentShadowService().evaluate_current_message(
+            intent_shadow_service = getattr(request.app.state, "intent_shadow_service", None) or IntentShadowService()
+            intent_shadow = intent_shadow_service.evaluate_current_message(
                 canonical.request.current_parse
             )
             summary = intent_shadow.model_dump(mode="json") if intent_shadow else None

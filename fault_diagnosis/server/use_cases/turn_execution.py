@@ -45,7 +45,10 @@ class ProductionTurnCoordinator:
             pending_repository = SQLitePendingClarificationRepository(
                 path=Path(conversation_path).with_name("pending_clarifications.sqlite3")
             )
-        self.coordinator = ConversationTurnCoordinator(pending_repository=pending_repository)
+        self.coordinator = ConversationTurnCoordinator(
+            parser=getattr(app.state, "current_utterance_parser", None),
+            pending_repository=pending_repository,
+        )
         self._stream_replays: dict[tuple[str, str, str], list[str]] = {}
 
     def build_read_only_context(self, context) -> dict[str, Any] | None:

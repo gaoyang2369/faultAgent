@@ -38,7 +38,8 @@ class AnalysisNode:
                 },
             )
         try:
-            sql_artifact = require_payload(sql_sources[0], SqlArtifactPayload).sql_artifact
+            sql_payload = require_payload(sql_sources[0], SqlArtifactPayload)
+            sql_artifact = sql_payload.sql_artifact
             knowledge_artifact = (
                 require_payload(knowledge_sources[0], KnowledgeArtifactPayload).knowledge_artifact
                 if len(knowledge_sources) == 1
@@ -49,6 +50,12 @@ class AnalysisNode:
                 status="blocked",
                 output={"success": False, "artifact_access_error": exc.code},
                 error={"code": exc.code, "message": exc.message},
+            )
+        if not sql_payload.runtime_status_assessment.data_basis.usable_for_diagnosis:
+            return NodeExecutionOutput(
+                status="blocked",
+                output={"success": False, "data_state": "no_data"},
+                error={"code": "no_data_for_diagnosis", "message": "没有可用于诊断的运行数据。"},
             )
         request = build_request(state, node, goal="DCMA 运行诊断分析")
         structured = diagnose_dcma_runtime(sql_artifact, knowledge_artifact, request)

@@ -32,15 +32,5 @@ def effective_skill_mode(skill_name: str, *, flags: AgentEngineFlags | None = No
     return "v2"
 
 
-def should_build_v2_compare(*, flags: AgentEngineFlags | None = None) -> bool:  # noqa: ARG001
-    return False
-
-
-def compare_log_path() -> str:
-    import fault_diagnosis.platform.settings as config
-
-    return config.AGENT_ENGINE_V2_COMPARE_LOG_PATH
-
-
 def _engine_mode() -> EngineMode:
     return "v2"

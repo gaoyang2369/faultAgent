@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from fault_diagnosis.agent.context.source_selector import GoalScopedSourceSelector, allowed_source_types
-from fault_diagnosis.agent.contracts import ArtifactLineage, ArtifactManifest, EffectiveGoal
+import importlib.util
+import inspect
+
+from fault_diagnosis.agent import AgentEngineV2
+from fault_diagnosis.agent.contracts import ArtifactLineage, ArtifactManifest
 from fault_diagnosis.agent.runtime import plan_preparer
 from fault_diagnosis.domain.context.conversation_context import _latest_artifact_manifests
 from fault_diagnosis.domain.diagnosis.contracts import DiagnosisArtifactEnvelope, DiagnosisArtifactType
@@ -39,68 +42,17 @@ def _manifest(
     )
 
 
-def _goal(capability: str, *, policy: str = "reuse_verified_artifact") -> EffectiveGoal:
-    return EffectiveGoal(goal_id=f"goal_{capability}", capability=capability, source_policy=policy)
+def test_retired_source_selector_and_effective_request_builder_are_absent() -> None:
+    assert importlib.util.find_spec("fault_diagnosis.agent.context.source_selector") is None
+    assert importlib.util.find_spec("fault_diagnosis.agent.context.effective_request") is None
+    assert importlib.util.find_spec("fault_diagnosis.agent.context.goals") is None
 
 
-def test_goal_source_type_matrix_is_explicit() -> None:
-    assert allowed_source_types("explain_fault_code") == ("knowledge_artifact",)
-    assert allowed_source_types("check_runtime_status") == ("sql_artifact",)
-    assert allowed_source_types("diagnose_fault") == ("analysis_artifact", "sql_artifact")
-    assert allowed_source_types("resolution_recommendation") == ("analysis_artifact", "sql_artifact")
-    assert allowed_source_types("generate_report") == (
-        "analysis_artifact",
-        "comparison_artifact",
-        "sql_artifact",
-    )
-    assert allowed_source_types("create_workorder_draft") == ("report_artifact", "analysis_artifact")
-    assert allowed_source_types("confirm_workorder_draft") == ("workorder_artifact",)
-
-
-def test_incompatible_explicit_reference_never_guesses_lineage_ancestor() -> None:
-    report = _manifest("report-1", "report_artifact", sources=["analysis-1"])
-    workorder = _manifest("workorder-1", "workorder_artifact", sources=[report.artifact_id])
-    analysis = _manifest("analysis-1", "analysis_artifact", sources=["sql-1"])
-    sql = _manifest("sql-1", "sql_artifact")
-    selection = GoalScopedSourceSelector().select(
-        goal=_goal("create_workorder_draft"),
-        manifests=[workorder, report, analysis, sql],
-        explicit_artifact_id=workorder.artifact_id,
-        expected_devices=["G120电机2"],
-        thread_id=workorder.thread_id,
-    )
-    assert selection.status == "incompatible"
-    assert selection.binding is None
-    assert selection.observation["selection_reason"] == "explicit_source_type_incompatible"
-
-
-def test_incompatible_explicit_reference_does_not_inspect_multiple_ancestors() -> None:
-    report = _manifest("report-1", "report_artifact")
-    analysis = _manifest("analysis-1", "analysis_artifact")
-    workorder = _manifest("workorder-1", "workorder_artifact", sources=[report.artifact_id, analysis.artifact_id])
-    selection = GoalScopedSourceSelector().select(
-        goal=_goal("create_workorder_draft"),
-        manifests=[workorder, report, analysis],
-        explicit_artifact_id=workorder.artifact_id,
-        expected_devices=["G120电机2"],
-        thread_id=workorder.thread_id,
-    )
-    assert selection.status == "incompatible"
-    assert selection.binding is None
-    assert selection.observation["selection_reason"] == "explicit_source_type_incompatible"
-
-
-def test_collect_new_policy_never_binds_historical_candidate() -> None:
-    sql = _manifest("sql-1", "sql_artifact")
-    selection = GoalScopedSourceSelector().select(
-        goal=_goal("check_runtime_status", policy="refresh_runtime_data"),
-        manifests=[sql],
-        explicit_artifact_id=sql.artifact_id,
-        expected_devices=["G120电机2"],
-        thread_id=sql.thread_id,
-    )
-    assert selection.status == "requires_execution"
-    assert selection.binding is None
+def test_engine_facade_no_longer_accepts_legacy_planning_authorities() -> None:
+    parameters = inspect.signature(AgentEngineV2.build_plan_snapshot).parameters
+    assert "legacy_plan" not in parameters
+    assert "llm_candidate_plan" not in parameters
+    assert "recent_context_signals" not in parameters
 
 
 def test_context_manifest_inventory_recursively_loads_exact_lineage() -> None:

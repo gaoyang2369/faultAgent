@@ -91,7 +91,16 @@ def resolve_goal_sources(
             results.append(GoalSourceResolution(goal_id=goal.goal_id, status="stale", artifact_id=selected.artifact_ref if selected else None, artifact_type=selected.artifact_type if selected else None, source_freshness=selected.freshness_state if selected else "stale", reason_code="refresh_required", reason="bound source requires refresh", resolved_slots=slots))
             continue
         if goal.dependencies and goal.capability in {"generate_report", "evaluate_workorder_need", "create_workorder_draft"}:
-            results.append(GoalSourceResolution(goal_id=goal.goal_id, status="requires_execution", reason="same-turn canonical dependency supplies the execution source", resolved_slots=slots))
+            results.append(GoalSourceResolution(
+                goal_id=goal.goal_id,
+                status="requires_execution",
+                artifact_id=selected.artifact_ref if selected else None,
+                artifact_type=selected.artifact_type if selected else None,
+                source_freshness=selected.freshness_state if selected else "unknown",
+                reason="same-turn canonical dependency supplies the execution source",
+                candidate_artifact_ids=[str(selected.artifact_ref)] if selected and selected.artifact_ref else [],
+                resolved_slots=slots,
+            ))
             continue
         if selected is None:
             reason = "no evidence candidate; return insufficient_evidence" if goal.capability == "evaluate_workorder_need" else "new execution required"

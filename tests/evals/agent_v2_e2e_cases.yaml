@@ -1,0 +1,408 @@
+schema_version: agent_v2_e2e_cases.v1
+cases:
+  - case_id: guest_fault_code_detail
+    category: guest
+    role: guest
+    turns:
+      - user: "A07089是什么意思？"
+        expect: {capabilities: [explain_fault_code], status: completed, runtime_nodes: [rag], forbidden_nodes: [sql, analysis, report, workorder]}
+      - user: "详细点。"
+        expect: {capabilities: [explain_fault_code], status: completed, runtime_nodes: [rag], inherited_fault_codes: [A07089], forbidden_nodes: [sql, analysis, report, workorder]}
+
+  - case_id: guest_fault_code_detail_timeout
+    category: guest
+    role: guest
+    turns:
+      - user: "A07089是什么意思？"
+        expect: {capabilities: [explain_fault_code], status: completed, runtime_nodes: [rag]}
+      - user: "详细点。"
+        failure: rag_timeout
+        expect: {capabilities: [explain_fault_code], status: blocked, runtime_nodes: [rag], inherited_fault_codes: [A07089], forbidden_completed_nodes: [rag], artifact_delta: 0, answer_contains: ["知识库检索超时"]}
+
+  - case_id: guest_runtime_realtime
+    category: guest
+    role: guest
+    data_profile: realtime
+    turns:
+      - user: "查询G120电机1最近一小时的运行状态。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql], resolution_mode: realtime_window}
+
+  - case_id: guest_diagnosis_denied
+    category: guest
+    role: guest
+    turns:
+      - user: "分析G120电机1是否存在故障。"
+        expect: {capabilities: [diagnose_fault], status: blocked, runtime_nodes: [], no_sql: true, artifact_delta: 0}
+
+  - case_id: guest_report_denied
+    category: guest
+    role: guest
+    turns:
+      - user: "给G120电机1生成运行报告。"
+        expect: {capabilities: [generate_report], status: blocked, runtime_nodes: [], artifact_delta: 0, answer_not_contains: ["V2 runtime only executes validated plans."]}
+
+  - case_id: guest_workorder_semantics
+    category: guest
+    role: guest
+    turns:
+      - user: "判断G120电机1是否需要工单。"
+        expect: {capabilities: [evaluate_workorder_need], status: blocked, runtime_nodes: [], artifact_delta: 0}
+      - user: "为G120电机1生成工单草稿。"
+        expect: {capabilities: [create_workorder_draft], status: blocked, runtime_nodes: [], artifact_delta: 0}
+      - user: "把这个工单正式派发出去。"
+        expect: {capabilities: [dispatch_workorder], status: blocked, runtime_nodes: [], artifact_delta: 0, dispatch_runtime_nodes: 0}
+
+  - case_id: engineer_owned_status
+    category: engineer
+    role: engineer
+    assigned_assets: [g120_motor_1]
+    allowed_tables: [real_data_01]
+    turns:
+      - user: "查询G120电机1最近状态。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql]}
+
+  - case_id: engineer_unowned_status
+    category: engineer
+    role: engineer
+    assigned_assets: [g120_motor_1]
+    allowed_tables: [real_data_01, real_data_02]
+    turns:
+      - user: "查询G120电机2最近状态。"
+        expect: {capabilities: [check_runtime_status], status: blocked, runtime_nodes: [], no_sql: true, artifact_delta: 0}
+
+  - case_id: engineer_status_then_diagnose
+    category: engineer
+    role: engineer
+    assigned_assets: [g120_motor_1]
+    allowed_tables: [real_data_01]
+    turns:
+      - user: "查询G120电机1最近状态。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql]}
+      - user: "分析一下是否异常。"
+        expect: {capabilities: [diagnose_fault], status: completed, runtime_nodes: [analysis], inherited_devices: [G120电机1], require_lineage: true, no_sql: true}
+
+  - case_id: engineer_diagnose_report_dag
+    category: engineer
+    role: engineer
+    assigned_assets: [g120_motor_1]
+    allowed_tables: [real_data_01]
+    turns:
+      - user: "查询G120电机1最近状态。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql]}
+      - user: "分析是否异常，并生成运行报告。"
+        expect: {capabilities: [diagnose_fault, generate_report], status: completed, runtime_nodes: [analysis, report], require_lineage: true, no_sql: true}
+
+  - case_id: engineer_report_evaluate
+    category: engineer
+    role: engineer
+    assigned_assets: [g120_motor_1]
+    allowed_tables: [real_data_01]
+    turns:
+      - user: "查询并分析G120电机1的故障，并生成运行报告。"
+        expect: {capabilities: [diagnose_fault, generate_report], status: completed, runtime_nodes: [sql, analysis, report], require_lineage: true}
+      - user: "看起来有问题，需要生成工单吗？"
+        expect: {capabilities: [evaluate_workorder_need], status: completed, runtime_nodes: [workorder], forbidden_nodes: [approval]}
+
+  - case_id: engineer_report_create_draft_dispatch
+    category: engineer
+    role: engineer
+    assigned_assets: [g120_motor_1]
+    allowed_tables: [real_data_01]
+    turns:
+      - user: "查询并分析G120电机1的故障，并生成运行报告。"
+        expect: {capabilities: [diagnose_fault, generate_report], status: completed, runtime_nodes: [sql, analysis, report], require_lineage: true}
+      - user: "根据这个结果创建工单草稿。"
+        expect: {capabilities: [create_workorder_draft], status: completed, runtime_nodes: [workorder, approval], require_lineage: true}
+      - user: "把这个工单正式派发出去。"
+        expect: {capabilities: [dispatch_workorder], status: blocked, runtime_nodes: [], dispatch_runtime_nodes: 0}
+
+  - case_id: engineer_unauthorized_history
+    category: engineer
+    role: engineer
+    assigned_assets: [g120_motor_1]
+    allowed_tables: [real_data_01]
+    pre_turns:
+      - role: admin
+        user: "查询并分析G120电机2的故障，并生成报告。"
+    turns:
+      - user: "基于刚才报告创建工单。"
+        expect: {capabilities: [create_workorder_draft], status: blocked, runtime_nodes: [], artifact_delta: 0, unauthorized_inheritance: 0}
+
+  - case_id: admin_compare
+    category: admin
+    role: admin
+    turns:
+      - user: "比较G120电机1和G120电机2的运行状态。"
+        expect: {capabilities: [compare_runtime_status], status: completed, runtime_nodes: [sql, sql, comparison], require_lineage: true}
+
+  - case_id: admin_compare_singular_pronoun
+    category: admin
+    role: admin
+    turns:
+      - user: "比较G120电机1和G120电机2。"
+        expect: {capabilities: [compare_runtime_status], status: completed, runtime_nodes: [sql, sql, comparison]}
+      - user: "它有没有故障？"
+        expect: {capabilities: [diagnose_fault], status: blocked, runtime_nodes: [], binding_status: needs_clarification}
+
+  - case_id: admin_compare_plural_pronoun
+    category: admin
+    role: admin
+    turns:
+      - user: "比较G120电机1和G120电机2。"
+        expect: {capabilities: [compare_runtime_status], status: completed, runtime_nodes: [sql, sql, comparison]}
+      - user: "它们分别有没有异常？"
+        expect: {capabilities: [diagnose_fault], status: blocked, runtime_nodes: [], binding_status: needs_clarification}
+
+  - case_id: admin_explicit_device_switch
+    category: admin
+    role: admin
+    turns:
+      - user: "查询G120电机1。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql]}
+      - user: "改成看G120电机2。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql], inherited_devices: [G120电机2], forbidden_devices: [G120电机1]}
+
+  - case_id: admin_time_override
+    category: admin
+    role: admin
+    turns:
+      - user: "查询G120电机1最近一小时。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql]}
+      - user: "改成最近两小时。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql], inherited_devices: [G120电机1], time_window_contains: "两小时"}
+
+  - case_id: condition_report_true
+    category: condition
+    role: admin
+    data_profile: abnormal
+    turns:
+      - user: "分析G120电机1，如果异常再生成报告。"
+        expect: {capabilities: [diagnose_fault, generate_report], status: completed, runtime_nodes: [sql, analysis, report], condition_node: {node_type: report, status: completed}}
+
+  - case_id: condition_report_false
+    category: condition
+    role: admin
+    data_profile: normal
+    turns:
+      - user: "分析G120电机1，如果异常再生成报告。"
+        expect: {capabilities: [diagnose_fault, generate_report], status: completed, runtime_nodes: [sql, analysis, report], condition_node: {node_type: report, status: skipped, code: skipped_condition_not_met}}
+
+  - case_id: condition_report_unknown
+    category: condition
+    role: admin
+    data_profile: empty
+    turns:
+      - user: "分析G120电机1，如果异常再生成报告。"
+        expect: {capabilities: [diagnose_fault, generate_report], status: blocked, runtime_nodes: [sql, analysis, report], condition_node: {node_type: report, status: blocked, code: blocked_condition_unresolved}}
+
+  - case_id: condition_workorder_recommended
+    category: condition
+    role: admin
+    data_profile: abnormal
+    pre_turns:
+      - user: "查询并分析G120电机1的故障，并生成运行报告。"
+    turns:
+      - user: "先判断是否需要工单，如果建议建单，就生成工单草稿。"
+        expect: {capabilities: [evaluate_workorder_need, create_workorder_draft], status: completed, runtime_nodes: [workorder, workorder, approval], condition_node: {node_type: workorder, status: completed}, require_lineage: true}
+
+  - case_id: condition_workorder_not_recommended
+    category: condition
+    role: admin
+    data_profile: normal
+    pre_turns:
+      - user: "查询并分析G120电机1的故障，并生成运行报告。"
+    turns:
+      - user: "先判断是否需要工单，如果建议建单，就生成工单草稿。"
+        expect: {capabilities: [evaluate_workorder_need, create_workorder_draft], status: completed, runtime_nodes: [workorder, workorder, approval], condition_node: {node_type: workorder, status: skipped, code: skipped_condition_not_met}}
+
+  - case_id: condition_workorder_insufficient
+    category: condition
+    role: admin
+    turns:
+      - user: "先判断G120电机1是否需要工单，如果建议建单，就生成工单草稿。"
+        expect: {capabilities: [evaluate_workorder_need, create_workorder_draft], status: blocked, runtime_nodes: [], artifact_delta: 0}
+
+  - case_id: data_latest_fallback
+    category: data_source
+    role: admin
+    data_profile: fallback
+    turns:
+      - user: "查询G120电机1最近一小时运行状态。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql], resolution_mode: latest_available_fallback, limitations_required: true}
+
+  - case_id: data_no_rows
+    category: data_source
+    role: admin
+    data_profile: empty
+    turns:
+      - user: "分析G120电机1是否故障，并生成报告。"
+        expect: {capabilities: [diagnose_fault, generate_report], status: blocked, runtime_nodes: [sql, analysis, report], resolution_mode: no_data, forbidden_completed_nodes: [analysis, report]}
+
+  - case_id: realtime_refresh_old_artifact
+    category: data_source
+    role: admin
+    data_profile: realtime
+    turns:
+      - user: "查询G120电机1最近状态。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql]}
+      - user: "查询当前实时状态。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql], sql_required: true}
+
+  - case_id: explicit_reuse_old_result
+    category: data_source
+    role: admin
+    data_profile: fallback
+    turns:
+      - user: "查询G120电机1最近状态。"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql], resolution_mode: latest_available_fallback}
+      - user: "无需重新查询，基于刚才结果分析。"
+        expect: {capabilities: [diagnose_fault], status: completed, runtime_nodes: [analysis], no_sql: true, require_lineage: true}
+
+  - case_id: failure_sql_timeout
+    category: failure
+    role: admin
+    failure: sql_timeout
+    turns:
+      - user: "分析G120电机1是否故障，并生成报告。"
+        expect: {status: failed, runtime_nodes: [sql, analysis, report], forbidden_completed_nodes: [sql, analysis, report]}
+
+  - case_id: failure_rag_timeout
+    category: failure
+    role: guest
+    failure: rag_timeout
+    turns:
+      - user: "A07089是什么意思？"
+        expect: {capabilities: [explain_fault_code], status: blocked, runtime_nodes: [rag], forbidden_completed_nodes: [rag], artifact_delta: 0, answer_contains: ["知识库检索超时"]}
+
+  - case_id: failure_artifact_persistence
+    category: failure
+    role: admin
+    artifact_backend: save_failure
+    turns:
+      - user: "查询G120电机1运行状态。"
+        expect: {status: failed, runtime_nodes: [sql], artifact_delta: 0, forbidden_completed_nodes: [sql]}
+
+  - case_id: failure_artifact_readback
+    category: failure
+    role: admin
+    artifact_backend: readback_failure
+    turns:
+      - user: "查询G120电机1运行状态。"
+        expect: {status: failed, runtime_nodes: [sql], artifact_delta: 0, forbidden_completed_nodes: [sql]}
+
+  - case_id: failure_report_generation
+    category: failure
+    role: admin
+    failure: report_failure
+    turns:
+      - user: "分析G120电机1是否故障，并生成报告。"
+        expect: {status: failed, runtime_nodes: [sql, analysis, report], forbidden_completed_nodes: [report]}
+
+  - case_id: failure_workorder_persistence
+    category: failure
+    role: admin
+    artifact_backend: workorder_failure
+    pre_turns:
+      - user: "查询并分析G120电机1的故障，并生成运行报告。"
+    turns:
+      - user: "根据这个报告创建工单草稿。"
+        expect: {capabilities: [create_workorder_draft], status: failed, runtime_nodes: [workorder, approval], artifact_delta: 0, forbidden_completed_nodes: [workorder, approval]}
+
+  - case_id: failure_trace_exporter
+    category: failure
+    role: admin
+    failure: trace_export_failure
+    turns:
+      - user: "查询G120电机1运行状态。"
+        expect: {status: completed, runtime_nodes: [sql]}
+
+  - case_id: flags_all_off
+    category: feature_flags
+    role: guest
+    flags: {grounded_answer: false, intent_shadow: false, intent_fallback: false}
+    turns:
+      - user: "A07089是什么意思？"
+        expect: {status: completed, runtime_nodes: [rag], intent_model_calls_plan: 0, intent_model_calls_stream: 0, answer_model_calls: 0}
+
+  - case_id: flags_fallback_explicit_no_call
+    category: feature_flags
+    role: admin
+    flags: {intent_fallback: true}
+    intent_model: success
+    turns:
+      - user: "查询G120电机1当前状态。"
+        expect: {status: completed, runtime_nodes: [sql], intent_model_calls_plan: 0, intent_model_calls_stream: 0}
+
+  - case_id: flags_fallback_cannot_override_dispatch
+    category: feature_flags
+    role: admin
+    flags: {intent_fallback: true}
+    intent_model: success
+    turns:
+      - user: "正式派发工单。"
+        expect: {capabilities: [dispatch_workorder], status: blocked, runtime_nodes: [], intent_model_calls_plan: 0, intent_model_calls_stream: 0, dispatch_runtime_nodes: 0}
+
+  - case_id: flags_fallback_success
+    category: feature_flags
+    role: admin
+    flags: {intent_fallback: true}
+    intent_model: success
+    turns:
+      - user: "G120电机1最近运转还顺利吗？"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql], intent_model_calls_plan: 1, intent_model_calls_stream: 1}
+
+  - case_id: flags_fallback_timeout
+    category: feature_flags
+    role: admin
+    flags: {intent_fallback: true}
+    intent_model: timeout
+    turns:
+      - user: "帮我处理一下。"
+        expect: {status: completed, runtime_nodes: [], intent_model_calls_plan: 1, intent_model_calls_stream: 1}
+
+  - case_id: flags_fallback_invalid_json
+    category: feature_flags
+    role: admin
+    flags: {intent_fallback: true}
+    intent_model: invalid
+    turns:
+      - user: "帮我处理一下。"
+        expect: {status: completed, runtime_nodes: [], intent_model_calls_plan: 1, intent_model_calls_stream: 1}
+
+  - case_id: flags_grounded_answer_success
+    category: feature_flags
+    role: guest
+    flags: {grounded_answer: true}
+    answer_model: success
+    turns:
+      - user: "A07089是什么意思？"
+        expect: {status: completed, runtime_nodes: [rag], answer_model_calls: 1, answer_synthesis_status: generated}
+
+  - case_id: flags_grounded_answer_timeout
+    category: feature_flags
+    role: guest
+    flags: {grounded_answer: true}
+    answer_model: timeout
+    turns:
+      - user: "A07089是什么意思？"
+        expect: {status: completed, runtime_nodes: [rag], answer_model_calls: 1, answer_synthesis_status: model_timeout}
+
+  - case_id: flags_shadow_and_fallback_single_call
+    category: feature_flags
+    role: admin
+    flags: {intent_shadow: true, intent_fallback: true}
+    intent_model: success
+    turns:
+      - user: "G120电机1最近运转还顺利吗？"
+        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql], intent_model_calls_plan: 1, intent_model_calls_stream: 1}
+
+invariants:
+  unauthorized_artifact_count: 0
+  assistant_text_used_as_evidence: false
+  failed_artifact_reused: 0
+  denied_artifact_reused: 0
+  ambiguous_device_auto_selection: 0
+  source_resolver_override: 0
+  orphan_report_goal: 0
+  orphan_workorder_goal: 0
+  dispatch_runtime_node_count: 0

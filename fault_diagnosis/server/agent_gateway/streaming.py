@@ -587,6 +587,9 @@ def _save_v2_complete_artifact(complete: dict[str, Any], *, thread_id: str) -> N
         envelope = DiagnosisArtifactEnvelope.model_validate(artifact)
         payload = envelope.payload if isinstance(envelope.payload, dict) else {}
         raw_envelopes = payload.get("artifact_envelopes") if isinstance(payload.get("artifact_envelopes"), list) else []
+        if not raw_envelopes:
+            complete["produced_artifacts"] = []
+            return
         committed = []
         failed_ids: list[str] = []
         for raw in raw_envelopes:

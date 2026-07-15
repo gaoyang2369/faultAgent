@@ -187,6 +187,38 @@ class WorkflowRuntimeExecutor:
                 self._cancel_remaining(state, graph, after_node_id=node_id, node_status=node_status)
                 return self._finish_cancelled(state)
 
+            condition = dict(node.get("condition") or {})
+            condition_state = _evaluate_condition(condition, state.node_results)
+            if condition and condition_state != "true":
+                code = "skipped_condition_not_met" if condition_state == "false" else "blocked_condition_unresolved"
+                status = "skipped" if condition_state == "false" else "blocked"
+                error = {
+                    "code": code,
+                    "message": "受控执行条件未满足，未执行该目标。" if status == "skipped" else "受控执行条件缺少结构化上游结论，已阻断该目标。",
+                }
+                result = node_result(
+                    node=node,
+                    status=status,
+                    input_summary=input_summary,
+                    output={"condition_result": condition_state, "predicate": condition.get("predicate")},
+                    error=error,
+                )
+                state.append_node_result(result)
+                node_status[node_id] = status
+                if status == "blocked":
+                    state.errors.append(error)
+                state.add_trace(
+                    "condition_gate",
+                    node_id=node_id,
+                    node_type=result.node_type,
+                    status=status,
+                    input_summary=input_summary,
+                    output_summary=_summarize_output(result.output),
+                    error=error,
+                    metadata={"condition": condition},
+                )
+                continue
+
             failed_deps = [
                 dep
                 for dep in graph.dependencies(node_id)
@@ -209,36 +241,6 @@ class WorkflowRuntimeExecutor:
                     input_summary=input_summary,
                     output_summary=_summarize_output(result.output),
                     retry_count=result.retry_count,
-                )
-                continue
-
-            condition = dict(node.get("condition") or {})
-            condition_state = _evaluate_condition(condition, state.node_results)
-            if condition and condition_state != "true":
-                code = "skipped_condition_not_met" if condition_state == "false" else "blocked_condition_unresolved"
-                status = "skipped" if condition_state == "false" else "blocked"
-                error = {
-                    "code": code,
-                    "message": "受控执行条件未满足，未执行该目标。" if status == "skipped" else "受控执行条件缺少结构化上游结论，已阻断该目标。",
-                }
-                result = node_result(
-                    node=node,
-                    status=status,
-                    input_summary=input_summary,
-                    output={"condition_result": condition_state, "predicate": condition.get("predicate")},
-                    error=error,
-                )
-                state.append_node_result(result)
-                node_status[node_id] = status
-                state.add_trace(
-                    "condition_gate",
-                    node_id=node_id,
-                    node_type=result.node_type,
-                    status=status,
-                    input_summary=input_summary,
-                    output_summary=_summarize_output(result.output),
-                    error=error,
-                    metadata={"condition": condition},
                 )
                 continue
 
@@ -311,6 +313,12 @@ class WorkflowRuntimeExecutor:
                     return self._finish_failed(state, error=result.error or {})
                 continue
 
+        if any(result.status == "failed" for result in state.node_results):
+            state.status = "failed"
+            return _runtime_result(state, status="failed")
+        if any(result.status == "blocked" for result in state.node_results):
+            state.status = "blocked"
+            return _runtime_result(state, status="blocked")
         return self._finish_completed(state)
 
     def _run_node_with_retry(
@@ -695,7 +703,7 @@ def _evaluate_condition(condition: dict[str, Any], results) -> str:  # noqa: ANN
     if predicate in {"diagnosis_is_abnormal", "fault_is_confirmed"}:
         if runtime.intersection({"abnormal", "attention"}) or finding_severities.intersection({"warning", "high", "critical"}):
             return "true"
-        if runtime.intersection({"normal"}) or (values.get("success") and not finding_severities):
+        if runtime.intersection({"normal"}):
             return "false"
     elif predicate == "risk_is_high":
         observed = severities | finding_severities | {str(item).lower() for item in values.get("risk_level", [])}

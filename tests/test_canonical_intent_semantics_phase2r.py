@@ -29,6 +29,7 @@ def _command(text: str) -> TurnCommand:
     [
         ("要不要生成工单？", "evaluate_workorder_need"),
         ("是否建议报修？", "evaluate_workorder_need"),
+        ("看起来有问题，需要生成工单吗？", "evaluate_workorder_need"),
         ("生成一份工单草稿。", "create_workorder_draft"),
         ("正式派发工单。", "dispatch_workorder"),
         ("直接安排工程师处理。", "dispatch_workorder"),

@@ -334,6 +334,16 @@ class TraceRecorder:
                 "dependency_goal_ids": [item.get("goal_id") for item in goals if not _canonical_user_requested(item)],
             },
         )
+        if not goals:
+            for stage in ("source_resolution", "readiness"):
+                self._add_span(
+                    span_id=f"span.goal.{stage}.empty",
+                    parent_span_id="span.canonical.request",
+                    name=f"goal.{stage}",
+                    kind="planner",
+                    status="completed",
+                    attributes={"goal_count": 0, "reason": "no_canonical_goal"},
+                )
         plan = snapshot.execution_plan
         for index, goal in enumerate(goals):
             goal_id = str(goal.get("goal_id") or f"goal_{index + 1}")

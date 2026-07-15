@@ -26,9 +26,6 @@ class AgentEngineV2:
         auth_context: Any | None = None,
         context_manager: Any | None = None,
         conversation_context: dict[str, Any] | None = None,
-        recent_context_signals: dict[str, Any] | None = None,  # noqa: ARG002 - deprecated compatibility input.
-        llm_candidate_plan: Any | None = None,  # noqa: ARG002 - canonical compiler never accepts plan authority.
-        legacy_plan: Any | None = None,  # noqa: ARG002 - retained only at the public facade boundary.
         metadata: dict[str, Any] | None = None,
         canonical_result=None,
     ) -> PlanSnapshotV2:

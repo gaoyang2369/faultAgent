@@ -12,7 +12,6 @@ from fault_diagnosis.agent import (
     WorkflowRuntimeExecutor,
 )
 from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_plan, prepare_v2_execution_validation
-from fault_diagnosis.agent.planning.plan_diff import diff_plans
 from fault_diagnosis.domain.security.permissions import build_auth_context
 
 
@@ -191,29 +190,6 @@ def test_llm_candidate_dangerous_tools_are_removed_and_blocked() -> None:
     assert result.validated_plan.allowed_tools == ["sql.read"]
     assert "sql.write" in result.removed_tools
     assert any(issue.code == "forbidden_tool_requested" for issue in result.issues)
-
-
-def test_plan_diff_compares_legacy_and_v2_surfaces() -> None:
-    legacy = {
-        "enabled_nodes": {"sql": True, "knowledge": False},
-        "runtime_tools": ["sql_db_query"],
-        "evidence_gaps": {"required_evidence": ["latest_runtime_status"]},
-        "requested_output": "answer",
-    }
-    v2 = ExecutionPlan(
-        nodes=[{"node_id": "sql_1", "node_type": "sql"}],
-        allowed_tools=["sql.read"],
-        required_evidence=["latest_runtime_status"],
-        expected_outputs=["status_brief"],
-    )
-
-    diff = diff_plans(legacy, v2)
-
-    assert diff["legacy"]["tools"] == ["sql.read"]
-    assert diff["v2"]["tools"] == ["sql.read"]
-    assert diff["added"]["nodes"] == []
-    assert diff["removed"]["nodes"] == []
-    assert diff["changed"]["expected_outputs"] == ["answer", "status_brief"]
 
 
 def test_build_plan_snapshot_replaces_plan_only_with_compat_wrapper() -> None:

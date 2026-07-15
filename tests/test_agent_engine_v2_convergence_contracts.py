@@ -119,15 +119,16 @@ def test_legacy_natural_language_and_url_remain_partial_without_lineage_proof() 
 def test_static_single_source_entrypoints() -> None:
     repo = Path(__file__).resolve().parents[1]
     artifacts_source = (repo / "fault_diagnosis/agent/artifacts.py").read_text(encoding="utf-8")
-    goals_source = (repo / "fault_diagnosis/agent/context/goals.py").read_text(encoding="utf-8")
-    effective_source = (repo / "fault_diagnosis/agent/context/effective_request.py").read_text(encoding="utf-8")
+    binding_source = (repo / "fault_diagnosis/agent/canonical_turn/context_binding.py").read_text(encoding="utf-8")
     answer_source = (repo / "fault_diagnosis/agent/output/answer.py").read_text(encoding="utf-8")
     presenter_source = (repo / "fault_diagnosis/agent/output/presenter.py").read_text(encoding="utf-8")
 
     assert artifacts_source.count("def artifact_id_factory(") == 1
     assert artifacts_source.count("artifact_id_factory(artifact_type)") == 1
-    assert goals_source.count("def canonicalize_requested_goals(") == 1
-    assert effective_source.count("canonicalize_requested_goals(") == 1
+    assert binding_source.count("class CanonicalContextBinder:") == 1
+    assert not (repo / "fault_diagnosis/agent/context/goals.py").exists()
+    assert not (repo / "fault_diagnosis/agent/context/effective_request.py").exists()
+    assert not (repo / "fault_diagnosis/agent/context/source_selector.py").exists()
     assert presenter_source.count("class CompositePresenter:") == 1
     assert answer_source.count("CompositePresenter().present(") == 1
     assert "def _infer_variant(" not in answer_source

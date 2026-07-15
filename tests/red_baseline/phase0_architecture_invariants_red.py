@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from fault_diagnosis.agent.context.source_selector import GoalScopedSourceSelector
-from fault_diagnosis.agent.contracts import ArtifactLineage, ArtifactManifest, EffectiveGoal
+import importlib.util
+
+from fault_diagnosis.agent.contracts import ArtifactLineage, ArtifactManifest
 from fault_diagnosis.agent.engine import AgentEngineV2
 from fault_diagnosis.agent.output.answer import build_output_frame
 from fault_diagnosis.domain.diagnosis.contracts import AnalysisStepArtifact
@@ -51,43 +52,27 @@ def test_pending_clarification_repository_has_waiting_cas_and_idempotency_bounda
     assert required_methods.issubset(set(dir(SQLitePendingClarificationRepository)))
 
 
-def test_source_selector_reports_satisfaction_not_merely_candidate_selection() -> None:
+def test_retired_source_selector_is_not_a_second_authority() -> None:
+    assert importlib.util.find_spec("fault_diagnosis.agent.context.source_selector") is None
+
+
+def test_canonical_source_resolution_reports_execution_source() -> None:
     analysis = _manifest("analysis:exact", "analysis_artifact", sources=["sql:exact"])
-    selection = GoalScopedSourceSelector().select(
-        goal=EffectiveGoal(
-            goal_id="goal_report",
-            capability="generate_report",
-            source_policy="reuse_verified_artifact",
-        ),
-        manifests=[analysis],
-        explicit_artifact_id=analysis.artifact_id,
-        expected_devices=["G120电机1"],
+    analysis.report_input_snapshot_schema_version = "report_input_snapshot.v1"
+    snapshot = AgentEngineV2().build_plan_snapshot(
+        raw_message="根据刚才诊断结果生成报告。",
         thread_id=analysis.thread_id,
+        auth_context=build_auth_context(role="admin"),
+        conversation_context={
+            "artifact_manifests": [analysis.model_dump(mode="json")],
+            "immediately_previous_assistant_turn": {
+                "produced_artifacts": [{"artifact_id": analysis.artifact_id}]
+            },
+        },
     )
-
-    assert selection.status == "source_for_execution"
-    assert selection.binding is not None
-    assert selection.binding.artifact_id == analysis.artifact_id
-
-
-def test_source_selector_does_not_recursively_guess_a_compatible_ancestor() -> None:
-    report = _manifest("report:old", "report_artifact", sources=["analysis:old"])
-    analysis = _manifest("analysis:old", "analysis_artifact", sources=["sql:old"])
-    selection = GoalScopedSourceSelector().select(
-        goal=EffectiveGoal(
-            goal_id="goal_report",
-            capability="generate_report",
-            source_policy="reuse_verified_artifact",
-        ),
-        manifests=[report, analysis],
-        explicit_artifact_id=report.artifact_id,
-        expected_devices=["G120电机1"],
-        thread_id=report.thread_id,
-    )
-
-    assert selection.status == "incompatible"
-    assert selection.binding is None
-    assert selection.observation["selection_reason"] == "explicit_source_type_incompatible"
+    resolution = snapshot.metadata["goal_source_resolution"][0]
+    assert resolution["status"] == "source_for_execution"
+    assert resolution["artifact_id"] == analysis.artifact_id
 
 
 def test_requested_goals_record_origin_and_clause_order() -> None:
