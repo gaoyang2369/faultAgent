@@ -320,6 +320,10 @@ class ClarificationRequirement(CanonicalContract):
         "ambiguous_source_artifact",
         "missing_asset",
         "missing_source",
+        "unknown_or_unavailable_context_asset",
+        "context_ordinal_out_of_range",
+        "conflicting_context_asset_constraints",
+        "comparison_role_requires_asset_constraint",
     ]
     question: str
     options: list[ClarificationOption] = Field(default_factory=list)

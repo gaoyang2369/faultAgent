@@ -17,6 +17,7 @@ from fault_diagnosis.domain.canonical_turn import (
 )
 from fault_diagnosis.domain.security.assets import asset_is_in_scope, resolve_asset
 from fault_diagnosis.domain.security.contracts import AuthContext
+from fault_diagnosis.agent.semantics.contracts import ContextSemanticProposal
 
 
 ARTIFACT_COMPATIBILITY: dict[str, tuple[str, ...]] = {
@@ -122,11 +123,18 @@ def project_authorized_context_candidates(
 class CanonicalContextBinder:
     """The sole production authority for binding existing context to Goals."""
 
-    def bind(self, request: CanonicalTurnRequest, candidates: list[ContextCandidate]) -> BoundCanonicalTurn:
+    def bind(
+        self,
+        request: CanonicalTurnRequest,
+        candidates: list[ContextCandidate],
+        *,
+        context_proposal: ContextSemanticProposal | None = None,
+        context_clarification_reason: str | None = None,
+    ) -> BoundCanonicalTurn:
         bindings: list[GoalContextBinding] = []
         by_goal: dict[str, GoalContextBinding] = {}
         for goal in request.goals:
-            binding = self._bind_goal(request, goal, candidates)
+            binding = self._bind_goal(request, goal, candidates, context_proposal, context_clarification_reason)
             dependencies = [by_goal[item] for item in goal.dependencies if item in by_goal]
             if len(dependencies) == 1:
                 binding = _inherit_dependency_context(binding, dependencies[0])
@@ -134,7 +142,7 @@ class CanonicalContextBinder:
             by_goal[goal.goal_id] = binding
         return BoundCanonicalTurn(canonical_turn=request, goal_bindings=bindings)
 
-    def _bind_goal(self, request, goal, candidates) -> GoalContextBinding:  # noqa: ANN001
+    def _bind_goal(self, request, goal, candidates, context_proposal=None, context_clarification_reason=None) -> GoalContextBinding:  # noqa: ANN001
         correction = any(item.kind == "correction_reference" for item in request.current_parse.entities)
         explicit_assets = _assets(_values(goal.resolved_slots.get("device")))
         if correction and explicit_assets:
@@ -147,20 +155,27 @@ class CanonicalContextBinder:
         prior = _prior_result(request, goal.clause_index)
         explicit_artifact = _clause_source_kind(request, goal.clause_index) == "artifact"
         reusable_runtime = bool(_reuse_requested(request.raw_message))
+        if context_proposal and context_proposal.requested_reuse and context_proposal.freshness_intent == "historical_ok":
+            reusable_runtime = True
         compatible_types = ARTIFACT_COMPATIBILITY.get(goal.capability, ())
         pool = [item for item in candidates if item.completed and item.artifact_type in compatible_types]
         if goal.capability == "generate_report":
             pool = [item for item in pool if item.artifact_type != "sql_artifact" or item.reportable]
         if explicit_assets:
             pool = [item for item in pool if not item.asset_refs or set(item.asset_refs) == set(explicit_assets)]
+        if context_proposal:
+            pool = _apply_context_constraints(pool, context_proposal)
+        if context_clarification_reason:
+            pool = []
         unavailable_previous = prior and any(item.candidate_id == "previous:unavailable" for item in candidates)
         if (explicit_artifact and not explicit_refs) or unavailable_previous:
             pool = []
-        selected, ambiguous_source = _select(pool, compatible_types, explicit_refs)
+        selected, ambiguous_source = _select(pool, compatible_types, explicit_refs, context_proposal=context_proposal)
         if goal.capability in {"check_runtime_status", "compare_runtime_status"} and not reusable_runtime:
             selected, ambiguous_source = None, False
 
-        assets = list(explicit_assets)
+        semantic_assets = list(context_proposal.include_asset_refs) if context_proposal else []
+        assets = list(explicit_assets or semantic_assets)
         codes = list(explicit_codes)
         window = explicit_window
         context_candidates = [selected] if selected else _focus_candidates(candidates)
@@ -176,7 +191,7 @@ class CanonicalContextBinder:
 
         source_refs = [selected.artifact_ref] if selected and selected.artifact_ref else []
         stale = bool(selected and selected.freshness_state in {"stale", "expired", "refresh_required"})
-        if selected and any(marker in request.raw_message for marker in ("实时", "当前最新", "最新数据")):
+        if selected and _current_freshness_required(request.raw_message, context_proposal):
             stale = True
         missing_asset = "device" in goal.required_slots and not assets and not ambiguous_asset
         unavailable_source = (explicit_artifact and not explicit_refs) or unavailable_previous
@@ -186,7 +201,13 @@ class CanonicalContextBinder:
         ) and not source_refs and not goal.dependencies
         clarification = None
         blockers: list[str] = []
-        if ambiguous_asset:
+        if context_clarification_reason:
+            blockers.append(context_clarification_reason)
+            clarification = ClarificationRequirement(
+                reason_code=context_clarification_reason,
+                question="请明确要使用的历史结果或设备范围。",
+            )
+        elif ambiguous_asset:
             blockers.append("ambiguous_asset_reference")
             clarification = ClarificationRequirement(
                 reason_code="ambiguous_asset_reference",
@@ -206,8 +227,8 @@ class CanonicalContextBinder:
             blockers.append("refresh_required")
 
         provenance = _provenance(selected or (context_candidates[0] if len(context_candidates) == 1 else None))
-        asset_status = "explicit" if explicit_assets else "ambiguous" if ambiguous_asset else "inherited" if assets else "unbound"
-        source_status = "unavailable" if unavailable_source else "ambiguous" if ambiguous_source else "refresh_required" if stale else "inherited" if source_refs else "unbound"
+        asset_status = "explicit" if explicit_assets else "inherited" if assets and not ambiguous_asset else "ambiguous" if ambiguous_asset else "unbound"
+        source_status = "unavailable" if unavailable_source else "ambiguous" if ambiguous_source or context_clarification_reason else "refresh_required" if stale else "inherited" if source_refs else "unbound"
         status = "refresh_required" if "refresh_required" in blockers else "needs_clarification" if clarification else "partially_bound" if blockers else "bound"
         return GoalContextBinding(
             goal_id=goal.goal_id,
@@ -229,7 +250,13 @@ class CanonicalContextBinder:
         )
 
 
-def _select(candidates: list[ContextCandidate], types: tuple[str, ...], explicit_refs: list[str]) -> tuple[ContextCandidate | None, bool]:
+def _select(
+    candidates: list[ContextCandidate],
+    types: tuple[str, ...],
+    explicit_refs: list[str],
+    *,
+    context_proposal: ContextSemanticProposal | None = None,
+) -> tuple[ContextCandidate | None, bool]:
     if explicit_refs:
         candidates = [item for item in candidates if item.artifact_ref in explicit_refs]
     if not candidates:
@@ -240,10 +267,50 @@ def _select(candidates: list[ContextCandidate], types: tuple[str, ...], explicit
         if key not in deduped or _source_rank(item) < _source_rank(deduped[key]):
             deduped[key] = item
     candidates = list(deduped.values())
-    rank = lambda item: (_source_rank(item), types.index(item.artifact_type) if item.artifact_type in types else 99)  # noqa: E731
+    if context_proposal and context_proposal.temporal_relation == "ordinal":
+        ordinal = context_proposal.ordinal or 0
+        return (candidates[ordinal - 1], False) if 0 < ordinal <= len(candidates) else (None, False)
+    rank = lambda item: _selection_rank(item, types, candidates, context_proposal)  # noqa: E731
     best = min(rank(item) for item in candidates)
     matches = [item for item in candidates if rank(item) == best]
     return (matches[0], False) if len(matches) == 1 else (None, True)
+
+
+def _apply_context_constraints(
+    candidates: list[ContextCandidate], proposal: ContextSemanticProposal,
+) -> list[ContextCandidate]:
+    """在兼容且 ACL 可见的候选集内应用已验证筛选，不接触 Artifact 内容。"""
+
+    result = candidates
+    if proposal.include_asset_refs:
+        required = set(proposal.include_asset_refs)
+        result = [item for item in result if required.issubset(set(item.asset_refs))]
+    if proposal.exclude_asset_refs:
+        excluded = set(proposal.exclude_asset_refs)
+        result = [item for item in result if not excluded.intersection(item.asset_refs)]
+    return result
+
+
+def _selection_rank(
+    item: ContextCandidate,
+    types: tuple[str, ...],
+    candidates: list[ContextCandidate],
+    proposal: ContextSemanticProposal | None,
+) -> tuple[int, int, int]:
+    temporal_rank = 0
+    if proposal and proposal.temporal_relation == "latest":
+        temporal_rank = -candidates.index(item)
+    elif proposal and proposal.temporal_relation == "earliest":
+        temporal_rank = candidates.index(item)
+    elif proposal and proposal.temporal_relation == "previous":
+        temporal_rank = 0 if item.produced_by_immediately_previous_turn else 1
+    return temporal_rank, _source_rank(item), types.index(item.artifact_type) if item.artifact_type in types else 99
+
+
+def _current_freshness_required(text: str, proposal: ContextSemanticProposal | None) -> bool:
+    return bool(proposal and proposal.freshness_intent == "current_required") or any(
+        marker in text for marker in ("实时", "当前最新", "最新数据")
+    )
 
 
 def _inherit_dependency_context(binding: GoalContextBinding, dependency: GoalContextBinding) -> GoalContextBinding:

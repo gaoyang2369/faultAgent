@@ -34,6 +34,7 @@ def project_answer_complete_payload(
             "content": effective,
             "raw_final_content": deterministic_answer,
             "grounded_final_content": effective if answer_result.status == "generated" else "",
+            "final_answer_source": answer_result.final_answer_source,
             "answer_synthesis": answer_result.complete_summary(),
         }
     )

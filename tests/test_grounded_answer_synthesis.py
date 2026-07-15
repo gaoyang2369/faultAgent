@@ -347,6 +347,8 @@ def test_response_projection_keeps_runtime_frame_and_artifact_deterministic() ->
     assert projected_frame.final_answer == "自然回答"
     assert complete["final_content"] == "自然回答"
     assert complete["raw_final_content"] == "模板回答"
+    assert complete["final_answer_source"] == "grounded_model"
+    assert complete["answer_synthesis"]["final_answer_source"] == "grounded_model"
     assert complete["artifact"]["final_answer"] == "模板回答"
 
 

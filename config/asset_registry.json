@@ -15,7 +15,7 @@
     {
       "asset_id": "g120_motor_2",
       "display_name": "G120电机2",
-      "aliases": ["G120电机2", "J2号机", "2号机", "DCMA二号电机", "real_data_02"],
+      "aliases": ["G120电机2", "G120电机二", "J2号机", "2号机", "二号机", "电机二", "DCMA二号电机", "real_data_02"],
       "data_sources": [
         {
           "table": "real_data_02"

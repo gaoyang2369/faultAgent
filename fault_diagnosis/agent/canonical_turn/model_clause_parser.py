@@ -30,6 +30,8 @@ class ClauseModelRequest:
     schema_version: str = "intent_shadow_request.v1"
     allowed_capabilities: tuple[str, ...] = tuple(sorted(ALL_INTENT_CAPABILITIES))
     allowed_source_kinds: tuple[str, ...] = ("artifact", "prior_result", "current_message")
+    context_candidates: tuple[dict[str, Any], ...] = ()
+    pending_summary: dict[str, Any] | None = None
 
 
 class StructuredClauseModel(Protocol):

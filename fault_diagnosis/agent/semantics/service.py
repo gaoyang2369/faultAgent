@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from pydantic import ValidationError
 
 from fault_diagnosis.agent.canonical_turn.clause_parser import DeterministicClauseParser
 from fault_diagnosis.agent.canonical_turn.model_clause_parser import ClauseModelRequest, ModelClauseParser
 from fault_diagnosis.agent.semantics.contracts import SemanticCallTrace, SemanticResolution
+from fault_diagnosis.agent.semantics.context_interpreter import project_context_semantic_input
+from fault_diagnosis.agent.semantics.context_validator import ContextProposalValidator
 from fault_diagnosis.agent.semantics.intent_canonicalizer import IntentCanonicalizer
 from fault_diagnosis.agent.semantics.intent_interpreter import parse_semantic_turn_proposal
 from fault_diagnosis.agent.semantics.model_gateway import (
@@ -41,12 +43,15 @@ class SemanticResolutionService:
         self._validator = ModelClauseParser()
         self._deterministic_parser = DeterministicClauseParser()
         self._canonicalizer = IntentCanonicalizer()
+        self._context_validator = ContextProposalValidator()
 
     async def resolve(
         self,
         raw_message: str,
         *,
         cancel_event: asyncio.Event | None = None,
+        context_candidates=(),
+        pending_summary: dict[str, Any] | None = None,
     ) -> SemanticResolution:
         parsed = self._parser.parse(raw_message)
         deterministic_capabilities = [item.action.capability for item in parsed.clauses if item.action]
@@ -75,6 +80,8 @@ class SemanticResolutionService:
                     allowed_source_kinds=("prior_result", "current_message"),
                     response_schema="semantic_turn_proposal.v1" if mode == "primary" else "model_clause_parse.v1",
                     schema_version="semantic_turn_request.v1",
+                    context_candidates=project_context_semantic_input(list(context_candidates)),
+                    pending_summary=pending_summary,
                 ),
                 cancel_event=cancel_event,
             )
@@ -98,6 +105,10 @@ class SemanticResolutionService:
             try:
                 proposal = parse_semantic_turn_proposal(result.payload)
                 canonical, decisions = self._canonicalizer.canonicalize(parsed, proposal)
+                context_proposal, context_decisions, context_clarification_reason = self._context_validator.validate(
+                    proposal.context, list(context_candidates)
+                )
+                decisions.extend(context_decisions)
             except ValidationError:
                 return _fallback(parsed, trace, "schema_invalid", started)
             except (TypeError, ValueError):
@@ -108,7 +119,11 @@ class SemanticResolutionService:
             trace.clarify = [item.field for item in decisions if item.decision == "CLARIFY"]
             trace.fallback = False
             trace.proposal_capabilities = [item.capability for item in proposal.clauses if item.capability]
-            return SemanticResolution(parsed=canonical, trace=trace, field_decisions=decisions)
+            return SemanticResolution(
+                parsed=canonical, trace=trace, field_decisions=decisions,
+                context_proposal=context_proposal,
+                context_clarification_reason=context_clarification_reason,
+            )
         try:
             envelope = self._validator.validate_for_shadow(
                 parsed.raw_text,

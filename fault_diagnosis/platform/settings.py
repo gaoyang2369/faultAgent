@@ -27,6 +27,12 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _grounded_answer_defaults(is_production: bool) -> tuple[bool, str]:
+    """按部署环境提供回答表达的安全默认值。"""
+
+    return (False, "0") if is_production else (True, "100")
+
+
 def _parse_origins(raw: str) -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
@@ -145,12 +151,17 @@ AGENT_ENGINE_VERSION = _env_choice(
 )
 SINGLE_AGENT_MODEL_TIMEOUT_SECONDS = max(1.0, float(os.getenv("SINGLE_AGENT_MODEL_TIMEOUT_SECONDS", "30")))
 SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS = max(1000, int(os.getenv("SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS", "12000")))
-ENABLE_GROUNDED_ANSWER_SYNTHESIS = _env_bool("ENABLE_GROUNDED_ANSWER_SYNTHESIS", False)
+# 开发/测试默认全量尝试回答表达；生产仍需显式开启。
+_GROUNDED_ANSWER_DEFAULT_ENABLED, _GROUNDED_ANSWER_DEFAULT_PERCENT = _grounded_answer_defaults(IS_PRODUCTION)
+ENABLE_GROUNDED_ANSWER_SYNTHESIS = _env_bool("ENABLE_GROUNDED_ANSWER_SYNTHESIS", _GROUNDED_ANSWER_DEFAULT_ENABLED)
 ANSWER_MODEL_NAME = os.getenv("ANSWER_MODEL_NAME", "").strip()
 ANSWER_MODEL_MAX_TOKENS = max(64, int(os.getenv("ANSWER_MODEL_MAX_TOKENS", "512")))
 ANSWER_MODEL_CONCURRENCY = max(1, int(os.getenv("ANSWER_MODEL_CONCURRENCY", "8")))
 ANSWER_MODEL_REQUEST_TIMEOUT_SECONDS = max(0.1, float(os.getenv("ANSWER_MODEL_REQUEST_TIMEOUT_SECONDS", "8")))
-GROUNDED_ANSWER_ROLLOUT_PERCENT = min(100, max(0, int(os.getenv("GROUNDED_ANSWER_ROLLOUT_PERCENT", "0"))))
+GROUNDED_ANSWER_ROLLOUT_PERCENT = min(
+    100,
+    max(0, int(os.getenv("GROUNDED_ANSWER_ROLLOUT_PERCENT", _GROUNDED_ANSWER_DEFAULT_PERCENT))),
+)
 ANSWER_MODEL_INCLUDE_DETERMINISTIC_FALLBACK = _env_bool("ANSWER_MODEL_INCLUDE_DETERMINISTIC_FALLBACK", True)
 ANSWER_SYNTHESIS_MAX_INPUT_CHARS = max(1000, int(os.getenv("ANSWER_SYNTHESIS_MAX_INPUT_CHARS", "12000")))
 ANSWER_SYNTHESIS_MAX_OUTPUT_CHARS = max(200, int(os.getenv("ANSWER_SYNTHESIS_MAX_OUTPUT_CHARS", "4000")))

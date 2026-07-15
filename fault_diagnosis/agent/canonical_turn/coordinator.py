@@ -14,6 +14,7 @@ from fault_diagnosis.agent.canonical_turn.context_binding import (
     CanonicalContextBinder,
     project_authorized_context_candidates,
 )
+from fault_diagnosis.agent.semantics.context_interpreter import project_pending_semantic_summary
 from fault_diagnosis.domain.canonical_turn import (
     CanonicalGoal,
     CanonicalTurnRequest,
@@ -106,15 +107,30 @@ class ConversationTurnCoordinator:
     ) -> TurnResult:
         """生产预览主入口：每轮至多产生一次可取消的语义调用。"""
 
-        semantic = await self._semantic_service.resolve(command.raw_message, cancel_event=cancel_event)
+        auth = auth_context or build_auth_context(user_id=command.user_id, role="guest")
+        candidates = project_authorized_context_candidates(conversation_context, auth)
+        waiting = self._pending_repository.peek_waiting(
+            command.thread_id, command.user_id, now=self._clock(),
+        )
+        semantic = await self._semantic_service.resolve(
+            command.raw_message,
+            cancel_event=cancel_event,
+            context_candidates=candidates,
+            pending_summary=project_pending_semantic_summary(waiting),
+        )
         semantic_trace = semantic.trace.model_dump(mode="json", by_alias=True, exclude_none=True)
         semantic_trace["field_decisions"] = [item.model_dump(mode="json") for item in semantic.field_decisions]
+        if semantic.context_proposal:
+            semantic_trace["context_constraints"] = semantic.context_proposal.model_dump(mode="json")
         return self._preview_turn_from_parsed(
             command,
             semantic.parsed,
-            auth_context=auth_context,
+            auth_context=auth,
             conversation_context=conversation_context,
             semantic_trace=semantic_trace,
+            candidates=candidates,
+            context_proposal=semantic.context_proposal,
+            context_clarification_reason=semantic.context_clarification_reason,
         )
 
     def _preview_turn_from_parsed(
@@ -125,6 +141,9 @@ class ConversationTurnCoordinator:
         auth_context=None,
         conversation_context: dict[str, Any] | None = None,
         semantic_trace: dict[str, Any] | None = None,
+        candidates=None,
+        context_proposal=None,
+        context_clarification_reason: str | None = None,
     ) -> TurnResult:
         """由已经解析的当前消息构造唯一 Canonical 请求。"""
 
@@ -150,8 +169,11 @@ class ConversationTurnCoordinator:
             authorization_result=None,
         )
         auth = auth_context or build_auth_context(user_id=command.user_id, role="guest")
-        candidates = project_authorized_context_candidates(conversation_context, auth)
-        bound_turn = CanonicalContextBinder().bind(request, candidates)
+        candidates = candidates if candidates is not None else project_authorized_context_candidates(conversation_context, auth)
+        bound_turn = CanonicalContextBinder().bind(
+            request, candidates, context_proposal=context_proposal,
+            context_clarification_reason=context_clarification_reason,
+        )
         transition = self._transition_proposal(command, waiting, goals, binding, bound_turn.goal_bindings)
         events = [
             TurnEvent(

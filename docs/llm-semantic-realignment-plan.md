@@ -1,6 +1,6 @@
 # LLM 语义层与回答层改造计划
 
-> 状态：待执行  
+> 状态：Wave 1-4 已完成，Wave 5 待执行
 > 目标分支：`refactor/v2`  
 > 目标：让 LLM 实际参与意图拆解、上下文理解和回答表达，同时保留 Canonical、权限、Artifact、计划、执行和证据链的确定性边界。
 
@@ -388,4 +388,3 @@ PYTHONPATH=. python scripts/goal_native_cutover_check.py --strict
 ## 11. 执行判断
 
 最短路径不是现在直接把 `.env` 三个开关改成 true；那只会开启旧的“规则主导 + 条件 fallback”，不会得到目标系统。正确的加速方式是先完成 Wave 1 的统一异步语义入口，随后立即在开发环境使用 `primary + context + answer 100%`，用真实交互驱动 Wave 2/3 修正，最后一次性跑完整验收。
-

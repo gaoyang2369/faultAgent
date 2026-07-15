@@ -43,6 +43,26 @@ class SemanticClauseProposal(BaseModel):
     source_kind: Literal["prior_result", "current_message"] = "current_message"
 
 
+class ContextSemanticProposal(BaseModel):
+    """模型提出的上下文筛选约束，不含候选或 Artifact 标识。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reference_target: Literal[
+        "none", "prior_diagnosis_result", "prior_runtime_result", "prior_report", "prior_comparison",
+    ] = "none"
+    temporal_relation: Literal["previous", "latest", "earliest", "ordinal"] | None = None
+    ordinal: int | None = Field(default=None, ge=1)
+    include_asset_refs: list[str] = Field(default_factory=list)
+    exclude_asset_refs: list[str] = Field(default_factory=list)
+    requested_reuse: bool = False
+    freshness_intent: Literal["current_required", "historical_ok", "unspecified"] = "unspecified"
+    relation: Literal[
+        "none", "worse_device_from_previous_comparison", "comparison_member", "related_prior_result",
+    ] = "none"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class SemanticTurnProposal(BaseModel):
     """单轮非权威语义提议，禁止透传原始模型对象。"""
 
@@ -52,6 +72,7 @@ class SemanticTurnProposal(BaseModel):
     entities: list[SemanticEntityProposal] = Field(default_factory=list)
     clauses: list[SemanticClauseProposal] = Field(default_factory=list)
     ambiguities: list[str] = Field(default_factory=list)
+    context: ContextSemanticProposal | None = None
 
 
 class SemanticFieldDecision(BaseModel):
@@ -98,3 +119,5 @@ class SemanticResolution(BaseModel):
     parsed: CurrentUtteranceParse
     trace: SemanticCallTrace
     field_decisions: list[SemanticFieldDecision] = Field(default_factory=list)
+    context_proposal: ContextSemanticProposal | None = None
+    context_clarification_reason: str | None = None

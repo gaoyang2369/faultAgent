@@ -74,6 +74,11 @@ def test_answer_model_config_records_explicit_and_default_sources(monkeypatch) -
     assert get_answer_model_config() == ("default-fixed", "default_model")
 
 
+def test_answer_synthesis_defaults_are_full_in_development_and_off_in_production() -> None:
+    assert settings._grounded_answer_defaults(False) == (True, "100")
+    assert settings._grounded_answer_defaults(True) == (False, "0")
+
+
 def test_non_whitelisted_answer_model_is_rejected(monkeypatch) -> None:
     monkeypatch.setenv("AVAILABLE_ANSWER_MODEL_NAMES", "allowed-answer")
     assert resolve_answer_model_name("allowed-answer") == "allowed-answer"
@@ -145,6 +150,7 @@ def test_complete_and_trace_share_phase16_metric_semantics() -> None:
         "fallback_reason",
     ):
         assert attrs[key] == complete[key]
+    assert complete["final_answer_source"] == "deterministic_fallback"
 
 
 def test_legacy_phase15_failures_count_as_thirteen_real_fallbacks() -> None:

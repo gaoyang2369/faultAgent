@@ -159,6 +159,8 @@ def _model_input(request: ClauseModelRequest) -> dict[str, Any]:
         },
         "allowed_capabilities": list(request.allowed_capabilities),
         "allowed_source_kinds": list(request.allowed_source_kinds),
+        "authorized_context_candidates": list(getattr(request, "context_candidates", ())),
+        "pending_context": getattr(request, "pending_summary", None),
         "output_schema": request.response_schema,
         "clause_fields": [
             "clause_index", "text", "start", "end", "action", "source", "slot", "linker", "shadow_metadata",
@@ -174,7 +176,18 @@ def _model_input(request: ClauseModelRequest) -> dict[str, Any]:
                 "requested", "negated", "conditional", "condition_type", "sequence_index",
                 "depends_on_clause_indexes", "source_kind",
             ],
-            "forbidden": ["artifact_id", "permission", "authorization", "tool", "node", "sql"],
+            "context": {
+                "reference_target": ["none", "prior_diagnosis_result", "prior_runtime_result", "prior_report", "prior_comparison"],
+                "temporal_relation": ["previous", "latest", "earliest", "ordinal"],
+                "ordinal": "positive integer only when temporal_relation is ordinal",
+                "include_asset_refs": "authorized asset display names only",
+                "exclude_asset_refs": "authorized asset display names only",
+                "requested_reuse": "boolean",
+                "freshness_intent": ["current_required", "historical_ok", "unspecified"],
+                "relation": ["none", "worse_device_from_previous_comparison", "comparison_member", "related_prior_result"],
+                "confidence": "0..1",
+            },
+            "forbidden": ["artifact_id", "artifact_ref", "candidate_id", "lineage", "permission", "authorization", "tool", "node", "sql"],
         },
     }
 
