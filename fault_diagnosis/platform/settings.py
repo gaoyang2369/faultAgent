@@ -155,9 +155,21 @@ ANSWER_MODEL_INCLUDE_DETERMINISTIC_FALLBACK = _env_bool("ANSWER_MODEL_INCLUDE_DE
 ANSWER_SYNTHESIS_MAX_INPUT_CHARS = max(1000, int(os.getenv("ANSWER_SYNTHESIS_MAX_INPUT_CHARS", "12000")))
 ANSWER_SYNTHESIS_MAX_OUTPUT_CHARS = max(200, int(os.getenv("ANSWER_SYNTHESIS_MAX_OUTPUT_CHARS", "4000")))
 ANSWER_SYNTHESIS_TEMPERATURE = min(0.1, max(0.0, float(os.getenv("ANSWER_SYNTHESIS_TEMPERATURE", "0.0"))))
-# Current-message intent shadowing is an independent, default-off model path.
+# Current-message intent shadowing is retained for one compatibility release.
 ENABLE_LLM_INTENT_SHADOW = _env_bool("ENABLE_LLM_INTENT_SHADOW", False)
 ENABLE_LLM_INTENT_FALLBACK = _env_bool("ENABLE_LLM_INTENT_FALLBACK", False)
+_LLM_SEMANTIC_MODE_EXPLICIT = bool(os.getenv("LLM_SEMANTIC_MODE", "").strip())
+if _LLM_SEMANTIC_MODE_EXPLICIT:
+    LLM_SEMANTIC_MODE = _env_choice("LLM_SEMANTIC_MODE", "off", {"off", "shadow", "primary"})
+elif ENABLE_LLM_INTENT_SHADOW:
+    LLM_SEMANTIC_MODE = "shadow"
+else:
+    LLM_SEMANTIC_MODE = "off"
+ENABLE_LLM_CONTEXT_SEMANTICS = _env_bool("ENABLE_LLM_CONTEXT_SEMANTICS", False)
+LLM_SEMANTIC_FAILURE_POLICY = _env_choice(
+    "LLM_SEMANTIC_FAILURE_POLICY", "deterministic_fallback", {"deterministic_fallback"}
+)
+LLM_SEMANTIC_CONCURRENCY = max(1, int(os.getenv("LLM_SEMANTIC_CONCURRENCY", "8")))
 INTENT_MODEL_NAME = os.getenv("INTENT_MODEL_NAME", "").strip()
 INTENT_MODEL_BASE_URL = os.getenv("INTENT_MODEL_BASE_URL", "").strip()
 INTENT_MODEL_API_KEY = os.getenv("INTENT_MODEL_API_KEY", "").strip()

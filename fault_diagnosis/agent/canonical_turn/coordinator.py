@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fault_diagnosis.agent.canonical_turn.parser import CurrentUtteranceParser
+from fault_diagnosis.agent.semantics import SemanticResolutionService
 from fault_diagnosis.agent.canonical_turn.context_binding import (
     CanonicalContextBinder,
     project_authorized_context_candidates,
@@ -24,6 +25,7 @@ from fault_diagnosis.domain.canonical_turn import (
     TurnCommand,
     TurnEvent,
     TurnResult,
+    capability_spec,
 )
 from fault_diagnosis.agent.canonical_turn.decisions import (
     decide_goal_authorization,
@@ -37,19 +39,9 @@ from fault_diagnosis.platform.persistence.repositories.pending_clarification_rep
     MemoryPendingClarificationRepository,
     PendingClarificationRepository,
 )
+from fault_diagnosis.platform import settings
 
 
-_REQUIRED_SLOTS = {
-    "check_runtime_status": ["device"],
-    "compare_runtime_status": ["device"],
-    "create_workorder_draft": ["device"],
-    "dispatch_workorder": [],
-    "evaluate_workorder_need": ["device"],
-    "diagnose_fault": ["device"],
-    "explain_fault_code": ["fault_code"],
-    "generate_report": [],
-    "resolution_recommendation": ["device"],
-}
 _ENTITY_KIND_BY_SLOT = {
     "device": "device_reference",
     "fault_code": "fault_code",
@@ -70,9 +62,13 @@ class ConversationTurnCoordinator:
         *,
         parser: CurrentUtteranceParser | None = None,
         pending_repository: PendingClarificationRepository | None = None,
+        semantic_service: SemanticResolutionService | None = None,
         clock=lambda: datetime.now(timezone.utc),
     ) -> None:
-        self._parser = parser or CurrentUtteranceParser()
+        self._parser = parser or CurrentUtteranceParser(
+            enable_fallback=settings.ENABLE_LLM_INTENT_FALLBACK and settings.LLM_SEMANTIC_MODE == "off"
+        )
+        self._semantic_service = semantic_service or SemanticResolutionService(parser=self._parser)
         self._pending_repository = pending_repository or MemoryPendingClarificationRepository(clock=clock)
         self._clock = clock
         self._completed: dict[tuple[str, str, str, str, str], TurnResult] = {}
@@ -93,6 +89,45 @@ class ConversationTurnCoordinator:
         """Build the exact production request and decisions without repository writes."""
 
         parsed = self._parser.parse(command.raw_message)
+        return self._preview_turn_from_parsed(
+            command,
+            parsed,
+            auth_context=auth_context,
+            conversation_context=conversation_context,
+        )
+
+    async def preview_turn_async(
+        self,
+        command: TurnCommand,
+        *,
+        auth_context=None,
+        conversation_context: dict[str, Any] | None = None,
+        cancel_event: asyncio.Event | None = None,
+    ) -> TurnResult:
+        """生产预览主入口：每轮至多产生一次可取消的语义调用。"""
+
+        semantic = await self._semantic_service.resolve(command.raw_message, cancel_event=cancel_event)
+        semantic_trace = semantic.trace.model_dump(mode="json", by_alias=True, exclude_none=True)
+        semantic_trace["field_decisions"] = [item.model_dump(mode="json") for item in semantic.field_decisions]
+        return self._preview_turn_from_parsed(
+            command,
+            semantic.parsed,
+            auth_context=auth_context,
+            conversation_context=conversation_context,
+            semantic_trace=semantic_trace,
+        )
+
+    def _preview_turn_from_parsed(
+        self,
+        command: TurnCommand,
+        parsed,
+        *,
+        auth_context=None,
+        conversation_context: dict[str, Any] | None = None,
+        semantic_trace: dict[str, Any] | None = None,
+    ) -> TurnResult:
+        """由已经解析的当前消息构造唯一 Canonical 请求。"""
+
         current_goals = self._build_current_goals(command, parsed)
         waiting = self._pending_repository.peek_waiting(
             command.thread_id,
@@ -139,6 +174,7 @@ class ConversationTurnCoordinator:
                     "accepted_fields": parsed.intent_resolution.accepted_model_fields,
                     "rejected_fields": parsed.intent_resolution.rejected_model_fields,
                     "duration_ms": parsed.intent_resolution.duration_ms,
+                    "semantic": semantic_trace or _legacy_semantic_trace(parsed),
                 },
             ),
             TurnEvent(
@@ -208,6 +244,7 @@ class ConversationTurnCoordinator:
         *,
         auth_context,
         conversation_context: dict[str, Any] | None = None,
+        cancel_event: asyncio.Event | None = None,
         executor=None,
     ) -> TurnResult:
         """Execute one idempotent turn through an injected existing runtime executor.
@@ -232,10 +269,11 @@ class ConversationTurnCoordinator:
                 command.user_id,
                 now=self._clock(),
             )
-            preview = self.preview_turn(
+            preview = await self.preview_turn_async(
                 command,
                 auth_context=auth_context,
                 conversation_context=conversation_context,
+                cancel_event=cancel_event,
             )
             transition = preview.pending_transition
             resumed = None
@@ -386,7 +424,8 @@ class ConversationTurnCoordinator:
                 continue
             if not clause.modality.requested or clause.modality.negated:
                 continue
-            required_slots = list(_REQUIRED_SLOTS[clause.action.capability])
+            spec = capability_spec(clause.action.capability)
+            required_slots = list(spec.required_slots) if spec is not None else []
             resolved_slots: dict[str, Any] = {}
             for slot, kind in _ENTITY_KIND_BY_SLOT.items():
                 values = list(
@@ -708,6 +747,29 @@ def _clause_semantics(clause) -> dict[str, Any]:  # noqa: ANN001
         "clause_index": clause.clause_index,
         "capability": clause.action.capability if clause.action else None,
         **modality.model_dump(mode="json"),
+    }
+
+
+def _legacy_semantic_trace(parsed) -> dict[str, Any]:  # noqa: ANN001
+    """同步兼容 preview 也输出同形 trace，避免消费者猜测字段。"""
+
+    resolution = parsed.intent_resolution
+    return {
+        "attempted": resolution.fallback_attempted,
+        "mode": "shadow" if resolution.mode == "llm_fallback" else "off",
+        "schema": "model_clause_parse.v1",
+        "status": resolution.model_status,
+        "accepted": list(resolution.accepted_model_fields),
+        "rejected": list(resolution.rejected_model_fields),
+        "clarify": [],
+        "fallback": resolution.mode == "deterministic_after_llm_failure",
+        "latency_ms": resolution.duration_ms,
+        "input_tokens": None,
+        "output_tokens": None,
+        "model_name": resolution.model_name,
+        "concurrency_limited": False,
+        "deterministic_capabilities": list(resolution.deterministic_capabilities),
+        "proposal_capabilities": list(resolution.model_capabilities),
     }
 
 

@@ -11,6 +11,7 @@ from fault_diagnosis.domain.canonical_turn import (
     GoalAuthorizationDecision,
     GoalReadinessDecision,
     GoalSourceResolution,
+    capability_spec,
 )
 
 from ..contracts import ArtifactRoleBinding, ExecutionPlan
@@ -66,7 +67,7 @@ class PlanCompiler:
                 "fault_code_refs": _goal_fault_codes(request, goal, source[goal.goal_id]),
                 "expected_outputs": _deliverables(goal.capability),
                 "requested_deliverables": _deliverables(goal.capability),
-                "risk_level": "high" if goal.capability in {"create_workorder_draft", "dispatch_workorder"} else "medium",
+                "risk_level": (capability_spec(goal.capability).risk_level if capability_spec(goal.capability) else "medium"),
                 "source": "canonical_turn_request",
                 "capability": goal.capability,
                 "required_slots": list(goal.required_slots),
@@ -442,13 +443,5 @@ def _goal_devices(request: CanonicalTurnRequest, goal_id: str, source: GoalSourc
 
 
 def _deliverables(capability: str) -> list[str]:
-    return {
-        "explain_fault_code": ["fault_code_explanation"],
-        "check_runtime_status": ["runtime_status"],
-        "compare_runtime_status": ["runtime_comparison"],
-        "diagnose_fault": ["diagnosis"],
-        "resolution_recommendation": ["recommendations"],
-        "generate_report": ["report"],
-        "create_workorder_draft": ["workorder_draft"],
-        "evaluate_workorder_need": ["workorder_need_assessment"],
-    }.get(capability, [])
+    spec = capability_spec(capability)
+    return list(spec.deliverables) if spec is not None else []

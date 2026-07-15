@@ -50,7 +50,7 @@ PYTHONPATH=. pytest -q
 - MySQL：`HOST`、`PORT`、`MYSQL_PW`、`MYSQL_USER`、`DCMA_DB_NAME` / `DB_NAME`。
 - OpenAI-compatible LLM：`OPENAI_BASE_URL`、`OPENAI_API_KEY`、`MODEL_NAME`、`AVAILABLE_MODEL_NAMES`、`SINGLE_AGENT_MODEL_TIMEOUT_SECONDS`、`SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS`。`MODEL_NAME` 是默认模型；`AVAILABLE_MODEL_NAMES` 可用英文逗号配置前端可选白名单，API Key 只保留在服务端环境变量中。
 - Grounded answer（默认关闭且灰度为 0）：`ENABLE_GROUNDED_ANSWER_SYNTHESIS=false`、`GROUNDED_ANSWER_ROLLOUT_PERCENT=0`、`ANSWER_MODEL_NAME`、`AVAILABLE_ANSWER_MODEL_NAMES`、`ANSWER_MODEL_REQUEST_TIMEOUT_SECONDS=8`、`ANSWER_MODEL_MAX_TOKENS=512`、`ANSWER_MODEL_CONCURRENCY=8`、`ANSWER_MODEL_INCLUDE_DETERMINISTIC_FALLBACK=true`、`ANSWER_SYNTHESIS_MAX_INPUT_CHARS=12000`、`ANSWER_SYNTHESIS_MAX_OUTPUT_CHARS=4000`、`ANSWER_SYNTHESIS_TEMPERATURE=0.0`。Answer 模型不跟随单次聊天请求模型；启用并命中稳定 thread 灰度后，只对 V2 已完成的授权事实调用一次低温度 JSON 模型。超时、Schema 或确定性校验失败时立即使用 `CompositePresenter` 原回答，不重试。fallback 输入 A/B 尚未证明移除不降级，因此默认保持兼容，可通过独立开关继续评估。旧 `ANSWER_SYNTHESIS_TIMEOUT_SECONDS` / `ANSWER_SYNTHESIS_MAX_OUTPUT_TOKENS` / `ANSWER_SYNTHESIS_MAX_CONCURRENCY` 仅保留为 deprecated 读取投影。
-- Intent 模型（默认全部关闭）：`ENABLE_LLM_INTENT_SHADOW=false`、`ENABLE_LLM_INTENT_FALLBACK=false`、`INTENT_MODEL_TIMEOUT_SECONDS=8`、`INTENT_FALLBACK_TIMEOUT_SECONDS=8`。Fallback 只处理确定性解析明确标记为 eligible 的请求；Shadow 与 Fallback 同开时复用同一次解析结果，不会各调用一次。
+- 统一语义模型（默认关闭）：`LLM_SEMANTIC_MODE=off|shadow|primary`、`LLM_SEMANTIC_CONCURRENCY=8`、`LLM_SEMANTIC_FAILURE_POLICY=deterministic_fallback`、`INTENT_MODEL_NAME`、`INTENT_MODEL_TIMEOUT_SECONDS=8`。新模式显式配置时优先；旧 `ENABLE_LLM_INTENT_SHADOW=true` 映射为 `shadow`，旧 `ENABLE_LLM_INTENT_FALLBACK` 只保留兼容 fallback 行为。每轮至多一次异步语义调用，取消、超时或校验失败都会回退确定性 Canonical 链路。
 - Ollama / FAISS / 知识库：`OLLAMA_BASE_URL`、`EMBEDDING_MODEL`、`FAISS_PATH`、`KB_CHUNK_SIZE`、`KB_CHUNK_OVERLAP`、`KB_BATCH_SIZE`、`KB_QUERY_TIMEOUT_SECONDS`、`KB_EMBED_TIMEOUT_SECONDS`、`KB_BUILD_MAX_DOCUMENTS`、`KB_INCREMENTAL_BUILD`、`KB_EMBED_CACHE_PATH`。
 - 上传知识文件 / OCR：`ADMIN_UPLOAD_DIR`、`ADMIN_PDF_MAX_FILE_SIZE`、`PDF_TEXT_EXTRACT_BACKEND`、`DOCUMENT_OCR_BACKEND`、`DOCUMENT_OCR_LANG`、`DOCUMENT_OCR_MAX_PAGES`、`DOCUMENT_OCR_RENDER_DPI`、`PDF_TEXT_MIN_CHARS`、`PDF_TEXT_PREVIEW_CHARS`、`UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX`、`UPLOADED_FILE_KB_VECTOR_TIMEOUT_SECONDS`。
 - Artifact backend：`DIAGNOSIS_ARTIFACT_BACKEND=file|memory|postgres`、`DIAGNOSIS_ARTIFACT_DIR`、`DIAGNOSIS_ARTIFACT_TABLE`、`DIAGNOSIS_ARTIFACT_POSTGRES_DSN`。旧 `WORKFLOW_ARTIFACT_*` 仍作为 fallback 读取。
@@ -127,7 +127,7 @@ GET /chat/stream
   -> server session authentication and thread ownership
   -> ChatService / ProductionTurnCoordinator
   -> ConversationContextAssembler
-  -> CurrentUtteranceParser / DeterministicClauseParser / optional SemanticFallback
+  -> DeterministicClauseParser + SemanticResolutionService（每轮最多一次 async 调用）
   -> ConversationTurnCoordinator / CanonicalGoal construction
   -> ACL-filtered ContextCandidate projection / CanonicalContextBinder
   -> per-goal authorization / SourceResolver / Readiness
@@ -138,19 +138,18 @@ GET /chat/stream
   -> SSE projection / chat_complete / trace export
 ```
 
-`GET /chat/plan` 复用从认证、上下文组装到 PlanValidator 的相同只读阶段，并可按开关运行
-Intent Shadow；它不进入 Runtime、typed nodes、证据提交、Artifact 持久化、CaseState 更新、回答合成或
-SSE 流。因而 plan-only 请求不写业务 Artifact、不推进 CaseState，也不调用 Grounded Answer 模型。
+`GET /chat/plan` 与 `/chat/stream` 都从同一个异步语义入口进入 Canonical 预览；plan-only 不再补发第二次
+Shadow 调用。它不进入 Runtime、typed nodes、证据提交、Artifact 持久化、CaseState 更新、回答合成或 SSE 流。
+因而 plan-only 请求不写业务 Artifact、不推进 CaseState，也不调用 Grounded Answer 模型。
 
 Feature Flag 组合：
 
-| Grounded Answer | Intent Shadow | Intent Fallback | 行为 |
+| Grounded Answer | `LLM_SEMANTIC_MODE` | 行为 |
 |---|---|---|---|
-| off | off | off | 默认生产模式，完整确定性主链，无模型调用 |
-| off | off | on | 仅 fallback-eligible 请求最多调用一次 Intent 模型 |
-| off | on | off | 确定性结果仍为权威，模型结果仅作 shadow 观测 |
-| off | on | on | fallback 已调用时 Shadow 不重复调用 |
-| on 且命中灰度 | 任意 | 任意 | Runtime 完成后最多调用一次，只改最终表达；失败回退 CompositePresenter |
+| off | off | 默认生产模式，完整确定性主链；旧 fallback 开关仍按兼容规则生效 |
+| off | shadow | 每轮最多调用一次，仅记录模型提议与差异观测 |
+| off | primary | 每轮最多调用一次；模型提议须经 span、资产注册表、格式与 capability 白名单的字段级 ACCEPT/REJECT/CLARIFY 仲裁，Planner 只读取最终 Canonical 投影 |
+| on 且命中灰度 | 任意 | Runtime 完成后最多调用一次回答模型，只改最终表达；失败回退 CompositePresenter |
 
 `POST /agent/chat` 进入 `ChatService.agent_chat` 后复用同一个 `token_stream_events`，只是在服务层把 SSE 聚合为 JSON。
 

@@ -67,11 +67,33 @@ class TraceRecorder:
         route = snapshot.skill_route
         plan = snapshot.execution_plan
         trace = snapshot.trace if isinstance(snapshot.trace, dict) else {}
+        semantic_trace = trace.get("semantic") if isinstance(trace.get("semantic"), dict) else {}
         context_trace = trace.get("context_resolution") if isinstance(trace.get("context_resolution"), dict) else {}
         validation = trace.get("validation") if isinstance(trace.get("validation"), dict) else {}
         candidate_plan = trace.get("candidate_plan") if isinstance(trace.get("candidate_plan"), dict) else plan.model_dump(mode="json")
         skipped_nodes = _skipped_nodes(plan)
 
+        self._add_span(
+            span_id="span.semantic.resolve",
+            parent_span_id="span.chat.request",
+            name="semantic.resolve",
+            kind="llm",
+            status=_semantic_span_status(str(semantic_trace.get("status") or "not_attempted")),
+            attributes={
+                "attempted": bool(semantic_trace.get("attempted")),
+                "mode": semantic_trace.get("mode", "off"),
+                "schema": semantic_trace.get("schema", "model_clause_parse.v1"),
+                "accepted": list(semantic_trace.get("accepted") or []),
+                "rejected": list(semantic_trace.get("rejected") or []),
+                "clarify": list(semantic_trace.get("clarify") or []),
+                "fallback": bool(semantic_trace.get("fallback")),
+                "latency_ms": semantic_trace.get("latency_ms", 0.0),
+                "input_tokens": semantic_trace.get("input_tokens"),
+                "output_tokens": semantic_trace.get("output_tokens"),
+                "model_name": semantic_trace.get("model_name", ""),
+                "concurrency_limited": bool(semantic_trace.get("concurrency_limited")),
+            },
+        )
         self._add_span(
             span_id="span.plan.understand",
             parent_span_id="span.chat.request",
@@ -1126,6 +1148,16 @@ def _output_mode(answer_variant: str) -> str:
     if answer_variant == "report_ready":
         return "detailed"
     return "concise"
+
+
+def _semantic_span_status(status: str) -> str:
+    if status == "completed":
+        return "completed"
+    if status == "model_cancelled":
+        return "cancelled"
+    if status == "not_attempted":
+        return "skipped"
+    return "failed"
 
 
 def _canonical_user_requested(goal: dict[str, Any]) -> bool:

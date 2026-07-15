@@ -34,11 +34,15 @@ from .contracts import (
     TurnEvent,
     TurnResult,
 )
+from .capabilities import CAPABILITY_SPECS, CapabilitySpec, capability_spec
 
 __all__ = [
     "ALL_INTENT_CAPABILITIES",
+    "CAPABILITY_SPECS",
     "CAPABILITY_ALLOWLIST",
+    "CapabilitySpec",
     "CANONICAL_CAPABILITIES",
+    "capability_spec",
     "SHADOW_ONLY_CAPABILITIES",
     "BoundCanonicalTurn",
     "CanonicalGoal",

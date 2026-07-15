@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
-import fault_diagnosis.platform.settings as config
 from fault_diagnosis.server.auth.admin_auth import resolve_auth_context
 from fault_diagnosis.server.devtools.dev_mode import get_dev_messages
 from fault_diagnosis.platform.logging import ensure_request_id, get_logger
@@ -353,24 +352,8 @@ class ChatService:
             message_len=len(message),
             message_preview=summarize_text_for_log(message, limit=72),
         )
-        canonical, snapshot, plan = self._turn_coordinator(request.app).preview_turn(context)
+        canonical, snapshot, plan = await self._turn_coordinator(request.app).preview_turn(context)
         payload = build_plan_preview_payload(snapshot=snapshot, plan=plan)
-        if config.ENABLE_LLM_INTENT_SHADOW:
-            from fault_diagnosis.agent.canonical_turn.intent_shadow_service import IntentShadowService
-
-            intent_shadow_service = getattr(request.app.state, "intent_shadow_service", None) or IntentShadowService()
-            intent_shadow = intent_shadow_service.evaluate_current_message(
-                canonical.request.current_parse
-            )
-            summary = intent_shadow.model_dump(mode="json") if intent_shadow else None
-            self._log.info(
-                "intent shadow 完成",
-                status=summary["status"], model_name=summary["model_name"],
-                duration_ms=summary["duration_ms"],
-                difference_dimensions=summary["difference_dimensions"],
-            )
-            if summary and config.INTENT_SHADOW_INCLUDE_IN_PLAN_PAYLOAD:
-                payload["intent_shadow"] = summary
         payload["turn_result"] = canonical.model_dump(mode="json", exclude_none=True)
         payload["thread_id"] = context.thread_id
         payload["request_id"] = context.request_id

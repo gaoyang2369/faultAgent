@@ -56,7 +56,7 @@ class _ResponseClient:
         self.content = content
         self.messages = None
 
-    def invoke(self, messages):  # noqa: ANN001
+    async def ainvoke(self, messages):  # noqa: ANN001
         self.messages = messages
         return type("Response", (), {"content": self.content})()
 
@@ -149,7 +149,7 @@ def test_shadow_flag_off_does_not_construct_model_or_return_summary(monkeypatch)
     assert service.evaluate_current_message(CurrentUtteranceParser().parse("查询 J1 当前状态")) is None
 
 
-def test_plan_shadow_only_adds_dev_field_and_cannot_change_formal_payload(monkeypatch) -> None:
+def test_plan_does_not_make_a_second_legacy_shadow_call(monkeypatch) -> None:
     text = "这情况要不要安排人处理？"
     candidate = _FakeModel(_payload(text, capability="evaluate_workorder_need"))
     monkeypatch.setattr(config, "ENABLE_PLAN_ENDPOINT", True)
@@ -164,8 +164,8 @@ def test_plan_shadow_only_adds_dev_field_and_cannot_change_formal_payload(monkey
             "/chat/plan", params={"message": text, "thread_id": baseline["thread_id"]}
         ).json()
     assert "intent_shadow" not in baseline
-    assert shadowed["intent_shadow"]["model_capabilities"] == ["evaluate_workorder_need"]
-    assert shadowed["intent_shadow"]["difference_dimensions"] == []
+    assert "intent_shadow" not in shadowed
+    assert shadowed["semantic_trace"]["attempted"] is False
     shadow_formal = _formal_plan(shadowed)
     baseline_formal = _formal_plan(baseline)
     shadow_formal.pop("pending_transition")
@@ -175,11 +175,8 @@ def test_plan_shadow_only_adds_dev_field_and_cannot_change_formal_payload(monkey
     assert not shadowed["execution_plan"]["nodes"]
 
 
-@pytest.mark.parametrize(
-    "model",
-    [_FakeModel(error=TimeoutError("slow")), LLMStructuredClauseModel(_ResponseClient("not-json"))],
-)
-def test_plan_model_failure_keeps_original_plan(monkeypatch, model) -> None:  # noqa: ANN001
+@pytest.mark.parametrize("model", [_FakeModel(error=TimeoutError("slow")), LLMStructuredClauseModel(_ResponseClient("not-json"))])
+def test_plan_does_not_make_legacy_shadow_failure_a_second_path(monkeypatch, model) -> None:  # noqa: ANN001
     monkeypatch.setattr(config, "ENABLE_PLAN_ENDPOINT", True)
     monkeypatch.setattr(config, "INTENT_SHADOW_INCLUDE_IN_PLAN_PAYLOAD", True)
     monkeypatch.setattr(chat_service, "ensure_request_id", lambda: "fixed-shadow-failure-request")
@@ -191,7 +188,8 @@ def test_plan_model_failure_keeps_original_plan(monkeypatch, model) -> None:  # 
         shadowed = client.get(
             "/chat/plan", params={"message": "查询 J1 当前状态", "thread_id": baseline["thread_id"]}
         ).json()
-    assert shadowed["intent_shadow"]["status"] in {"model_timeout", "schema_invalid"}
+    assert "intent_shadow" not in shadowed
+    assert shadowed["semantic_trace"]["attempted"] is False
     assert _formal_plan(shadowed) == _formal_plan(baseline)
 
 

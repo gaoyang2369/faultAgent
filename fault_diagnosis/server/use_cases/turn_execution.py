@@ -69,10 +69,10 @@ class ProductionTurnCoordinator:
             self.logger.warning("构造 canonical 只读对话上下文失败", thread_id=context.thread_id, error=str(exc))
             return None
 
-    def preview_turn(self, context):
+    async def preview_turn(self, context):
         conversation_context = self.build_read_only_context(context)
         command = self._command(context, command="preview")
-        canonical = self.coordinator.preview_turn(
+        canonical = await self.coordinator.preview_turn_async(
             command,
             auth_context=context.auth_context,
             conversation_context=conversation_context,
@@ -174,6 +174,7 @@ class ProductionTurnCoordinator:
             command,
             auth_context=context.auth_context,
             conversation_context=context.conversation_context,
+            cancel_event=getattr(cancel_handle, "cancel_event", None),
             executor=run,
         )
         chunks = [
@@ -361,6 +362,7 @@ def build_plan_preview_payload(*, snapshot: Any, plan: Any) -> dict[str, Any]:
         "goal_readiness": list(snapshot.metadata["goal_readiness"]),
         "goal_source_resolution": list(snapshot.metadata["goal_source_resolution"]),
         "pending_transition": dict(snapshot.metadata["pending_transition"]),
+        "semantic_trace": dict(snapshot.metadata.get("semantic_trace") or {}),
         "execution_plan": plan.model_dump(mode="json", exclude_none=True),
         "artifact_role_bindings": artifact_bindings,
         "compatibility_debug": compatibility,

@@ -7,20 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .capabilities import CANONICAL_CAPABILITIES
 
-CANONICAL_CAPABILITIES = frozenset(
-    {
-        "check_runtime_status",
-        "compare_runtime_status",
-        "create_workorder_draft",
-        "diagnose_fault",
-        "dispatch_workorder",
-        "evaluate_workorder_need",
-        "explain_fault_code",
-        "generate_report",
-        "resolution_recommendation",
-    }
-)
 SHADOW_ONLY_CAPABILITIES = frozenset(
     {"meta", "unsupported_high_risk_action"}
 )
@@ -142,7 +130,7 @@ class IntentFallbackDecision(CanonicalContract):
 
 
 class IntentResolutionMetadata(CanonicalContract):
-    mode: Literal["deterministic", "llm_fallback", "deterministic_after_llm_failure"] = "deterministic"
+    mode: Literal["deterministic", "llm_fallback", "llm_primary", "deterministic_after_llm_failure"] = "deterministic"
     fallback_attempted: bool = False
     fallback_reasons: list[str] = Field(default_factory=list)
     model_status: str = "not_attempted"

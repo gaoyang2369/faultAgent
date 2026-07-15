@@ -91,6 +91,10 @@ class AgentEngineV2:
             for item in denied
         )
         authorization_payload = _authorization_payload(result.authorization)
+        semantic_trace = next(
+            (event.detail.get("semantic", {}) for event in result.events if event.event_type == "intent_resolution"),
+            {},
+        )
         output = OutputFrame(
             answer_variant="permission_denied" if denied and not executable else "clarification" if all_terminal_without_execution else "not_implemented",
             final_answer=(denied[0].reason if denied and not executable else projection.effective_request_frame.clarification_question if all_terminal_without_execution else ""),
@@ -121,6 +125,7 @@ class AgentEngineV2:
             "goal_readiness": [item.model_dump(mode="json") for item in result.readiness],
             "goal_source_resolution": [item.model_dump(mode="json") for item in result.source_resolutions],
             "pending_transition": result.pending_transition.model_dump(mode="json"),
+            "semantic_trace": semantic_trace,
         }
         return PlanSnapshotV2(
             status=status,
@@ -137,6 +142,7 @@ class AgentEngineV2:
                 "mode": "canonical_turn",
                 "status": status,
                 "canonical_request": request.model_dump(mode="json"),
+                "semantic": semantic_trace,
                 "context_binding": next(
                     (event.detail for event in result.events if event.event_type == "context_binding"),
                     {},
