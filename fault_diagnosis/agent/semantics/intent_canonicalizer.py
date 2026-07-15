@@ -39,7 +39,16 @@ class IntentCanonicalizer:
         decisions: list[SemanticFieldDecision] = []
         proposed_entities = self._accept_entities(deterministic.raw_text, proposal, entities, decisions)
         clause_by_proposal: dict[int, int] = {}
+        unsupported_high_risk = "unsupported_high_risk_action" in deterministic.clarification_needs
         for item in proposal.clauses:
+            if unsupported_high_risk:
+                decisions.append(_decision(
+                    f"clauses[{item.clause_index}].capability",
+                    "CLARIFY",
+                    item.capability,
+                    "unsupported_high_risk_action",
+                ))
+                continue
             canonical_index = self._apply_clause(
                 deterministic.raw_text, item, entities, proposed_entities, clauses, decisions
             )
@@ -132,9 +141,16 @@ class IntentCanonicalizer:
         if item.capability is None:
             decisions.append(_decision(f"{base}.capability", "REJECT", None, "missing_capability"))
             return None
-        if target and target.action and target.action.capability != item.capability and item.capability in _HIGH_RISK:
+        high_risk_conflict = next((
+            clause
+            for clause in overlapping
+            if clause.action
+            and clause.action.capability != item.capability
+            and (item.capability in _HIGH_RISK or clause.action.capability in _HIGH_RISK)
+        ), None)
+        if high_risk_conflict is not None:
             decisions.append(_decision(f"{base}.capability", "CLARIFY", item.capability, "high_risk_capability_conflict"))
-            return target.clause_index
+            return target.clause_index if target is not None else high_risk_conflict.clause_index
         action = ClauseAction(capability=item.capability, confidence=item.confidence, entity_refs=refs, inferred=True)
         modality = self._modality(item, target, base, decisions)
         source = ClauseSource(source_kind=item.source_kind, entity_refs=[]) if item.source_kind == "prior_result" else None
@@ -147,6 +163,12 @@ class IntentCanonicalizer:
             clauses.append(new_clause)
             decisions.append(_decision(f"{base}.capability", "ACCEPT", item.capability, "valid_allowlisted_capability_with_grounded_span"))
             return new_clause.clause_index
+        # One accepted model clause is authoritative for its grounded span.
+        # Do not leave lower-priority deterministic fragments behind as extra
+        # Goals merely because punctuation split the same semantic statement.
+        for clause in overlapping:
+            if clause is not target and clause in clauses:
+                clauses.remove(clause)
         clauses[clauses.index(target)] = new_clause
         reason = "model_corrected_deterministic_capability" if target.action and target.action.capability != item.capability else "confirmed_capability"
         decisions.append(_decision(f"{base}.capability", "ACCEPT", item.capability, reason))

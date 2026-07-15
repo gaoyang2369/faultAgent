@@ -16,8 +16,9 @@ def test_plan_snapshot_exports_canonical_plan_spans_before_runtime() -> None:
 
     names = [span.name for span in envelope.spans]
 
-    assert names[:8] == [
+    assert names[:9] == [
         "chat.request",
+        "semantic.resolve",
         "request.understand",
         "context.resolve",
         "capability.preflight",
@@ -26,5 +27,5 @@ def test_plan_snapshot_exports_canonical_plan_spans_before_runtime() -> None:
         "plan.compile",
         "plan.validate",
     ]
-    assert all(span.parent_span_id == "span.chat.request" for span in envelope.spans[1:7])
-    assert envelope.spans[1].attributes["detected_fault_codes"] == ["A07089"]
+    assert all(span.parent_span_id == "span.chat.request" for span in envelope.spans[1:8])
+    assert envelope.spans[2].attributes["detected_fault_codes"] == ["A07089"]

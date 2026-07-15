@@ -87,6 +87,7 @@ async def test_async_preview_attempts_one_model_call_and_keeps_canonical_determi
         "rejected": [],
         "clarify": [],
         "fallback": False,
+        "fallback_reason": "",
         "latency_ms": 12.5,
         "input_tokens": 11,
         "output_tokens": 7,

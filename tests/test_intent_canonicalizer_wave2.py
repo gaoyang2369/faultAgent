@@ -107,6 +107,31 @@ async def test_high_risk_capability_conflict_is_clarified_not_promoted() -> None
 
 
 @pytest.mark.asyncio
+async def test_explicit_high_risk_capability_cannot_be_downgraded_by_model() -> None:
+    message = "正式派发工单"
+    result, _ = await _resolve(message, _proposal(message, capability="check_runtime_status"))
+
+    assert [goal.capability for goal in result.request.goals] == ["dispatch_workorder"]
+    assert any(
+        item["decision"] == "CLARIFY" and item["reason_code"] == "high_risk_capability_conflict"
+        for item in _semantic(result)
+    )
+
+
+@pytest.mark.asyncio
+async def test_unsupported_device_control_signal_blocks_model_reinterpretation() -> None:
+    message = "请立即重启 G120电机1"
+    result, _ = await _resolve(message, _proposal(message, capability="check_runtime_status"))
+
+    assert result.request.goals == []
+    assert "unsupported_high_risk_action" in result.request.current_parse.clarification_needs
+    assert any(
+        item["decision"] == "CLARIFY" and item["reason_code"] == "unsupported_high_risk_action"
+        for item in _semantic(result)
+    )
+
+
+@pytest.mark.asyncio
 async def test_model_cannot_reverse_a_grounded_negation() -> None:
     message = "不要生成报告"
     result, _ = await _resolve(message, _proposal(message, capability="generate_report", requested=True, negated=False))

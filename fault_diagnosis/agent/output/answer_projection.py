@@ -41,4 +41,7 @@ def project_answer_complete_payload(
     rendered = projected.get("rendered_answer")
     if isinstance(rendered, dict):
         projected["rendered_answer"] = {**rendered, "final_answer": effective}
+    composite = projected.get("composite_output")
+    if isinstance(composite, dict):
+        projected["composite_output"] = {**composite, "content": effective}
     return projected

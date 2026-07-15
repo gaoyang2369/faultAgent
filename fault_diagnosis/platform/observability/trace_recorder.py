@@ -68,7 +68,13 @@ class TraceRecorder:
         plan = snapshot.execution_plan
         trace = snapshot.trace if isinstance(snapshot.trace, dict) else {}
         semantic_trace = trace.get("semantic") if isinstance(trace.get("semantic"), dict) else {}
-        context_trace = trace.get("context_resolution") if isinstance(trace.get("context_resolution"), dict) else {}
+        context_trace = (
+            trace.get("context_binding")
+            if isinstance(trace.get("context_binding"), dict)
+            else trace.get("context_resolution")
+            if isinstance(trace.get("context_resolution"), dict)
+            else {}
+        )
         validation = trace.get("validation") if isinstance(trace.get("validation"), dict) else {}
         candidate_plan = trace.get("candidate_plan") if isinstance(trace.get("candidate_plan"), dict) else plan.model_dump(mode="json")
         skipped_nodes = _skipped_nodes(plan)
@@ -87,6 +93,10 @@ class TraceRecorder:
                 "rejected": list(semantic_trace.get("rejected") or []),
                 "clarify": list(semantic_trace.get("clarify") or []),
                 "fallback": bool(semantic_trace.get("fallback")),
+                "fallback_reason": str(semantic_trace.get("fallback_reason") or ""),
+                "deterministic_capabilities": list(semantic_trace.get("deterministic_capabilities") or []),
+                "proposed_capabilities": list(semantic_trace.get("proposal_capabilities") or []),
+                "context_proposal": dict(semantic_trace.get("context_constraints") or {}),
                 "latency_ms": semantic_trace.get("latency_ms", 0.0),
                 "input_tokens": semantic_trace.get("input_tokens"),
                 "output_tokens": semantic_trace.get("output_tokens"),
@@ -121,11 +131,24 @@ class TraceRecorder:
                 "reuse_blockers": list(context.reuse_blockers),
                 "inherited_device": context.inherited_slots.get("device") or context.inherited_slots.get("asset"),
                 "inherited_fault_codes": context.inherited_slots.get("fault_codes") or [],
-                "selected_artifact_id": context_trace.get("selected_artifact_id") or context.referenced_artifact_id,
-                "resolution_status": context_trace.get("resolution_status"),
+                "selected_artifact_id": (
+                    context_trace.get("selected_artifact_id")
+                    or _first(context_trace.get("selected_candidate_refs"))
+                    or context.referenced_artifact_id
+                ),
+                "resolution_status": (
+                    context_trace.get("resolution_status")
+                    or (context.relation_to_previous if context.relation_to_previous == "ambiguous" else None)
+                    or context_trace.get("status")
+                ),
                 "candidate_devices": context_trace.get("candidate_devices", []),
                 "selected_devices": context_trace.get("selected_devices", []),
-                "selected_artifact_type": context_trace.get("selected_artifact_type"),
+                "selected_artifact_type": (
+                    context_trace.get("selected_artifact_type")
+                    or _first(context_trace.get("selected_candidate_types"))
+                ),
+                "selected_context_candidates": list(context_trace.get("selected_candidate_refs") or []),
+                "selected_candidate_types": list(context_trace.get("selected_candidate_types") or []),
                 "raw_context_result": context_trace.get("raw_context_result", {}),
                 "effective_request_before_fill": context_trace.get("effective_request_before_fill", {}),
                 "effective_request_after_fill": context_trace.get("effective_request_after_fill", {}),
@@ -348,6 +371,11 @@ class TraceRecorder:
                 "turn_id": request.get("turn_id"),
                 "message_id": request.get("message_id"),
                 "goal_ids": [item.get("goal_id") for item in goals],
+                "generated_goals": [item.get("capability") for item in goals],
+                "goal_dependencies": {
+                    str(item.get("goal_id") or ""): list(item.get("dependencies") or [])
+                    for item in goals
+                },
                 "user_requested_goal_ids": [item.get("goal_id") for item in goals if _canonical_user_requested(item)],
                 "dependency_goal_ids": [item.get("goal_id") for item in goals if not _canonical_user_requested(item)],
             },
@@ -1136,6 +1164,12 @@ def _source_selection(resolution_trace: Any) -> dict[str, Any]:
         if isinstance(item, dict) and item.get("stage") == "source.select.observe":
             return item
     return {}
+
+
+def _first(values: Any) -> Any | None:
+    if isinstance(values, (list, tuple)) and values:
+        return values[0]
+    return None
 
 
 def _output_mode(answer_variant: str) -> str:

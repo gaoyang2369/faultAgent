@@ -56,7 +56,6 @@ from .planning import PlanCompiler, PlanPolicyBridge, PlanValidationResult, Plan
 from .runtime import CancelToken, RuntimeResult, RuntimeState, ToolRuntime, TypedNode, WorkflowRuntimeExecutor
 from .runtime.plan_preparer import V2ExecutionDecision, decide_v2_execution, prepare_v2_execution_plan
 from .skills import LoadedSkill, SkillLoader, SkillMetadata, SkillRegistry, SkillRouter
-from .understanding import IntentFrameBuilder, RewriteFrameBuilder
 
 __all__ = [
     "AgentEngineV2",
@@ -79,7 +78,6 @@ __all__ = [
     "ExecutionPlan",
     "AgentEngineFlags",
     "IntentFrame",
-    "IntentFrameBuilder",
     "LoadedSkill",
     "LedgerCommitResult",
     "LedgerValidationResult",
@@ -97,7 +95,6 @@ __all__ = [
     "PlanValidationResult",
     "PlanValidator",
     "RewriteFrame",
-    "RewriteFrameBuilder",
     "RuntimeResult",
     "RuntimeState",
     "SkillLoader",

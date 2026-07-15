@@ -339,7 +339,12 @@ def test_response_projection_keeps_runtime_frame_and_artifact_deterministic() ->
     assert result.status == "generated"
     projected_frame = effective_answer_frame(frame, result)
     complete = project_answer_complete_payload(
-        {"final_content": "模板回答", "artifact": {"final_answer": "模板回答"}, "rendered_answer": frame.model_dump()},
+        {
+            "final_content": "模板回答",
+            "artifact": {"final_answer": "模板回答"},
+            "rendered_answer": frame.model_dump(),
+            "composite_output": {"content": "模板回答"},
+        },
         deterministic_answer="模板回答",
         answer_result=result,
     )
@@ -349,6 +354,7 @@ def test_response_projection_keeps_runtime_frame_and_artifact_deterministic() ->
     assert complete["raw_final_content"] == "模板回答"
     assert complete["final_answer_source"] == "grounded_model"
     assert complete["answer_synthesis"]["final_answer_source"] == "grounded_model"
+    assert complete["composite_output"]["content"] == "自然回答"
     assert complete["artifact"]["final_answer"] == "模板回答"
 
 

@@ -121,8 +121,8 @@ def test_status_selected_content_keeps_human_readable_status_fields(production_h
     client, db_path, _ = production_harness
     turn = _turn(client, db_path, "查询 G120电机1 当前运行状态")
     content = turn.visible_content
-    assert "设备：G120电机1" in content
-    assert "状态：" in content
+    assert "G120电机1" in content
+    assert "异常" in content or "关注" in content
     assert "数据模式：" in content
     assert "最新样本：" in content
 

@@ -68,6 +68,8 @@ def test_capability_spec_is_the_skill_routing_and_skill_policy_authority() -> No
 def test_legacy_sync_semantic_modules_are_absent_and_only_new_schema_is_accepted() -> None:
     root = Path(__file__).resolve().parents[1]
     for relative in (
+        "fault_diagnosis/agent/understanding/intent_frame.py",
+        "fault_diagnosis/agent/understanding/rewrite.py",
         "fault_diagnosis/agent/canonical_turn/semantic_fallback.py",
         "fault_diagnosis/agent/canonical_turn/intent_shadow_service.py",
         "fault_diagnosis/agent/canonical_turn/llm_structured_clause_model.py",

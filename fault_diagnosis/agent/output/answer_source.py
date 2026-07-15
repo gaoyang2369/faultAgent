@@ -151,6 +151,10 @@ def build_answer_source_packet(
     return AnswerSourcePacket(
         user_request=_safe_text(str(user_message or "").strip()),
         overall_status=runtime_metadata.get("overall_status") or runtime_metadata.get("status"),  # type: ignore[arg-type]
+        goals=[
+            {"goal_id": item.goal_id, "capability": item.capability, "status": item.status}
+            for item in deliverables
+        ],
         deliverables=safe_deliverables,
         claims=claims,
         evidence=evidence,

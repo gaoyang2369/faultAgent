@@ -76,9 +76,18 @@ class AgentEngineV2:
         )
         denied = [item for item in result.authorization if item.status == "denied"]
         executable = bool(validation.validated_plan.nodes)
+        # The synchronous compatibility façade intentionally has no model call.
+        # When its narrow deterministic fallback cannot identify a Goal, expose
+        # a clarification result rather than a misleading "validated" empty
+        # plan.  Production stream/plan traffic uses preview_turn_async().
+        no_executable_goal = not request.goals
         all_terminal_without_execution = bool(request.goals) and not executable
         has_blocked_goal = any(item.status.startswith("blocked_") for item in result.readiness)
-        blocked = validation.status == "blocked" or (all_terminal_without_execution and (bool(denied) or has_blocked_goal))
+        blocked = (
+            validation.status == "blocked"
+            or no_executable_goal
+            or (all_terminal_without_execution and (bool(denied) or has_blocked_goal))
+        )
         status = "blocked" if blocked else "validated"
         issues = [item.model_dump(mode="json") for item in validation.issues]
         issues.extend(
@@ -96,8 +105,15 @@ class AgentEngineV2:
             {},
         )
         output = OutputFrame(
-            answer_variant="permission_denied" if denied and not executable else "clarification" if all_terminal_without_execution else "not_implemented",
-            final_answer=(denied[0].reason if denied and not executable else projection.effective_request_frame.clarification_question if all_terminal_without_execution else ""),
+            answer_variant="permission_denied" if denied and not executable else "clarification" if (all_terminal_without_execution or no_executable_goal) else "not_implemented",
+            final_answer=(
+                denied[0].reason if denied and not executable
+                else projection.effective_request_frame.clarification_question
+                if all_terminal_without_execution
+                else "请说明希望查询、诊断、解释、报告或工单处理的具体目标。"
+                if no_executable_goal
+                else ""
+            ),
             guardrail_result={
                 "status": status,
                 "issues": issues,

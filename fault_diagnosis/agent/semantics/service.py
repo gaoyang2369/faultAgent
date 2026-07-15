@@ -139,5 +139,6 @@ def _clause_summary(clause) -> dict:  # noqa: ANN001
 def _fallback(parsed, trace: SemanticCallTrace, status: str, started: float) -> SemanticResolution:  # noqa: ANN001
     trace.status = status
     trace.fallback = True
+    trace.fallback_reason = status
     trace.latency_ms = (time.perf_counter() - started) * 1000
     return SemanticResolution(parsed=parsed, trace=trace)

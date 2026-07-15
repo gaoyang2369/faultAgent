@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
 from fault_diagnosis.agent import AgentEngineV2, WorkflowRuntimeExecutor
+from fault_diagnosis.agent.canonical_turn import ConversationTurnCoordinator, CurrentUtteranceParser
 from fault_diagnosis.agent.contracts import OutputFrame, PlanGoal
+from fault_diagnosis.agent.semantics import SemanticResolutionService
+from fault_diagnosis.agent.semantics.model_gateway import ModelGatewayResult
 from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_validation
 from fault_diagnosis.agent.output.answer import build_output_frame
 from fault_diagnosis.domain.diagnosis.contracts import EvidenceBundle, EvidenceItem, EvidenceQuality
@@ -16,6 +20,7 @@ from fault_diagnosis.domain.diagnosis.runtime_status import (
     build_runtime_status_assessment,
 )
 from fault_diagnosis.domain.security.permissions import build_auth_context
+from fault_diagnosis.domain.canonical_turn import TurnCommand
 
 
 def _guest():
@@ -24,6 +29,73 @@ def _guest():
 
 def _window(start: str, end: str) -> TimeWindow:
     return TimeWindow(start=datetime.fromisoformat(start), end=datetime.fromisoformat(end))
+
+
+class _SemanticGateway:
+    model_name = "visitor-contract-test"
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    async def invoke_clause_model(self, _request, *, cancel_event=None):  # noqa: ANN001
+        return ModelGatewayResult(self._payload, 1.0, 1, 1, False)
+
+
+def _semantic_snapshot(message: str, capability: str, *, auth_context=None):
+    auth = auth_context or build_auth_context(role="admin")
+    parser = CurrentUtteranceParser()
+    parsed = parser.parse(message)
+    entities = [
+        {
+            "kind": item.kind,
+            "text": item.text,
+            "start": item.start,
+            "end": item.end,
+            "normalized_candidate": item.value,
+            "confidence": 1.0,
+        }
+        for item in parsed.entities
+        if item.kind in {"device_reference", "fault_code", "time_window"}
+    ]
+    payload = {
+        "schema_version": "semantic_turn_proposal.v1",
+        "entities": entities,
+        "clauses": [{
+            "clause_index": 0,
+            "text": message,
+            "start": 0,
+            "end": len(message),
+            "capability": capability,
+            "confidence": 0.98,
+            "entity_indexes": list(range(len(entities))),
+        }],
+        "ambiguities": [],
+    }
+    coordinator = ConversationTurnCoordinator(
+        parser=parser,
+        semantic_service=SemanticResolutionService(
+            parser=parser,
+            gateway_factory=lambda _semaphore: _SemanticGateway(payload),
+            mode="primary",
+        ),
+    )
+    canonical_result = asyncio.run(coordinator.preview_turn_async(
+        TurnCommand(
+            command="preview",
+            thread_id="thread.visitor.semantic",
+            user_id=auth.user_id,
+            turn_id=f"turn:{message}",
+            message_id=f"message:{message}",
+            idempotency_key=f"key:{message}",
+            raw_message=message,
+        ),
+        auth_context=auth,
+    ))
+    return AgentEngineV2().build_plan_snapshot(
+        raw_message=message,
+        auth_context=auth,
+        canonical_result=canonical_result,
+    )
 
 
 def test_v01_fault_code_and_detail_followup_remain_allowed() -> None:
@@ -45,7 +117,7 @@ def test_v01_fault_code_and_detail_followup_remain_allowed() -> None:
     ],
 )
 def test_original_capability_taxonomy_is_not_rewritten(message: str, capability: str) -> None:
-    snapshot = AgentEngineV2().build_plan_snapshot(raw_message=message, auth_context=build_auth_context(role="admin"))
+    snapshot = _semantic_snapshot(message, capability)
     assert snapshot.effective_request_frame.original_semantic_intent == capability
     assert snapshot.effective_request_frame.effective_semantic_intent == capability
 
@@ -331,8 +403,9 @@ def test_v02_runtime_assessment_and_v03_guest_report_denial_are_independent(monk
         assert sql_manifest["supporting_evidence_ids"]
         assert "check_runtime_status" in sql_manifest["supported_followup_capabilities"]
 
-    denied_report = AgentEngineV2().build_plan_snapshot(
-        raw_message="给我生成 G120电机1 最近一小时的运行报告",
+    denied_report = _semantic_snapshot(
+        "给我生成 G120电机1 最近一小时的运行报告",
+        "generate_report",
         auth_context=auth,
     )
     assert denied_report.metadata["canonical_request"]["goals"][0]["capability"] == "generate_report"

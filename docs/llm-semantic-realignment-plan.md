@@ -1,8 +1,12 @@
 # LLM 语义层与回答层改造计划
 
-> 状态：Wave 1-5 已完成
+> 状态：Wave 1-5 与主语义收口已完成（2026-07-15）
 > 目标分支：`refactor/v2`  
 > 目标：让 LLM 实际参与意图拆解、上下文理解和回答表达，同时保留 Canonical、权限、Artifact、计划、执行和证据链的确定性边界。
+
+当前实现已删除旧 `agent/understanding` Builder，生产 `/chat/plan` 与 `/chat/stream`
+统一经过异步 `SemanticResolutionService`，普通业务表达由 primary LLM proposal 经
+Canonicalizer 收口；第 2 节保留为实施前差距记录，不再代表当前代码状态。
 
 ## 1. 结论先行
 

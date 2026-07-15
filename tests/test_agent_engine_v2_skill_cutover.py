@@ -6,6 +6,12 @@ import json
 from fastapi import FastAPI
 
 from fault_diagnosis import config
+from fault_diagnosis.agent import AgentEngineV2
+from fault_diagnosis.agent.canonical_turn import ConversationTurnCoordinator, CurrentUtteranceParser
+from fault_diagnosis.agent.runtime.plan_preparer import prepare_v2_execution_plan
+from fault_diagnosis.agent.semantics import SemanticResolutionService
+from fault_diagnosis.agent.semantics.model_gateway import ModelGatewayResult
+from fault_diagnosis.domain.canonical_turn import TurnCommand
 from fault_diagnosis.server.agent_gateway import streaming
 from fault_diagnosis.domain.security.permissions import build_auth_context
 
@@ -64,6 +70,54 @@ class FakeToolRuntime:
 
     def save_report(self, **kwargs):  # noqa: ANN003
         return "报告已保存至：/reports/fake.html"
+
+
+class _AlarmSemanticGateway:
+    model_name = "alarm-triage-contract-test"
+
+    async def invoke_clause_model(self, request, *, cancel_event=None):  # noqa: ANN001
+        entities = [
+            {
+                "kind": item["kind"],
+                "text": item["text"],
+                "start": item["start"],
+                "end": item["end"],
+                "normalized_candidate": item["value"],
+                "confidence": 1.0,
+            }
+            for item in request.deterministic_entities
+            if item.get("kind") in {"device_reference", "fault_code", "time_window"}
+        ]
+        first = "J1 的 A07089"
+        second = "现在还在报警吗"
+        payload = {
+            "schema_version": "semantic_turn_proposal.v1",
+            "entities": entities,
+            "clauses": [
+                {
+                    "clause_index": 0,
+                    "text": first,
+                    "start": request.text.index(first),
+                    "end": request.text.index(first) + len(first),
+                    "capability": "explain_fault_code",
+                    "confidence": 0.98,
+                    "entity_indexes": list(range(len(entities))),
+                },
+                {
+                    "clause_index": 1,
+                    "text": second,
+                    "start": request.text.index(second),
+                    "end": request.text.index(second) + len(second),
+                    "capability": "check_runtime_status",
+                    "confidence": 0.98,
+                    "entity_indexes": [
+                        index for index, item in enumerate(entities) if item["kind"] == "device_reference"
+                    ],
+                },
+            ],
+            "ambiguities": [],
+        }
+        return ModelGatewayResult(payload, 1.0, 1, 1, False)
 
 
 def test_fault_code_explain_can_run_v2_stream(monkeypatch) -> None:
@@ -131,15 +185,51 @@ async def _assert_alarm_triage_runs_in_v2_without_legacy_fallback(monkeypatch) -
     app = FastAPI()
     app.state.dev_mode = False
     app.state.agent_engine_v2_tool_runtime = FakeToolRuntime()
+    message = "J1 的 A07089 现在还在报警吗，怎么处理"
+    auth = build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"])
+    parser = CurrentUtteranceParser()
+    canonical_result = await ConversationTurnCoordinator(
+        parser=parser,
+        semantic_service=SemanticResolutionService(
+            parser=parser,
+            gateway_factory=lambda _semaphore: _AlarmSemanticGateway(),
+            mode="primary",
+        ),
+    ).preview_turn_async(
+        TurnCommand(
+            command="preview",
+            thread_id="thread.v2.alarm",
+            user_id=auth.user_id,
+            turn_id="request.v2.alarm",
+            message_id="request.v2.alarm",
+            idempotency_key="request.v2.alarm",
+            raw_message=message,
+        ),
+        auth_context=auth,
+    )
+    snapshot = AgentEngineV2().build_plan_snapshot(
+        raw_message=message,
+        thread_id="thread.v2.alarm",
+        request_id="request.v2.alarm",
+        auth_context=auth,
+        canonical_result=canonical_result,
+    )
+    plan = prepare_v2_execution_plan(
+        snapshot=snapshot,
+        thread_id="thread.v2.alarm",
+        auth_context=auth,
+    )
 
     chunks = [
         chunk
         async for chunk in streaming.token_stream_events(
             app,
-            "J1 的 A07089 现在还在报警吗，怎么处理",
+            message,
             "thread.v2.alarm",
             request_id="request.v2.alarm",
-            auth_context=build_auth_context(role="engineer", asset_scope=["J1号机"], table_scope=["real_data_01"]),
+            auth_context=auth,
+            canonical_snapshot=snapshot,
+            canonical_plan=plan,
         )
     ]
 

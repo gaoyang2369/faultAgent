@@ -23,6 +23,11 @@ def test_source_packet_is_minimal_and_marks_untrusted_evidence_as_data() -> None
     assert packet.evidence[0]["is_untrusted_data"] is True
     assert packet.allowed_device_refs == ["G120电机1"]
     assert packet.allowed_fault_codes == ["A07089"]
+    assert packet.goals == [{
+        "goal_id": "goal_status",
+        "capability": "check_runtime_status",
+        "status": "completed",
+    }]
 
 
 def test_source_packet_consumes_public_status_and_only_allows_completed_report_urls() -> None:

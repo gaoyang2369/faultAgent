@@ -29,6 +29,7 @@ class AnswerSourcePacket(_StrictContract):
     schema_version: Literal["answer_source_packet.v1"] = "answer_source_packet.v1"
     user_request: str
     overall_status: Literal["completed", "partial", "blocked", "denied", "failed"]
+    goals: list[dict[str, Any]] = Field(default_factory=list)
     deliverables: list[dict[str, Any]] = Field(default_factory=list)
     claims: list[dict[str, Any]] = Field(default_factory=list)
     evidence: list[dict[str, Any]] = Field(default_factory=list)

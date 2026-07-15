@@ -102,6 +102,7 @@ class SemanticCallTrace(BaseModel):
     rejected: list[str] = Field(default_factory=list)
     clarify: list[str] = Field(default_factory=list)
     fallback: bool = False
+    fallback_reason: str = ""
     latency_ms: float = 0.0
     input_tokens: int | None = None
     output_tokens: int | None = None

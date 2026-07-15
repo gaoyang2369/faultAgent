@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -8,6 +9,8 @@ from fault_diagnosis.agent import AgentEngineV2
 from fault_diagnosis.agent.canonical_turn import ConversationTurnCoordinator, CurrentUtteranceParser
 from fault_diagnosis.agent.canonical_turn.context_binding import project_authorized_context_candidates
 from fault_diagnosis.agent.contracts import ArtifactLineage, ArtifactManifest
+from fault_diagnosis.agent.semantics import SemanticResolutionService
+from fault_diagnosis.agent.semantics.model_gateway import ModelGatewayResult
 from fault_diagnosis.domain.canonical_turn import TurnCommand
 from fault_diagnosis.domain.security.permissions import build_auth_context
 
@@ -61,7 +64,14 @@ def _context(*manifests: dict, previous: list[str] | None = None, case: dict | N
     }
 
 
-def _preview(message: str, context: dict | None = None, *, role="admin", user_id="user.phase3a"):
+def _preview(
+    message: str,
+    context: dict | None = None,
+    *,
+    role="admin",
+    user_id="user.phase3a",
+    semantic: dict | None = None,
+):
     command = TurnCommand(
         command="preview",
         thread_id="thread.phase3a",
@@ -77,7 +87,68 @@ def _preview(message: str, context: dict | None = None, *, role="admin", user_id
         asset_scope=["G120电机1"] if role == "engineer" else None,
         table_scope=["real_data_01"] if role == "engineer" else None,
     )
-    return ConversationTurnCoordinator().preview_turn(command, auth_context=auth, conversation_context=context)
+    if semantic is None:
+        return ConversationTurnCoordinator().preview_turn(command, auth_context=auth, conversation_context=context)
+    parser = CurrentUtteranceParser()
+    coordinator = ConversationTurnCoordinator(
+        parser=parser,
+        semantic_service=SemanticResolutionService(
+            parser=parser,
+            gateway_factory=lambda _semaphore: _SemanticGateway(semantic),
+            mode="primary",
+        ),
+    )
+    return asyncio.run(coordinator.preview_turn_async(command, auth_context=auth, conversation_context=context))
+
+
+class _SemanticGateway:
+    model_name = "context-binding-contract-test"
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    async def invoke_clause_model(self, _request, *, cancel_event=None):  # noqa: ANN001
+        return ModelGatewayResult(self._payload, 1.0, 1, 1, False)
+
+
+def _semantic(
+    message: str,
+    capability: str,
+    *,
+    source_kind: str = "current_message",
+    context: dict | None = None,
+) -> dict:
+    parsed = CurrentUtteranceParser().parse(message)
+    entities = [
+        {
+            "kind": item.kind,
+            "text": item.text,
+            "start": item.start,
+            "end": item.end,
+            "normalized_candidate": item.value,
+            "confidence": 1.0,
+        }
+        for item in parsed.entities
+        if item.kind in {"device_reference", "fault_code", "time_window"}
+    ]
+    payload = {
+        "schema_version": "semantic_turn_proposal.v1",
+        "entities": entities,
+        "clauses": [{
+            "clause_index": 0,
+            "text": message,
+            "start": 0,
+            "end": len(message),
+            "capability": capability,
+            "confidence": 0.98,
+            "entity_indexes": list(range(len(entities))),
+            "source_kind": source_kind,
+        }],
+        "ambiguities": [],
+    }
+    if context is not None:
+        payload["context"] = context
+    return payload
 
 
 def _binding(result, index=0):
@@ -119,7 +190,23 @@ def test_plural_reference_binds_all_supported_assets() -> None:
 
 def test_fault_code_detail_followup_inherits_structured_code() -> None:
     knowledge = _manifest("knowledge.a07089", "knowledge_artifact", [], fault_codes=["A07089"])
-    result = _preview("详细点", _context(knowledge, previous=["knowledge.a07089"]))
+    message = "详细点"
+    result = _preview(
+        message,
+        _context(knowledge, previous=["knowledge.a07089"]),
+        semantic=_semantic(
+            message,
+            "explain_fault_code",
+            source_kind="prior_result",
+            context={
+                "reference_target": "none",
+                "temporal_relation": "previous",
+                "requested_reuse": True,
+                "freshness_intent": "historical_ok",
+                "confidence": 0.98,
+            },
+        ),
+    )
     assert result.request.goals[0].capability == "explain_fault_code"
     assert _binding(result).fault_codes == ["A07089"]
     assert result.source_resolutions[0].artifact_id == "knowledge.a07089"
@@ -127,7 +214,22 @@ def test_fault_code_detail_followup_inherits_structured_code() -> None:
 
 def test_time_correction_inherits_device_and_overrides_window() -> None:
     sql = _manifest("sql.window", "sql_artifact", ["G120电机1"])
-    binding = _binding(_preview("改成最近两小时", _context(sql, previous=["sql.window"])))
+    message = "改成最近两小时"
+    binding = _binding(_preview(
+        message,
+        _context(sql, previous=["sql.window"]),
+        semantic=_semantic(
+            message,
+            "check_runtime_status",
+            context={
+                "reference_target": "prior_runtime_result",
+                "temporal_relation": "previous",
+                "requested_reuse": True,
+                "freshness_intent": "current_required",
+                "confidence": 0.98,
+            },
+        ),
+    ))
     assert binding.asset_refs == ["G120电机1"]
     assert binding.time_window == {"raw": "最近两小时"}
     assert binding.slots[2].status == "explicit"
@@ -210,11 +312,29 @@ def test_runtime_status_refreshes_by_default() -> None:
 
 def test_no_requery_diagnosis_reuses_previous_status_without_sql_goal() -> None:
     sql = _manifest("sql.previous", "sql_artifact", ["G120电机1"])
+    message = "无需重新查询，基于刚才结果说明是否异常"
+    canonical_result = _preview(
+        message,
+        _context(sql, previous=["sql.previous"]),
+        semantic=_semantic(
+            message,
+            "diagnose_fault",
+            source_kind="prior_result",
+            context={
+                "reference_target": "prior_runtime_result",
+                "temporal_relation": "previous",
+                "requested_reuse": True,
+                "freshness_intent": "historical_ok",
+                "confidence": 0.98,
+            },
+        ),
+    )
     snapshot = AgentEngineV2().build_plan_snapshot(
-        raw_message="无需重新查询，基于刚才结果说明是否异常",
+        raw_message=message,
         thread_id="thread.phase3a",
         auth_context=build_auth_context(user_id="user.phase3a", role="admin"),
         conversation_context=_context(sql, previous=["sql.previous"]),
+        canonical_result=canonical_result,
     )
     assert [node.node_type for node in snapshot.execution_plan.nodes] == ["analysis"]
 
@@ -236,7 +356,23 @@ def test_assistant_text_is_never_projected_as_evidence() -> None:
 def test_source_resolver_cannot_override_binder_selection() -> None:
     selected = _manifest("sql.selected", "sql_artifact", ["G120电机1"])
     other = _manifest("sql.other", "sql_artifact", ["G120电机2"])
-    result = _preview("继续分析", _context(other, selected, previous=["sql.selected"]))
+    message = "继续分析"
+    result = _preview(
+        message,
+        _context(other, selected, previous=["sql.selected"]),
+        semantic=_semantic(
+            message,
+            "diagnose_fault",
+            source_kind="prior_result",
+            context={
+                "reference_target": "prior_runtime_result",
+                "temporal_relation": "previous",
+                "requested_reuse": True,
+                "freshness_intent": "historical_ok",
+                "confidence": 0.98,
+            },
+        ),
+    )
     assert _binding(result).source_artifact_refs == ["sql.selected"]
     assert result.source_resolutions[0].artifact_id == "sql.selected"
 
@@ -250,7 +386,23 @@ def test_explicit_missing_artifact_does_not_fall_back() -> None:
 
 def test_previous_denied_or_artifactless_turn_does_not_fall_back_to_older_source() -> None:
     older = _manifest("report.older", "report_artifact", ["G120电机1"])
-    result = _preview("继续分析这个报告", _context(older, previous=[], context_unavailable=True))
+    message = "继续分析这个报告"
+    result = _preview(
+        message,
+        _context(older, previous=[], context_unavailable=True),
+        semantic=_semantic(
+            message,
+            "diagnose_fault",
+            source_kind="prior_result",
+            context={
+                "reference_target": "prior_report",
+                "temporal_relation": "previous",
+                "requested_reuse": True,
+                "freshness_intent": "historical_ok",
+                "confidence": 0.98,
+            },
+        ),
+    )
     assert _binding(result).source_artifact_refs == []
     assert _binding(result).clarification.reason_code == "missing_source"
 

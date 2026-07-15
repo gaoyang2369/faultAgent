@@ -17,6 +17,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fault_diagnosis.agent.output import GroundedAnswerResult
+from fault_diagnosis.agent.semantics.model_gateway import ModelGatewayResult
+from fault_diagnosis.agent.semantics import service as semantic_service_module
 from fault_diagnosis.platform import settings
 from fault_diagnosis.platform.observability import tracing
 from fault_diagnosis.platform.persistence.diagnosis_artifacts.backends.file import FileArtifactStoreBackend
@@ -139,6 +141,147 @@ class FakeAnswerSynthesizer:
         )
 
 
+class EvalSemanticGateway:
+    """Controlled one-call semantic model for architecture-level E2E cases.
+
+    Ordinary explicit requests mirror deterministic high-precision anchors;
+    cases intentionally outside those anchors are supplied as structured model
+    proposals.  This keeps the eval focused on the primary semantic contract
+    instead of rebuilding a second production intent parser in test code.
+    """
+
+    model_name = "agent-v2-e2e-semantic"
+
+    async def invoke_clause_model(self, request, *, cancel_event=None):  # noqa: ANN001
+        payload = _eval_semantic_payload(request)
+        return ModelGatewayResult(payload, 1.0, 1, 1, False)
+
+
+def _eval_semantic_payload(request) -> dict[str, Any]:  # noqa: ANN001
+    text = request.text
+    entities = [
+        {
+            "kind": item["kind"],
+            "text": item["text"],
+            "start": item["start"],
+            "end": item["end"],
+            "normalized_candidate": item["value"],
+            "confidence": item.get("confidence", 1.0),
+        }
+        for item in request.deterministic_entities
+        if item.get("kind") in {"device_reference", "fault_code", "time_window"}
+    ]
+    if "详细" in text:
+        return _semantic_payload(text, entities, [{
+            "text": text, "capability": "explain_fault_code", "source_kind": "prior_result",
+        }], context={
+            "reference_target": "none", "temporal_relation": "previous",
+            "requested_reuse": True, "freshness_intent": "historical_ok", "confidence": 0.98,
+        })
+    if text.replace("。", "") == "改成最近两小时":
+        return _semantic_payload(text, entities, [{
+            "text": text, "capability": "check_runtime_status", "entity_indexes": _entity_indexes(entities, "time_window"),
+        }], context={
+            "reference_target": "prior_runtime_result", "temporal_relation": "previous",
+            "requested_reuse": True, "freshness_intent": "current_required", "confidence": 0.98,
+        })
+    if "无需重新查询" in text and "基于刚才结果分析" in text:
+        clause_text = "基于刚才结果分析"
+        return _semantic_payload(text, entities, [{
+            "text": clause_text, "capability": "diagnose_fault", "source_kind": "prior_result",
+        }], context={
+            "reference_target": "prior_runtime_result", "temporal_relation": "previous",
+            "requested_reuse": True, "freshness_intent": "historical_ok", "confidence": 0.98,
+        })
+    if text.startswith("分析G120电机1，如果异常再生成报告"):
+        first = "分析G120电机1"
+        second = "再生成报告"
+        return _semantic_payload(text, entities, [
+            {
+                "text": first, "capability": "diagnose_fault",
+                "entity_indexes": _entity_indexes(entities, "device_reference"), "sequence_index": 0,
+            },
+            {
+                "text": second, "capability": "generate_report", "conditional": True,
+                "condition_type": "if_abnormal", "sequence_index": 1,
+                "depends_on_clause_indexes": [0],
+            },
+        ])
+    if "判断" in text and "需要工单" in text and "生成工单草稿" in text:
+        first = text[:text.index("，")]
+        second = "生成工单草稿"
+        return _semantic_payload(text, entities, [
+            {
+                "text": first, "capability": "evaluate_workorder_need",
+                "entity_indexes": _entity_indexes(entities, "device_reference"), "sequence_index": 0,
+            },
+            {
+                "text": second, "capability": "create_workorder_draft", "conditional": True,
+                "condition_type": "if_workorder_recommended", "sequence_index": 1,
+                "depends_on_clause_indexes": [0],
+            },
+        ], context={
+            "reference_target": "prior_report", "temporal_relation": "previous",
+            "requested_reuse": True, "freshness_intent": "historical_ok", "confidence": 0.98,
+        })
+    clauses: list[dict[str, Any]] = []
+    cursor = 0
+    for item in request.deterministic_clauses:
+        capability = item.get("capability")
+        clause_text = str(item.get("text") or "")
+        if not capability or not clause_text:
+            continue
+        start = text.find(clause_text, cursor)
+        if start < 0:
+            start = text.find(clause_text)
+        cursor = max(cursor, start + len(clause_text))
+        indexes = [
+            index for index, entity in enumerate(entities)
+            if start <= int(entity["start"]) and int(entity["end"]) <= start + len(clause_text)
+        ]
+        clauses.append({
+            "text": clause_text, "capability": capability, "entity_indexes": indexes,
+            "requested": bool(item.get("requested", True)), "negated": bool(item.get("negated", False)),
+            "source_kind": item.get("source_kind") or "current_message",
+        })
+    return _semantic_payload(text, entities, clauses)
+
+
+def _semantic_payload(
+    text: str,
+    entities: list[dict[str, Any]],
+    clauses: list[dict[str, Any]],
+    *,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    projected: list[dict[str, Any]] = []
+    cursor = 0
+    for index, raw in enumerate(clauses):
+        item = dict(raw)
+        clause_text = str(item.pop("text"))
+        start = text.find(clause_text, cursor)
+        if start < 0:
+            start = text.find(clause_text)
+        cursor = max(cursor, start + len(clause_text))
+        projected.append({
+            "clause_index": index, "text": clause_text, "start": start,
+            "end": start + len(clause_text), "confidence": 0.98, **item,
+        })
+    payload: dict[str, Any] = {
+        "schema_version": "semantic_turn_proposal.v1",
+        "entities": entities,
+        "clauses": projected,
+        "ambiguities": [],
+    }
+    if context is not None:
+        payload["context"] = context
+    return payload
+
+
+def _entity_indexes(entities: list[dict[str, Any]], kind: str) -> list[int]:
+    return [index for index, item in enumerate(entities) if item.get("kind") == kind]
+
+
 def _runtime_row(device: str, *, normal: bool) -> tuple[Any, ...]:
     values: list[Any] = [None] * 32
     values[0] = 1
@@ -200,8 +343,9 @@ def build_client(case: dict[str, Any], root: Path) -> tuple[TestClient, EvalTool
     settings.DEV_AUTH_ENABLED = True
     settings.ENABLE_GROUNDED_ANSWER_SYNTHESIS = bool(flags.get("grounded_answer", False))
     settings.GROUNDED_ANSWER_ROLLOUT_PERCENT = 100 if flags.get("grounded_answer") else 0
-    settings.LLM_SEMANTIC_MODE = "off"
-    settings.ENABLE_LLM_CONTEXT_SEMANTICS = False
+    settings.LLM_SEMANTIC_MODE = "primary"
+    settings.ENABLE_LLM_CONTEXT_SEMANTICS = True
+    semantic_service_module.build_semantic_model_gateway = lambda *, semaphore: EvalSemanticGateway()
     settings.AGENT_TRACE_BACKEND = "none"
     settings.AGENT_TRACE_LOCAL_LOG = False
     settings.AGENT_TRACE_CONSOLE = False

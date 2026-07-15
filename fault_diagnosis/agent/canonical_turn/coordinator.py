@@ -427,6 +427,14 @@ class ConversationTurnCoordinator:
                 ]
                 if observed:
                     unique = list(dict.fromkeys(observed))
+                    if slot == "device" and any(
+                        entity.kind == "correction_reference"
+                        and clause.start <= entity.start < clause.end
+                        for entity in parsed.entities
+                    ):
+                        # A correction is a deterministic safety signal: only
+                        # the replacement target can be inherited downstream.
+                        unique = [unique[-1]]
                     if slot == "device" and clause.action and clause.action.capability == "compare_runtime_status" and slot in carried_slot_values:
                         previous = carried_slot_values[slot]
                         unique = list(dict.fromkeys([*(previous if isinstance(previous, list) else [previous]), *unique]))
@@ -454,6 +462,12 @@ class ConversationTurnCoordinator:
                     )
                 )
                 if values:
+                    if slot == "device" and any(
+                        entity.kind == "correction_reference"
+                        and clause.start <= entity.start < clause.end
+                        for entity in parsed.entities
+                    ):
+                        values = [values[-1]]
                     if slot == "device" and clause.action.capability == "compare_runtime_status" and slot in carried_slot_values:
                         previous = carried_slot_values[slot]
                         values = list(dict.fromkeys([*(previous if isinstance(previous, list) else [previous]), *values]))
@@ -780,6 +794,7 @@ def _legacy_semantic_trace(parsed) -> dict[str, Any]:  # noqa: ANN001
         "rejected": [],
         "clarify": [],
         "fallback": False,
+        "fallback_reason": "",
         "latency_ms": 0,
         "input_tokens": None,
         "output_tokens": None,
@@ -809,6 +824,9 @@ def _binding_trace(bound_turn, candidates) -> dict[str, Any]:  # noqa: ANN001
             type_by_ref.get(ref)
             for item in bindings for ref in item.source_artifact_refs
             if type_by_ref.get(ref)
+        )),
+        "selected_candidate_refs": list(dict.fromkeys(
+            ref for item in bindings for ref in item.source_artifact_refs
         )),
         "blockers": list(dict.fromkeys(value for item in bindings for value in item.blockers)),
         "explicit_override_count": sum(
