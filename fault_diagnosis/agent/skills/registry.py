@@ -8,6 +8,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
+from fault_diagnosis.domain.canonical_turn import CAPABILITY_SPECS
+
 
 class SlotPolicy(BaseModel):
     required: list[str] = Field(default_factory=list)
@@ -110,10 +112,24 @@ class SkillRegistry:
                 continue
             metadata = SkillMetadata(**data, package_path=str(skill_file.parent))
             skills[metadata.name] = metadata
+        self._validate_capability_alignment(skills)
         return skills
 
     def get(self, name: str) -> SkillMetadata | None:
         return self.discover().get(name)
+
+    @staticmethod
+    def _validate_capability_alignment(skills: dict[str, SkillMetadata]) -> None:
+        """CapabilitySpec 是路由、槽位和节点范围的唯一权威。"""
+
+        for spec in CAPABILITY_SPECS.values():
+            metadata = skills.get(spec.skill)
+            if metadata is None:
+                raise ValueError(f"capability {spec.capability} references unknown skill {spec.skill}")
+            if not set(spec.required_slots).issubset(metadata.required_slots):
+                raise ValueError(f"skill {spec.skill} misses required slots for {spec.capability}")
+            if not set(spec.runtime_nodes).issubset(metadata.allowed_nodes):
+                raise ValueError(f"skill {spec.skill} misses runtime nodes for {spec.capability}")
 
 
 def _read_yaml(path: Path) -> Any:

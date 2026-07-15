@@ -1,6 +1,6 @@
 # LLM 语义层与回答层改造计划
 
-> 状态：Wave 1-4 已完成，Wave 5 待执行
+> 状态：Wave 1-5 已完成
 > 目标分支：`refactor/v2`  
 > 目标：让 LLM 实际参与意图拆解、上下文理解和回答表达，同时保留 Canonical、权限、Artifact、计划、执行和证据链的确定性边界。
 
@@ -58,7 +58,7 @@ Answer Validator
 
 ### 2.1 意图层
 
-当前已有 `LLMStructuredClauseModel`、`ControlledIntentFallback` 和 Shadow，但还不是 LLM 主语义层：
+历史同步 fallback 与独立 Shadow 已移除；统一异步语义入口是唯一的模型调用路径：
 
 - 只有规则先判定 eligible，Fallback 才会调用模型；规则词表外的表达可能连调用资格都拿不到。
 - 模型只能引用确定性实体，不能提出待验证的新设备别名、故障码或时间表达。
@@ -162,7 +162,7 @@ ContextSemanticProposal(
 
 ## 4. 代码结构
 
-不要继续扩大 `semantic_fallback.py` 或 `context_binding.py`。新增独立小模块：
+不要继续扩大 `context_binding.py`。语义层采用独立小模块：
 
 ```text
 fault_diagnosis/agent/semantics/
@@ -178,15 +178,13 @@ fault_diagnosis/agent/semantics/
 现有模块职责调整：
 
 - `agent/canonical_turn/parser.py`：保留确定性解析，只负责产出规则候选和最终 parse 投影，不直接拥有模型调用。
-- `agent/canonical_turn/semantic_fallback.py`：迁移后降为兼容适配器，最终删除。
-- `agent/canonical_turn/llm_structured_clause_model.py`：迁移到异步 `model_gateway.py`，不再使用同步 `invoke()`。
 - `agent/canonical_turn/coordinator.py`：生产 preview/execute 改为 async semantic resolution，再构建 Canonical 请求。
 - `agent/canonical_turn/context_binding.py`：接收经过验证的 `ContextSemanticProposal`，但继续拥有最终绑定权。
-- `agent/canonical_turn/intent_shadow_service.py`：不再二次调用模型，只投影同一次语义调用的 diff/metrics。
+- `agent/semantics/service.py`：`shadow` 只投影同一次调用的字段裁决与差异指标，不再有独立 Shadow 服务。
 - `server/use_cases/turn_execution.py`：`preview_turn()` 改为可 await；stream 与 plan 共用同一个语义结果。
 - `server/use_cases/chat_service.py`：删除 plan-only Shadow 补调用，避免同一轮重复请求模型。
 - `server/agent_gateway/answer_synthesis.py`：保持现有边界，只统一配置与观测字段。
-- `platform/settings.py`：引入单一语义模式配置，旧布尔开关保留一版兼容映射。
+- `platform/settings.py`：只保留单一语义模式配置；开发/测试默认 `primary`，生产默认 `off`。
 
 ## 5. 配置策略
 
@@ -205,13 +203,6 @@ ENABLE_GROUNDED_ANSWER_SYNTHESIS=true
 GROUNDED_ANSWER_ROLLOUT_PERCENT=100
 ANSWER_MODEL_INCLUDE_DETERMINISTIC_FALLBACK=true
 ```
-
-兼容期映射：
-
-- `ENABLE_LLM_INTENT_SHADOW=true` → `LLM_SEMANTIC_MODE=shadow`；
-- `ENABLE_LLM_INTENT_FALLBACK=true` → 仅作为旧 fallback 行为，不代表 primary；
-- 新配置显式存在时，新配置优先；
-- 一版后删除旧开关和旧 fallback 专用 prompt。
 
 开发环境完成异步入口后直接使用 `primary + context=true + answer=100`，不执行 5%→25% 的慢灰度。生产配置仍默认关闭，待最终验收后一次切换。
 
@@ -237,7 +228,7 @@ ANSWER_MODEL_INCLUDE_DETERMINISTIC_FALLBACK=true
 
 1. LLM 每轮解析 clause、goal、实体候选、否定、条件、顺序、依赖和修正。
 2. 模型允许提出规则未识别的实体候选，但必须通过 span 和 registry/格式验证。
-3. 把 `IntentSemanticMerger` 的“只能填空”升级为逐字段 `ACCEPT / REJECT / CLARIFY`。
+3. 将模型提议收口为逐字段 `ACCEPT / REJECT / CLARIFY`。
 4. 允许模型指出规则 capability 可能错误；冲突不再固定“规则永远赢”。
 5. `CanonicalTurnRequest` 仍是 planner 唯一输入，不新增第二套生产意图合同。
 6. `dispatch_workorder`、设备控制、权限语义只能识别，不能直接形成可执行授权。
@@ -347,7 +338,6 @@ CapabilitySpec(
 
 ```bash
 PYTHONPATH=. pytest -q
-PYTHONPATH=. python tests/evals/run_intent_shadow_eval.py --mode compare
 PYTHONPATH=. python tests/evals/run_context_binding_eval.py
 PYTHONPATH=. python tests/evals/run_context_goal_regressions.py
 PYTHONPATH=. python tests/evals/run_plan_eval.py --tier core

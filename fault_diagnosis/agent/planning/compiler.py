@@ -146,32 +146,43 @@ def _nodes_for_goal(goal, request: CanonicalTurnRequest, source: GoalSourceResol
         dependency_capabilities = {
             item.capability for item in request.goals if item.goal_id in goal.dependencies
         }
-        return [("analysis", ""), ("report", "")] if dependency_capabilities.intersection(
+        nodes = [("analysis", ""), ("report", "")] if dependency_capabilities.intersection(
             {"check_runtime_status", "compare_runtime_status"}
         ) else [("report", "")]
+        return _validated_capability_nodes(capability, nodes)
     if goal.dependencies and capability == "create_workorder_draft":
-        return [("workorder", ""), ("approval", "")]
+        return _validated_capability_nodes(capability, [("workorder", ""), ("approval", "")])
     if capability == "explain_fault_code":
-        return [("rag", "")]
+        return _validated_capability_nodes(capability, [("rag", "")])
     if capability == "check_runtime_status":
-        return [("sql", device) for device in devices]
+        return _validated_capability_nodes(capability, [("sql", device) for device in devices])
     if capability == "compare_runtime_status":
-        return [*(("sql", device) for device in devices), ("comparison", "")]
+        return _validated_capability_nodes(capability, [*(("sql", device) for device in devices), ("comparison", "")])
     if capability in {"diagnose_fault", "resolution_recommendation"}:
         if source.status == "source_for_execution":
-            return [*(("rag", "") for _ in [0] if codes), ("analysis", "")]
-        return [*(("rag", "") for _ in [0] if codes), *(("sql", device) for device in devices), ("analysis", "")]
+            return _validated_capability_nodes(capability, [*(("rag", "") for _ in [0] if codes), ("analysis", "")])
+        return _validated_capability_nodes(capability, [*(("rag", "") for _ in [0] if codes), *(("sql", device) for device in devices), ("analysis", "")])
     if capability == "generate_report":
         if source.status == "source_for_execution":
-            return [("analysis", ""), ("report", "")] if source.artifact_type == "sql_artifact" else [("report", "")]
-        return [*(("sql", device) for device in devices), ("analysis", ""), ("report", "")]
+            nodes = [("analysis", ""), ("report", "")] if source.artifact_type == "sql_artifact" else [("report", "")]
+            return _validated_capability_nodes(capability, nodes)
+        return _validated_capability_nodes(capability, [*(("sql", device) for device in devices), ("analysis", ""), ("report", "")])
     if capability == "create_workorder_draft":
         if source.status == "source_for_execution":
-            return [("workorder", ""), ("approval", "")]
-        return [*(("sql", device) for device in devices), ("analysis", ""), ("workorder", ""), ("approval", "")]
+            return _validated_capability_nodes(capability, [("workorder", ""), ("approval", "")])
+        return _validated_capability_nodes(capability, [*(("sql", device) for device in devices), ("analysis", ""), ("workorder", ""), ("approval", "")])
     if capability == "evaluate_workorder_need":
-        return [("workorder", "")]
+        return _validated_capability_nodes(capability, [("workorder", "")])
     return []
+
+
+def _validated_capability_nodes(capability: str, nodes: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """阻止 PlanCompiler 的节点分支脱离 CapabilitySpec。"""
+
+    spec = capability_spec(capability)
+    if spec is None or not {node_type for node_type, _ in nodes}.issubset(spec.runtime_nodes):
+        raise ValueError(f"plan nodes are outside CapabilitySpec for {capability}")
+    return nodes
 
 
 def _merge_node_spec(specs: list[dict], *, node_type: str, device: str, goal_id: str) -> None:

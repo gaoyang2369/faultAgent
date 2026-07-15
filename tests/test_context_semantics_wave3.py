@@ -70,7 +70,7 @@ class _Gateway:
 
 
 async def _preview(message: str, context: dict, proposal_context: dict, *, auth=None):
-    parser = CurrentUtteranceParser(enable_fallback=False)
+    parser = CurrentUtteranceParser()
     gateway = _Gateway(_payload(message, proposal_context))
     service = SemanticResolutionService(parser=parser, gateway_factory=lambda _semaphore: gateway, mode="primary")
     result = await ConversationTurnCoordinator(parser=parser, semantic_service=service).preview_turn_async(

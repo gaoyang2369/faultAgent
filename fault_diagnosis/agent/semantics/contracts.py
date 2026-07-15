@@ -93,7 +93,7 @@ class SemanticCallTrace(BaseModel):
 
     attempted: bool = False
     mode: Literal["off", "shadow", "primary"] = "off"
-    schema_name: str = Field(default="model_clause_parse.v1", alias="schema", serialization_alias="schema")
+    schema_name: str = Field(default="semantic_turn_proposal.v1", alias="schema", serialization_alias="schema")
     status: Literal[
         "not_attempted", "completed", "model_not_configured", "model_timeout",
         "model_cancelled", "model_error", "schema_invalid", "validation_failed",

@@ -9,12 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .capabilities import CANONICAL_CAPABILITIES
 
-SHADOW_ONLY_CAPABILITIES = frozenset(
-    {"meta", "unsupported_high_risk_action"}
-)
-ALL_INTENT_CAPABILITIES = CANONICAL_CAPABILITIES | SHADOW_ONLY_CAPABILITIES
-# Backward-compatible production name. It intentionally excludes Shadow-only
-# candidates and remains the authority for ClauseAction and CanonicalGoal.
 CAPABILITY_ALLOWLIST = CANONICAL_CAPABILITIES
 
 GoalOrigin = Literal["explicit", "inferred", "dependency"]
@@ -124,15 +118,8 @@ class StructuredClause(CanonicalContract):
         return self
 
 
-class IntentFallbackDecision(CanonicalContract):
-    eligible: bool = False
-    reason_codes: list[str] = Field(default_factory=list)
-
-
 class IntentResolutionMetadata(CanonicalContract):
-    mode: Literal["deterministic", "llm_fallback", "llm_primary", "deterministic_after_llm_failure"] = "deterministic"
-    fallback_attempted: bool = False
-    fallback_reasons: list[str] = Field(default_factory=list)
+    mode: Literal["deterministic", "llm_primary"] = "deterministic"
     model_status: str = "not_attempted"
     accepted_model_fields: list[str] = Field(default_factory=list)
     rejected_model_fields: list[str] = Field(default_factory=list)

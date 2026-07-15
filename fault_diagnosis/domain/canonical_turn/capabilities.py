@@ -17,48 +17,49 @@ class CapabilitySpec:
     llm_may_propose: bool = True
     approval_required: bool = False
     deliverables: tuple[str, ...] = ()
+    skill: str = ""
 
 
 CAPABILITY_SPECS: dict[str, CapabilitySpec] = {
     "check_runtime_status": CapabilitySpec(
         capability="check_runtime_status", required_slots=("device",), optional_slots=("time_window",),
-        allowed_source_types=("sql_artifact",), runtime_nodes=("sql",), deliverables=("runtime_status",),
+        allowed_source_types=("sql_artifact",), runtime_nodes=("sql",), deliverables=("runtime_status",), skill="runtime_status",
     ),
     "compare_runtime_status": CapabilitySpec(
         capability="compare_runtime_status", required_slots=("device",), optional_slots=("time_window",),
-        allowed_source_types=("sql_artifact",), runtime_nodes=("sql", "comparison"), deliverables=("runtime_comparison",),
+        allowed_source_types=("sql_artifact",), runtime_nodes=("sql", "comparison"), deliverables=("runtime_comparison",), skill="runtime_status",
     ),
     "diagnose_fault": CapabilitySpec(
         capability="diagnose_fault", required_slots=("device",), optional_slots=("time_window", "fault_code"),
         allowed_source_types=("sql_artifact", "analysis_artifact"), runtime_nodes=("sql", "rag", "analysis"),
-        deliverables=("diagnosis",),
+        deliverables=("diagnosis",), skill="alarm_triage",
     ),
     "explain_fault_code": CapabilitySpec(
         capability="explain_fault_code", required_slots=("fault_code",), runtime_nodes=("rag",),
-        risk_level="low", deliverables=("fault_code_explanation",),
+        risk_level="low", deliverables=("fault_code_explanation",), skill="fault_code_explain",
     ),
     "resolution_recommendation": CapabilitySpec(
         capability="resolution_recommendation", required_slots=("device",), optional_slots=("fault_code",),
-        allowed_source_types=("analysis_artifact",), runtime_nodes=("analysis",), deliverables=("recommendations",),
+        allowed_source_types=("analysis_artifact",), runtime_nodes=("sql", "rag", "analysis"), deliverables=("recommendations",), skill="alarm_triage",
     ),
     "generate_report": CapabilitySpec(
         capability="generate_report", optional_slots=("device",),
-        allowed_source_types=("analysis_artifact", "report_artifact"), runtime_nodes=("report",),
-        risk_level="low", deliverables=("report",),
+        allowed_source_types=("analysis_artifact", "report_artifact"), runtime_nodes=("sql", "analysis", "report"),
+        risk_level="low", deliverables=("report",), skill="report_generation",
     ),
     "evaluate_workorder_need": CapabilitySpec(
         capability="evaluate_workorder_need", required_slots=("device",), optional_slots=("fault_code",),
         allowed_source_types=("analysis_artifact",), runtime_nodes=("analysis", "workorder"),
-        deliverables=("workorder_need_assessment",),
+        deliverables=("workorder_need_assessment",), skill="workorder_decision",
     ),
     "create_workorder_draft": CapabilitySpec(
         capability="create_workorder_draft", required_slots=("device",), optional_slots=("fault_code",),
         allowed_source_types=("analysis_artifact", "report_artifact"), runtime_nodes=("analysis", "workorder", "approval"),
-        risk_level="high", approval_required=True, deliverables=("workorder_draft",),
+        risk_level="high", approval_required=True, deliverables=("workorder_draft",), skill="workorder_decision",
     ),
     "dispatch_workorder": CapabilitySpec(
         capability="dispatch_workorder", allowed_source_types=("workorder_artifact",), runtime_nodes=("approval",),
-        risk_level="high", approval_required=True,
+        risk_level="high", approval_required=True, skill="workorder_decision",
     ),
 }
 

@@ -82,7 +82,7 @@ class TraceRecorder:
             attributes={
                 "attempted": bool(semantic_trace.get("attempted")),
                 "mode": semantic_trace.get("mode", "off"),
-                "schema": semantic_trace.get("schema", "model_clause_parse.v1"),
+                "schema": semantic_trace.get("schema", "semantic_turn_proposal.v1"),
                 "accepted": list(semantic_trace.get("accepted") or []),
                 "rejected": list(semantic_trace.get("rejected") or []),
                 "clarify": list(semantic_trace.get("clarify") or []),
@@ -140,11 +140,7 @@ class TraceRecorder:
                 "effective_target_artifact_id": getattr(effective, "target_artifact_id", None),
                 "effective_target_artifact_type": getattr(effective, "target_artifact_type", None),
                 "effective_slot_sources": dict(getattr(effective, "slot_sources", {}) or {}),
-                "semantic_fallback_used": any(
-                    item.get("stage") == "semantic.fallback"
-                    for item in (getattr(effective, "resolution_trace", []) or [])
-                    if isinstance(item, dict)
-                ),
+                "semantic_model_fallback": bool(semantic_trace.get("fallback")),
                 "candidate_artifact_count": _candidate_artifact_count(context.inherited_slots),
                 "deictic_refs": context.permission_context.get("deictic_refs", []),
                 "recent_corrections": context.permission_context.get("recent_corrections", []),

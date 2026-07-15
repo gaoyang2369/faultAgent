@@ -1,11 +1,9 @@
 """Canonical turn parsing, decisions and coordination components."""
 
 from .coordinator import ConversationTurnCoordinator
-from .parser import ClauseModelRequest, CurrentUtteranceParser, StructuredClauseModel
+from .parser import CurrentUtteranceParser
 
 __all__ = [
-    "ClauseModelRequest",
     "ConversationTurnCoordinator",
     "CurrentUtteranceParser",
-    "StructuredClauseModel",
 ]

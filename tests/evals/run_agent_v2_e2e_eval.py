@@ -16,8 +16,6 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fault_diagnosis.agent.canonical_turn import CurrentUtteranceParser
-from fault_diagnosis.agent.canonical_turn.intent_shadow_service import IntentShadowService
 from fault_diagnosis.agent.output import GroundedAnswerResult
 from fault_diagnosis.platform import settings
 from fault_diagnosis.platform.observability import tracing
@@ -111,37 +109,6 @@ class WorkorderSaveFailureStore(FileArtifactStoreBackend):
         return super().save_artifact(envelope)
 
 
-class FakeIntentModel:
-    def __init__(self, mode: str) -> None:
-        self.mode = mode
-        self.calls = 0
-
-    def parse(self, request):  # noqa: ANN001
-        self.calls += 1
-        if self.mode == "timeout":
-            raise TimeoutError("fake intent timeout")
-        if self.mode == "invalid":
-            raise ValueError("fake invalid json")
-        text = request.text.rstrip("。！？?!")
-        capability = "check_runtime_status" if any(word in text for word in ("运转", "状态")) else "diagnose_fault"
-        return {
-            "schema_version": "model_clause_parse.v1",
-            "clauses": [
-                {
-                    "clause_index": 0,
-                    "text": text,
-                    "start": 0,
-                    "end": len(text),
-                    "action": {"capability": capability, "confidence": 0.4, "entity_refs": [], "inferred": False},
-                    "source": None,
-                    "slot": {},
-                    "linker": None,
-                    "shadow_metadata": {},
-                }
-            ],
-        }
-
-
 class FakeAnswerSynthesizer:
     def __init__(self, mode: str) -> None:
         self.mode = mode
@@ -218,7 +185,7 @@ def login(client: TestClient, case: dict[str, Any], *, role: str | None = None) 
         raise AssertionError(f"dev login failed: {response.status_code} {response.text}")
 
 
-def build_client(case: dict[str, Any], root: Path) -> tuple[TestClient, EvalToolRuntime, FakeIntentModel | None, FakeAnswerSynthesizer | None]:
+def build_client(case: dict[str, Any], root: Path) -> tuple[TestClient, EvalToolRuntime, FakeAnswerSynthesizer | None]:
     backend_kind = str(case.get("artifact_backend") or "")
     backend_class = {
         "save_failure": SaveFailureStore,
@@ -233,9 +200,8 @@ def build_client(case: dict[str, Any], root: Path) -> tuple[TestClient, EvalTool
     settings.DEV_AUTH_ENABLED = True
     settings.ENABLE_GROUNDED_ANSWER_SYNTHESIS = bool(flags.get("grounded_answer", False))
     settings.GROUNDED_ANSWER_ROLLOUT_PERCENT = 100 if flags.get("grounded_answer") else 0
-    settings.ENABLE_LLM_INTENT_SHADOW = bool(flags.get("intent_shadow", False))
-    settings.ENABLE_LLM_INTENT_FALLBACK = bool(flags.get("intent_fallback", False))
-    settings.INTENT_SHADOW_INCLUDE_IN_PLAN_PAYLOAD = True
+    settings.LLM_SEMANTIC_MODE = "off"
+    settings.ENABLE_LLM_CONTEXT_SEMANTICS = False
     settings.AGENT_TRACE_BACKEND = "none"
     settings.AGENT_TRACE_LOCAL_LOG = False
     settings.AGENT_TRACE_CONSOLE = False
@@ -251,19 +217,12 @@ def build_client(case: dict[str, Any], root: Path) -> tuple[TestClient, EvalTool
     tools = EvalToolRuntime(data_profile=str(case.get("data_profile") or "realtime"), failure=str(case.get("failure") or ""))
     app.state.agent_engine_v2_tool_runtime = tools
 
-    intent_model = FakeIntentModel(str(case.get("intent_model"))) if case.get("intent_model") else None
-    if intent_model is not None:
-        app.state.current_utterance_parser = CurrentUtteranceParser(
-            model=intent_model,
-            enable_fallback=bool(flags.get("intent_fallback", False)),
-        )
-        app.state.intent_shadow_service = IntentShadowService(model_factory=lambda: (intent_model, "fake-intent"))
     answer_model = FakeAnswerSynthesizer(str(case.get("answer_model"))) if case.get("answer_model") else None
     if answer_model is not None:
         app.state.grounded_answer_synthesizer = answer_model
     app.include_router(auth_router)
     app.include_router(chat_router)
-    return TestClient(app), tools, intent_model, answer_model
+    return TestClient(app), tools, answer_model
 
 
 def execute_stream(client: TestClient, message: str, thread_id: str | None) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
@@ -281,7 +240,7 @@ def execute_stream(client: TestClient, message: str, thread_id: str | None) -> t
 
 
 def run_case(case: dict[str, Any], root: Path) -> dict[str, Any]:
-    client, tools, intent_model, answer_model = build_client(case, root)
+    client, tools, answer_model = build_client(case, root)
     thread_id: str | None = None
     turn_results: list[dict[str, Any]] = []
     original_export = streaming.export_trace_snapshot
@@ -303,7 +262,6 @@ def run_case(case: dict[str, Any], root: Path) -> dict[str, Any]:
                 tools.failure = str(turn.get("failure") or "")
             before_artifacts = len(list_thread_artifacts(thread_id, limit=100)) if thread_id else 0
             before_sql = len(tools.sql_calls)
-            before_intent = intent_model.calls if intent_model else 0
             requested_thread = thread_id or f"e2e-{case['case_id']}"
             repository = client.app.state.conversation_repository
             before_messages = len(repository.list_messages(thread_id=requested_thread))
@@ -316,13 +274,9 @@ def run_case(case: dict[str, Any], root: Path) -> dict[str, Any]:
             _expect(after_plan_artifacts == before_artifacts, "plan endpoint wrote an artifact")
             _expect(len(repository.list_messages(thread_id=thread_id)) == before_messages, "plan endpoint changed conversation or CaseState inputs")
             _expect(len(tools.sql_calls) == before_sql, "plan endpoint invoked SQL")
-            plan_intent_calls = (intent_model.calls if intent_model else 0) - before_intent
-
-            before_stream_intent = intent_model.calls if intent_model else 0
             before_answer = answer_model.calls if answer_model else 0
             before_stream_sql = len(tools.sql_calls)
             thread_id, events, complete = execute_stream(client, str(turn["user"]), thread_id)
-            stream_intent_calls = (intent_model.calls if intent_model else 0) - before_stream_intent
             answer_calls = (answer_model.calls if answer_model else 0) - before_answer
             after_artifacts = len(list_thread_artifacts(thread_id, limit=100))
             assertions = evaluate_turn(
@@ -333,8 +287,6 @@ def run_case(case: dict[str, Any], root: Path) -> dict[str, Any]:
                 complete=complete,
                 artifact_delta=after_artifacts - before_artifacts,
                 sql_delta=len(tools.sql_calls) - before_stream_sql,
-                plan_intent_calls=plan_intent_calls,
-                stream_intent_calls=stream_intent_calls,
                 answer_calls=answer_calls,
             )
             turn_results.append({
@@ -362,8 +314,6 @@ def evaluate_turn(
     complete: dict[str, Any],
     artifact_delta: int,
     sql_delta: int,
-    plan_intent_calls: int,
-    stream_intent_calls: int,
     answer_calls: int,
 ) -> int:
     expect = dict(turn.get("expect") or {})
@@ -403,10 +353,6 @@ def evaluate_turn(
         check(sql_delta == 0, f"unexpected SQL calls: {sql_delta}")
     if expect.get("sql_required"):
         check(sql_delta > 0, "expected a SQL call")
-    if "intent_model_calls_plan" in expect:
-        check(plan_intent_calls == int(expect["intent_model_calls_plan"]), f"plan intent calls {plan_intent_calls}")
-    if "intent_model_calls_stream" in expect:
-        check(stream_intent_calls == int(expect["intent_model_calls_stream"]), f"stream intent calls {stream_intent_calls}")
     if "answer_model_calls" in expect:
         check(answer_calls == int(expect["answer_model_calls"]), f"answer model calls {answer_calls}")
     if expect.get("answer_not_contains"):
@@ -531,8 +477,7 @@ def main() -> int:
         for name in (
             "ENABLE_PLAN_ENDPOINT", "LOCAL_DEV_MODE", "DEV_AUTH_ENABLED",
             "ENABLE_GROUNDED_ANSWER_SYNTHESIS", "GROUNDED_ANSWER_ROLLOUT_PERCENT",
-            "ENABLE_LLM_INTENT_SHADOW", "ENABLE_LLM_INTENT_FALLBACK",
-            "INTENT_SHADOW_INCLUDE_IN_PLAN_PAYLOAD",
+            "LLM_SEMANTIC_MODE", "ENABLE_LLM_CONTEXT_SEMANTICS",
             "AGENT_TRACE_BACKEND", "AGENT_TRACE_LOCAL_LOG", "AGENT_TRACE_CONSOLE",
         )
     }

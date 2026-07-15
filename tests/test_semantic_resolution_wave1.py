@@ -28,17 +28,15 @@ def _command(message: str = "查询 G120电机1 当前状态") -> TurnCommand:
 
 def _payload(text: str) -> dict:
     return {
-        "schema_version": "model_clause_parse.v1",
+        "schema_version": "semantic_turn_proposal.v1",
+        "entities": [],
+        "ambiguities": [],
         "clauses": [{
             "clause_index": 0,
             "text": text,
             "start": 0,
             "end": len(text),
-            "action": {"capability": "check_runtime_status", "confidence": 0.9, "entity_refs": [], "inferred": False},
-            "source": {"source_kind": "current_message", "entity_refs": [], "relation": "requested_action"},
-            "slot": {},
-            "linker": None,
-            "shadow_metadata": {},
+            "capability": "check_runtime_status", "confidence": 0.9,
         }],
     }
 
@@ -67,7 +65,7 @@ class _Gateway:
 @pytest.mark.asyncio
 async def test_async_preview_attempts_one_model_call_and_keeps_canonical_deterministic() -> None:
     gateway = _Gateway()
-    parser = CurrentUtteranceParser(enable_fallback=False)
+    parser = CurrentUtteranceParser()
     service = SemanticResolutionService(
         parser=parser,
         gateway_factory=lambda _semaphore: gateway,
@@ -83,7 +81,7 @@ async def test_async_preview_attempts_one_model_call_and_keeps_canonical_determi
     assert semantic | {"field_decisions": []} == {
         "attempted": True,
         "mode": "primary",
-        "schema": "model_clause_parse.v1",
+        "schema": "semantic_turn_proposal.v1",
         "status": "completed",
         "accepted": ["clauses[0].capability"],
         "rejected": [],
@@ -104,7 +102,7 @@ async def test_async_preview_attempts_one_model_call_and_keeps_canonical_determi
 @pytest.mark.asyncio
 async def test_model_timeout_falls_back_only_to_deterministic_control_plane() -> None:
     gateway = _Gateway(error=TimeoutError("slow"))
-    parser = CurrentUtteranceParser(enable_fallback=False)
+    parser = CurrentUtteranceParser()
     service = SemanticResolutionService(parser=parser, gateway_factory=lambda _semaphore: gateway, mode="primary")
     coordinator = ConversationTurnCoordinator(parser=parser, semantic_service=service)
 
@@ -131,8 +129,8 @@ class _SlowClient:
 def _gateway_request():
     return type("Request", (), {
         "schema_version": "semantic_turn_request.v1", "text": "查询 J1", "deterministic_entities": (),
-        "deterministic_clauses": (), "fallback_reasons": (), "allowed_capabilities": (),
-        "allowed_source_kinds": (), "response_schema": "model_clause_parse.v1",
+        "deterministic_clauses": (), "allowed_capabilities": (),
+        "allowed_source_kinds": (), "response_schema": "semantic_turn_proposal.v1",
     })()
 
 

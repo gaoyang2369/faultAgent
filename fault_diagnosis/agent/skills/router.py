@@ -9,24 +9,12 @@ from fault_diagnosis.domain.canonical_turn import (
     GoalAuthorizationDecision,
     GoalReadinessDecision,
     GoalSourceResolution,
+    capability_spec,
 )
 
 from ..contracts import SkillRoute
 from .loader import SkillLoader
 from .registry import SkillRegistry
-
-
-_SKILL_BY_CAPABILITY = {
-    "explain_fault_code": "fault_code_explain",
-    "check_runtime_status": "runtime_status",
-    "compare_runtime_status": "runtime_status",
-    "diagnose_fault": "alarm_triage",
-    "resolution_recommendation": "alarm_triage",
-    "generate_report": "report_generation",
-    "create_workorder_draft": "workorder_decision",
-    "dispatch_workorder": "workorder_decision",
-    "evaluate_workorder_need": "workorder_decision",
-}
 
 
 class SkillRouter:
@@ -57,7 +45,7 @@ class SkillRouter:
         selected: list[str] = []
         blocked: dict[str, str] = {}
         for goal in request.goals:
-            skill = _SKILL_BY_CAPABILITY[goal.capability]
+            skill = skill_for_capability(goal.capability)
             if auth[goal.goal_id].status == "denied":
                 blocked[goal.goal_id] = auth[goal.goal_id].reason_code or "permission_denied"
                 continue
@@ -94,4 +82,5 @@ class SkillRouter:
 
 
 def skill_for_capability(capability: str) -> str:
-    return _SKILL_BY_CAPABILITY.get(capability, "")
+    spec = capability_spec(capability)
+    return spec.skill if spec else ""

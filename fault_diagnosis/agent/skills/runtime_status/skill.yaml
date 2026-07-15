@@ -19,6 +19,7 @@ required_evidence:
   - runtime_status
 allowed_nodes:
   - sql
+  - comparison
 allowed_tools:
   - sql.read
 forbidden_tools:

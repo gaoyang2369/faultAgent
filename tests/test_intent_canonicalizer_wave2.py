@@ -43,7 +43,7 @@ def _proposal(message: str, *, capability: str, entities: list[dict] | None = No
 
 
 async def _resolve(message: str, payload: dict):
-    parser = CurrentUtteranceParser(enable_fallback=False)
+    parser = CurrentUtteranceParser()
     gateway = _Gateway(payload)
     service = SemanticResolutionService(parser=parser, gateway_factory=lambda _semaphore: gateway, mode="primary")
     result = await ConversationTurnCoordinator(parser=parser, semantic_service=service).preview_turn_async(

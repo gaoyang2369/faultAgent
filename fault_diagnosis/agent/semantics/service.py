@@ -8,19 +8,18 @@ from typing import Any, Callable
 
 from pydantic import ValidationError
 
-from fault_diagnosis.agent.canonical_turn.clause_parser import DeterministicClauseParser
-from fault_diagnosis.agent.canonical_turn.model_clause_parser import ClauseModelRequest, ModelClauseParser
 from fault_diagnosis.agent.semantics.contracts import SemanticCallTrace, SemanticResolution
 from fault_diagnosis.agent.semantics.context_interpreter import project_context_semantic_input
 from fault_diagnosis.agent.semantics.context_validator import ContextProposalValidator
 from fault_diagnosis.agent.semantics.intent_canonicalizer import IntentCanonicalizer
 from fault_diagnosis.agent.semantics.intent_interpreter import parse_semantic_turn_proposal
+from fault_diagnosis.agent.semantics.model_request import SemanticModelRequest
 from fault_diagnosis.agent.semantics.model_gateway import (
     AsyncModelGateway,
     SemanticModelCancelled,
     build_semantic_model_gateway,
 )
-from fault_diagnosis.domain.canonical_turn import ALL_INTENT_CAPABILITIES, CAPABILITY_SPECS
+from fault_diagnosis.domain.canonical_turn import CAPABILITY_SPECS
 from fault_diagnosis.platform import settings
 
 
@@ -40,8 +39,6 @@ class SemanticResolutionService:
         self._mode = mode or settings.LLM_SEMANTIC_MODE
         self._semaphore = asyncio.Semaphore(concurrency or settings.LLM_SEMANTIC_CONCURRENCY)
         self._gateway: AsyncModelGateway | None = None
-        self._validator = ModelClauseParser()
-        self._deterministic_parser = DeterministicClauseParser()
         self._canonicalizer = IntentCanonicalizer()
         self._context_validator = ContextProposalValidator()
 
@@ -72,13 +69,13 @@ class SemanticResolutionService:
             self._gateway = gateway
             trace.model_name = gateway.model_name
             result = await gateway.invoke_clause_model(
-                ClauseModelRequest(
+                SemanticModelRequest(
                     text=parsed.raw_text,
                     deterministic_entities=tuple(item.model_dump(mode="json") for item in parsed.entities),
                     deterministic_clauses=tuple(_clause_summary(item) for item in parsed.clauses),
-                    allowed_capabilities=tuple(sorted(CAPABILITY_SPECS if mode == "primary" else ALL_INTENT_CAPABILITIES)),
+                    allowed_capabilities=tuple(sorted(CAPABILITY_SPECS)),
                     allowed_source_kinds=("prior_result", "current_message"),
-                    response_schema="semantic_turn_proposal.v1" if mode == "primary" else "model_clause_parse.v1",
+                    response_schema="semantic_turn_proposal.v1",
                     schema_version="semantic_turn_request.v1",
                     context_candidates=project_context_semantic_input(list(context_candidates)),
                     pending_summary=pending_summary,
@@ -101,7 +98,7 @@ class SemanticResolutionService:
             return _fallback(parsed, trace, "schema_invalid", started)
         except Exception:
             return _fallback(parsed, trace, "model_error", started)
-        if mode == "primary":
+        if mode in {"primary", "shadow"}:
             try:
                 proposal = parse_semantic_turn_proposal(result.payload)
                 canonical, decisions = self._canonicalizer.canonicalize(parsed, proposal)
@@ -119,33 +116,14 @@ class SemanticResolutionService:
             trace.clarify = [item.field for item in decisions if item.decision == "CLARIFY"]
             trace.fallback = False
             trace.proposal_capabilities = [item.capability for item in proposal.clauses if item.capability]
+            # Shadow 只观测同一次语义调用，绝不替换确定性 parse 或上下文绑定。
             return SemanticResolution(
-                parsed=canonical, trace=trace, field_decisions=decisions,
-                context_proposal=context_proposal,
-                context_clarification_reason=context_clarification_reason,
+                parsed=canonical if mode == "primary" else parsed,
+                trace=trace,
+                field_decisions=decisions,
+                context_proposal=context_proposal if mode == "primary" else None,
+                context_clarification_reason=context_clarification_reason if mode == "primary" else None,
             )
-        try:
-            envelope = self._validator.validate_for_shadow(
-                parsed.raw_text,
-                parsed.entities,
-                result.payload,
-                detect_action=self._deterministic_parser.detect_action,
-            )
-        except ValidationError:
-            trace.status = "schema_invalid"
-            trace.fallback = True
-            trace.rejected = ["proposal_schema"]
-        except Exception:
-            trace.status = "validation_failed"
-            trace.fallback = True
-            trace.rejected = ["proposal_validation"]
-        else:
-            trace.status = "completed"
-            trace.accepted = ["proposal_schema"]
-            trace.rejected = list(envelope.unsupported_model_capabilities)
-            trace.proposal_capabilities = [item.action.capability for item in envelope.clauses if item.action]
-        # Shadow 只观测同一次调用；不修改 Canonical 投影。
-        return SemanticResolution(parsed=parsed, trace=trace)
 
 
 def _clause_summary(clause) -> dict:  # noqa: ANN001

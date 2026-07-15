@@ -1,10 +1,8 @@
 """Canonical-turn contracts shared by production and preview paths."""
 
 from .contracts import (
-    ALL_INTENT_CAPABILITIES,
     CAPABILITY_ALLOWLIST,
     CANONICAL_CAPABILITIES,
-    SHADOW_ONLY_CAPABILITIES,
     BoundCanonicalTurn,
     CanonicalGoal,
     CanonicalTurnRequest,
@@ -28,7 +26,6 @@ from .contracts import (
     PendingSourceBinding,
     PendingTransitionProposal,
     StructuredClause,
-    IntentFallbackDecision,
     IntentResolutionMetadata,
     TurnCommand,
     TurnEvent,
@@ -37,13 +34,11 @@ from .contracts import (
 from .capabilities import CAPABILITY_SPECS, CapabilitySpec, capability_spec
 
 __all__ = [
-    "ALL_INTENT_CAPABILITIES",
     "CAPABILITY_SPECS",
     "CAPABILITY_ALLOWLIST",
     "CapabilitySpec",
     "CANONICAL_CAPABILITIES",
     "capability_spec",
-    "SHADOW_ONLY_CAPABILITIES",
     "BoundCanonicalTurn",
     "CanonicalGoal",
     "CanonicalTurnRequest",
@@ -67,7 +62,6 @@ __all__ = [
     "PendingSourceBinding",
     "PendingTransitionProposal",
     "StructuredClause",
-    "IntentFallbackDecision",
     "IntentResolutionMetadata",
     "TurnCommand",
     "TurnEvent",

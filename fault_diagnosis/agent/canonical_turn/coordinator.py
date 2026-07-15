@@ -66,9 +66,7 @@ class ConversationTurnCoordinator:
         semantic_service: SemanticResolutionService | None = None,
         clock=lambda: datetime.now(timezone.utc),
     ) -> None:
-        self._parser = parser or CurrentUtteranceParser(
-            enable_fallback=settings.ENABLE_LLM_INTENT_FALLBACK and settings.LLM_SEMANTIC_MODE == "off"
-        )
+        self._parser = parser or CurrentUtteranceParser()
         self._semantic_service = semantic_service or SemanticResolutionService(parser=self._parser)
         self._pending_repository = pending_repository or MemoryPendingClarificationRepository(clock=clock)
         self._clock = clock
@@ -190,8 +188,6 @@ class ConversationTurnCoordinator:
                 sequence=1,
                 detail={
                     "mode": parsed.intent_resolution.mode,
-                    "fallback_attempted": parsed.intent_resolution.fallback_attempted,
-                    "fallback_reasons": parsed.intent_resolution.fallback_reasons,
                     "model_status": parsed.intent_resolution.model_status,
                     "accepted_fields": parsed.intent_resolution.accepted_model_fields,
                     "rejected_fields": parsed.intent_resolution.rejected_model_fields,
@@ -775,23 +771,22 @@ def _clause_semantics(clause) -> dict[str, Any]:  # noqa: ANN001
 def _legacy_semantic_trace(parsed) -> dict[str, Any]:  # noqa: ANN001
     """同步兼容 preview 也输出同形 trace，避免消费者猜测字段。"""
 
-    resolution = parsed.intent_resolution
     return {
-        "attempted": resolution.fallback_attempted,
-        "mode": "shadow" if resolution.mode == "llm_fallback" else "off",
-        "schema": "model_clause_parse.v1",
-        "status": resolution.model_status,
-        "accepted": list(resolution.accepted_model_fields),
-        "rejected": list(resolution.rejected_model_fields),
+        "attempted": False,
+        "mode": "off",
+        "schema": "semantic_turn_proposal.v1",
+        "status": "not_attempted",
+        "accepted": [],
+        "rejected": [],
         "clarify": [],
-        "fallback": resolution.mode == "deterministic_after_llm_failure",
-        "latency_ms": resolution.duration_ms,
+        "fallback": False,
+        "latency_ms": 0,
         "input_tokens": None,
         "output_tokens": None,
-        "model_name": resolution.model_name,
+        "model_name": "",
         "concurrency_limited": False,
-        "deterministic_capabilities": list(resolution.deterministic_capabilities),
-        "proposal_capabilities": list(resolution.model_capabilities),
+        "deterministic_capabilities": [item.action.capability for item in parsed.clauses if item.action],
+        "proposal_capabilities": [],
     }
 
 

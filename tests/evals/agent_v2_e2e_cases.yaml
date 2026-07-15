@@ -319,55 +319,10 @@ cases:
   - case_id: flags_all_off
     category: feature_flags
     role: guest
-    flags: {grounded_answer: false, intent_shadow: false, intent_fallback: false}
+    flags: {grounded_answer: false}
     turns:
       - user: "A07089是什么意思？"
-        expect: {status: completed, runtime_nodes: [rag], intent_model_calls_plan: 0, intent_model_calls_stream: 0, answer_model_calls: 0}
-
-  - case_id: flags_fallback_explicit_no_call
-    category: feature_flags
-    role: admin
-    flags: {intent_fallback: true}
-    intent_model: success
-    turns:
-      - user: "查询G120电机1当前状态。"
-        expect: {status: completed, runtime_nodes: [sql], intent_model_calls_plan: 0, intent_model_calls_stream: 0}
-
-  - case_id: flags_fallback_cannot_override_dispatch
-    category: feature_flags
-    role: admin
-    flags: {intent_fallback: true}
-    intent_model: success
-    turns:
-      - user: "正式派发工单。"
-        expect: {capabilities: [dispatch_workorder], status: blocked, runtime_nodes: [], intent_model_calls_plan: 0, intent_model_calls_stream: 0, dispatch_runtime_nodes: 0}
-
-  - case_id: flags_fallback_success
-    category: feature_flags
-    role: admin
-    flags: {intent_fallback: true}
-    intent_model: success
-    turns:
-      - user: "G120电机1最近运转还顺利吗？"
-        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql], intent_model_calls_plan: 1, intent_model_calls_stream: 1}
-
-  - case_id: flags_fallback_timeout
-    category: feature_flags
-    role: admin
-    flags: {intent_fallback: true}
-    intent_model: timeout
-    turns:
-      - user: "帮我处理一下。"
-        expect: {status: completed, runtime_nodes: [], intent_model_calls_plan: 1, intent_model_calls_stream: 1}
-
-  - case_id: flags_fallback_invalid_json
-    category: feature_flags
-    role: admin
-    flags: {intent_fallback: true}
-    intent_model: invalid
-    turns:
-      - user: "帮我处理一下。"
-        expect: {status: completed, runtime_nodes: [], intent_model_calls_plan: 1, intent_model_calls_stream: 1}
+        expect: {status: completed, runtime_nodes: [rag], answer_model_calls: 0}
 
   - case_id: flags_grounded_answer_success
     category: feature_flags
@@ -386,15 +341,6 @@ cases:
     turns:
       - user: "A07089是什么意思？"
         expect: {status: completed, runtime_nodes: [rag], answer_model_calls: 1, answer_synthesis_status: model_timeout}
-
-  - case_id: flags_shadow_and_fallback_single_call
-    category: feature_flags
-    role: admin
-    flags: {intent_shadow: true, intent_fallback: true}
-    intent_model: success
-    turns:
-      - user: "G120电机1最近运转还顺利吗？"
-        expect: {capabilities: [check_runtime_status], status: completed, runtime_nodes: [sql], intent_model_calls_plan: 1, intent_model_calls_stream: 1}
 
 invariants:
   unauthorized_artifact_count: 0
