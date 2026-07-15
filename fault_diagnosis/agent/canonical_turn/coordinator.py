@@ -129,18 +129,31 @@ class ConversationTurnCoordinator:
                 },
             ),
             TurnEvent(
-                event_type="pending_loaded",
+                event_type="intent_resolution",
                 sequence=1,
+                detail={
+                    "mode": parsed.intent_resolution.mode,
+                    "fallback_attempted": parsed.intent_resolution.fallback_attempted,
+                    "fallback_reasons": parsed.intent_resolution.fallback_reasons,
+                    "model_status": parsed.intent_resolution.model_status,
+                    "accepted_fields": parsed.intent_resolution.accepted_model_fields,
+                    "rejected_fields": parsed.intent_resolution.rejected_model_fields,
+                    "duration_ms": parsed.intent_resolution.duration_ms,
+                },
+            ),
+            TurnEvent(
+                event_type="pending_loaded",
+                sequence=2,
                 detail={"pending_id": waiting.pending_id if waiting else None},
             ),
             TurnEvent(
                 event_type="pending_bound",
-                sequence=2,
+                sequence=3,
                 detail={"kind": binding.kind, "consumes_pending": binding.consumes_pending},
             ),
             TurnEvent(
                 event_type="request_built",
-                sequence=3,
+                sequence=4,
                 detail={
                     "goal_ids": [goal.goal_id for goal in goals],
                     "execution_performed": False,
@@ -156,7 +169,7 @@ class ConversationTurnCoordinator:
             ),
             TurnEvent(
                 event_type="context_binding",
-                sequence=4,
+                sequence=5,
                 detail=_binding_trace(bound_turn, candidates),
             ),
         ]

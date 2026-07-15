@@ -72,3 +72,12 @@
 - {case_id: entity_two_devices_062, user_message: "比较 G120电机1 和 G120电机2 的状态。", expected: {clauses: [{capability: compare_runtime_status, requested: true, entity_refs: [G120电机1, G120电机2]}]}, tags: [entity, compare]}
 - {case_id: entity_time_063, user_message: "查询 G120电机1 最近一小时的运行状态。", expected: {clauses: [{capability: check_runtime_status, requested: true, entity_refs: [G120电机1, 最近一小时]}]}, tags: [entity, time]}
 - {case_id: entity_artifact_064, user_message: "基于 analysis:case-7 生成报告。", expected: {clauses: [{capability: generate_report, requested: true, source_kind: artifact, entity_refs: [analysis:case-7]}]}, tags: [entity, artifact]}
+
+- {case_id: fallback_workorder_065, user_message: "这情况是不是得安排人处理一下？", expected: {clauses: [{capability: evaluate_workorder_need, requested: true}]}, tags: [fallback, colloquial, workorder]}
+- {case_id: fallback_recommend_066, user_message: "这种情况接下来该怎么办？", expected: {clauses: [{capability: resolution_recommendation, requested: true}]}, tags: [fallback, colloquial, recommendation]}
+- {case_id: fallback_report_067, user_message: "给我整理出来。", expected: {clauses: [{capability: generate_report, requested: true, source_kind: prior_result}]}, tags: [fallback, prior_result, report]}
+- {case_id: fallback_continue_068, user_message: "继续处理。", expected: {clauses: [{capability: diagnose_fault, requested: true, source_kind: prior_result}]}, tags: [fallback, prior_result, diagnosis]}
+- {case_id: fallback_status_069, user_message: "G120电机1 最近运转还顺利吗？", expected: {clauses: [{capability: check_runtime_status, requested: true, entity_refs: [G120电机1]}]}, tags: [fallback, status, entity]}
+- {case_id: fallback_prior_diag_070, user_message: "这个看着不太正常。", expected: {clauses: [{capability: diagnose_fault, requested: true, source_kind: prior_result}]}, tags: [fallback, prior_result, diagnosis]}
+- {case_id: fallback_dispatch_071, user_message: "赶紧安排人过去修。", expected: {clauses: [{capability: dispatch_workorder, requested: true}]}, tags: [fallback, high_risk, dispatch]}
+- {case_id: fallback_report_alt_072, user_message: "给我整理一下吧。", expected: {clauses: [{capability: generate_report, requested: true, source_kind: prior_result}]}, tags: [fallback, prior_result, report]}

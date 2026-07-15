@@ -199,7 +199,7 @@ def test_source_only_clause_never_becomes_action_goal(message: str) -> None:
     assert any(clause.source is not None for clause in parsed.clauses)
 
 
-def test_structured_model_boundary_forces_zero_temperature_and_valid_schema() -> None:
+def test_sufficient_deterministic_parse_never_calls_structured_model() -> None:
     payload = {
         "schema_version": "model_clause_parse.v1",
         "clauses": [
@@ -219,10 +219,9 @@ def test_structured_model_boundary_forces_zero_temperature_and_valid_schema() ->
     model = _FakeClauseModel(payload=payload)
     parsed = CurrentUtteranceParser(model=model).parse("解释 A07089")
 
-    assert parsed.model_used is True
-    assert model.requests[0].temperature == 0
-    assert model.requests[0].response_schema == "model_clause_parse.v1"
-    assert parsed.clauses[0].parser_source == "model"
+    assert parsed.model_used is False
+    assert model.requests == []
+    assert parsed.clauses[0].parser_source == "deterministic"
 
 
 @pytest.mark.parametrize(
@@ -285,15 +284,19 @@ def test_structured_model_boundary_forces_zero_temperature_and_valid_schema() ->
     ],
 )
 def test_model_schema_span_reference_and_execution_content_are_rejected(payload) -> None:
-    parsed = CurrentUtteranceParser(model=_FakeClauseModel(payload=payload)).parse("解释 A07089")
+    model = _FakeClauseModel(payload=payload)
+    parsed = CurrentUtteranceParser(model=model).parse("解释 A07089")
 
     assert parsed.model_used is False
-    assert parsed.model_rejection_reason
+    assert model.requests == []
+    assert parsed.model_rejection_reason is None
     assert [clause.action.capability for clause in parsed.clauses if clause.action] == ["explain_fault_code"]
 
 
 def test_model_failure_without_high_confidence_deterministic_parse_needs_clarification() -> None:
-    parsed = CurrentUtteranceParser(model=_FakeClauseModel(error=RuntimeError("offline"))).parse("帮我处理一下")
+    parsed = CurrentUtteranceParser(
+        model=_FakeClauseModel(error=RuntimeError("offline")), enable_fallback=True,
+    ).parse("帮我处理一下")
 
     assert parsed.model_used is False
     assert "structured_model_failed_without_high_confidence_action" in parsed.clarification_needs

@@ -136,6 +136,24 @@ class StructuredClause(CanonicalContract):
         return self
 
 
+class IntentFallbackDecision(CanonicalContract):
+    eligible: bool = False
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class IntentResolutionMetadata(CanonicalContract):
+    mode: Literal["deterministic", "llm_fallback", "deterministic_after_llm_failure"] = "deterministic"
+    fallback_attempted: bool = False
+    fallback_reasons: list[str] = Field(default_factory=list)
+    model_status: str = "not_attempted"
+    accepted_model_fields: list[str] = Field(default_factory=list)
+    rejected_model_fields: list[str] = Field(default_factory=list)
+    duration_ms: float = 0
+    model_name: str = ""
+    deterministic_capabilities: list[str] = Field(default_factory=list)
+    model_capabilities: list[str] = Field(default_factory=list)
+
+
 class CurrentUtteranceParse(CanonicalContract):
     schema_version: Literal["current_utterance_parse.v1", "current_utterance_parse.v2"] = "current_utterance_parse.v2"
     raw_text: str
@@ -145,6 +163,7 @@ class CurrentUtteranceParse(CanonicalContract):
     deterministic_confident: bool = False
     model_used: bool = False
     model_rejection_reason: str | None = None
+    intent_resolution: IntentResolutionMetadata = Field(default_factory=IntentResolutionMetadata)
 
     @model_validator(mode="after")
     def spans_belong_to_raw_text(self) -> "CurrentUtteranceParse":

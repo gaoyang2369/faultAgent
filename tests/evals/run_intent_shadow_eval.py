@@ -111,6 +111,27 @@ def _model(case: dict[str, Any], configured) -> dict[str, Any]:  # noqa: ANN001
     }
 
 
+def _fallback(case: dict[str, Any], configured) -> dict[str, Any]:  # noqa: ANN001
+    if configured is None:
+        factory = lambda: (_ for _ in ()).throw(RuntimeError("intent_model_not_configured"))
+        parser = CurrentUtteranceParser(model_factory=factory, enable_fallback=True)
+    else:
+        parser = CurrentUtteranceParser(model=configured[0], enable_fallback=True)
+    started = time.perf_counter()
+    parsed = parser.parse(case["user_message"])
+    resolution = parsed.intent_resolution
+    return {
+        "status": "completed", "returned": True, "schema_valid": resolution.model_status in {"not_attempted", "completed"},
+        "validation_passed": resolution.mode != "deterministic_after_llm_failure",
+        "latency_ms": (time.perf_counter() - started) * 1000, "parsed": parsed,
+        "clauses": _prediction(parsed, parsed.clauses, [item.modality for item in parsed.clauses]),
+        "fallback_attempted": resolution.fallback_attempted,
+        "fallback_accepted": resolution.mode == "llm_fallback",
+        "fallback_conflict": bool(resolution.rejected_model_fields),
+        "model_status": resolution.model_status,
+    }
+
+
 def _score(cases: list[dict[str, Any]], results: list[dict[str, Any]]) -> dict[str, Any]:
     dimensions = ("negated", "conditional", "sequence_index", "depends_on", "source_kind")
     dimension_hits = Counter()
@@ -188,6 +209,17 @@ def _score(cases: list[dict[str, Any]], results: list[dict[str, Any]]) -> dict[s
     }
 
 
+def _fallback_rates(results: list[dict[str, Any]]) -> dict[str, Any]:
+    attempted = sum(item.get("fallback_attempted", False) for item in results)
+    return {
+        "llm_fallback_trigger_rate": _ratio(attempted, len(results)),
+        "llm_accepted_rate": _ratio(sum(item.get("fallback_accepted", False) for item in results), attempted),
+        "llm_conflict_rate": _ratio(sum(item.get("fallback_conflict", False) for item in results), attempted),
+        "llm_timeout_rate": _ratio(sum(item.get("model_status") == "model_timeout" for item in results), attempted),
+        "model_statuses": dict(Counter(item.get("model_status", "not_attempted") for item in results)),
+    }
+
+
 def _classify(cases, deterministic, model) -> tuple[dict[str, int], list[dict[str, str]]]:  # noqa: ANN001
     counts = Counter({name: 0 for name in (
         "model_correct_rule_wrong", "rule_correct_model_wrong", "both_correct_different_representation",
@@ -260,9 +292,13 @@ def main() -> int:
         try: configured = build_intent_clause_model()
         except Exception as exc: configuration_error = f"{type(exc).__name__}: {exc}"
     model = []
-    if args.mode in {"model", "compare"}:
+    fallback = []
+    if args.mode == "model":
         with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as pool:
             model = list(pool.map(lambda case: _model(case, configured), cases))
+    elif args.mode == "compare":
+        with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as pool:
+            fallback = list(pool.map(lambda case: _fallback(case, configured), cases))
     baseline = {
         "source": "Phase 2A recorded baseline; current checkout re-measured before Phase 2R",
         "capability_f1": 0.75, "entity_reference_f1": 0.9474,
@@ -285,6 +321,16 @@ def main() -> int:
         report["model_shadow"] = report["model_vs_gold"]
         report["model_configuration_error"] = configuration_error
         report["difference_classification"], report["typical_examples"] = _classify(cases, deterministic, model)
+    if fallback:
+        subset_indexes = [index for index, case in enumerate(cases) if "fallback" in case.get("tags", [])]
+        subset_cases = [cases[index] for index in subset_indexes]
+        subset_det = [deterministic[index] for index in subset_indexes]
+        subset_fallback = [fallback[index] for index in subset_indexes]
+        report["deterministic_fallback_subset"] = _score(subset_cases, subset_det)
+        report["deterministic_plus_llm_fallback"] = _score(cases, fallback) | _fallback_rates(fallback)
+        report["fallback_subset"] = _score(subset_cases, subset_fallback) | _fallback_rates(subset_fallback)
+        report["model_configuration_error"] = configuration_error
+        report["difference_classification"], report["typical_examples"] = _classify(cases, deterministic, fallback)
     rendered = json.dumps(report, ensure_ascii=False, indent=2)
     print(rendered)
     if args.output:

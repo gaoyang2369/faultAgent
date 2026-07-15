@@ -23,6 +23,8 @@ from fault_diagnosis.domain.canonical_turn import (
 class ClauseModelRequest:
     text: str
     deterministic_entities: tuple[dict[str, Any], ...]
+    deterministic_clauses: tuple[dict[str, Any], ...] = ()
+    fallback_reasons: tuple[str, ...] = ()
     temperature: Literal[0] = 0
     response_schema: str = "model_clause_parse.v1"
     schema_version: str = "intent_shadow_request.v1"
@@ -136,18 +138,6 @@ class ModelClauseParser:
                 parser_source="model",
             ))
         return clauses
-
-    def validate(
-        self,
-        text: str,
-        entities: list[EntitySpan],
-        payload: dict[str, Any],
-        *,
-        detect_action: Callable[[str, list[EntitySpan]], ClauseAction | None],
-    ) -> list[StructuredClause]:
-        """Backward-compatible strict execution alias."""
-
-        return self.validate_for_execution(text, entities, payload, detect_action=detect_action)
 
     def _validate_base(
         self,

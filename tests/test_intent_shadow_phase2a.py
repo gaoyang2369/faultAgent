@@ -123,7 +123,8 @@ def test_gold_dataset_is_unique_and_uses_the_single_capability_registry() -> Non
         for clause in case["expected"]["clauses"]
         if clause.get("capability")
     }
-    assert len(cases) == 64
+    assert len(cases) == 72
+    assert sum("fallback" in case.get("tags", []) for case in cases) == 8
     assert len({case["case_id"] for case in cases}) == len(cases)
     normalized_messages = {
         re.sub(r"[\s，,。；;！？!?]+", "", case["user_message"]).lower()

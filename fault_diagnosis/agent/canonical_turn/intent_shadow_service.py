@@ -47,6 +47,24 @@ class IntentShadowService:
     ) -> IntentShadowRuntimeSummary | None:
         if not settings.ENABLE_LLM_INTENT_SHADOW:
             return None
+        resolution = deterministic_parse.intent_resolution
+        if settings.ENABLE_LLM_INTENT_FALLBACK and resolution.fallback_attempted:
+            dimensions = []
+            if "capability" in resolution.accepted_model_fields:
+                dimensions.append("capability")
+            if resolution.rejected_model_fields:
+                dimensions.append("llm_conflict")
+            return IntentShadowRuntimeSummary(
+                status=resolution.model_status,
+                model_name=resolution.model_name,
+                duration_ms=resolution.duration_ms,
+                schema_valid=resolution.model_status == "completed",
+                validation_passed=resolution.model_status == "completed",
+                deterministic_capabilities=resolution.deterministic_capabilities,
+                model_capabilities=resolution.model_capabilities,
+                capability_match=resolution.deterministic_capabilities == resolution.model_capabilities,
+                difference_dimensions=dimensions or ([] if resolution.model_status == "completed" else [resolution.model_status]),
+            )
         started = time.perf_counter()
         deterministic_capabilities = [
             clause.action.capability

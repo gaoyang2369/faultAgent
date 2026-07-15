@@ -13,7 +13,7 @@ from fault_diagnosis.agent.canonical_turn.model_clause_parser import ClauseModel
 from fault_diagnosis.platform import settings
 
 
-INTENT_SHADOW_SYSTEM_PROMPT = """你是工业故障诊断系统的当前消息语义解析器。
+INTENT_CLAUSE_SYSTEM_PROMPT = """你是工业故障诊断系统的当前消息语义解析器。
 只解析当前消息的 clauses、白名单 capability、否定、条件、顺序、依赖和 prior_result 引用，并只返回 model_clause_parse.v1 JSON。
 deterministic_entities 是唯一可信实体集合；只能引用已有 entity_id，禁止创造设备、故障码、时间或 Artifact。
 禁止决定权限或执行，禁止输出 SQL、工具、节点、计划、诊断结论或具体历史 Artifact。
@@ -30,6 +30,10 @@ class LLMStructuredClauseModel:
             "schema_version": request.schema_version,
             "text": request.text,
             "deterministic_entities": list(request.deterministic_entities),
+            "deterministic_parse": {
+                "clauses": list(request.deterministic_clauses),
+                "fallback_reasons": list(request.fallback_reasons),
+            },
             "allowed_capabilities": list(request.allowed_capabilities),
             "allowed_source_kinds": list(request.allowed_source_kinds),
             "output_schema": request.response_schema,
@@ -44,7 +48,7 @@ class LLMStructuredClauseModel:
         }
         try:
             response = self._client.invoke([
-                SystemMessage(content=INTENT_SHADOW_SYSTEM_PROMPT),
+                SystemMessage(content=INTENT_CLAUSE_SYSTEM_PROMPT),
                 HumanMessage(content=json.dumps(model_input, ensure_ascii=False, separators=(",", ":"))),
             ])
         except Exception as exc:
@@ -63,7 +67,7 @@ class LLMStructuredClauseModel:
         return payload
 
 
-def build_intent_clause_model() -> tuple[LLMStructuredClauseModel, str]:
+def build_intent_clause_model(*, runtime: str = "shadow") -> tuple[LLMStructuredClauseModel, str]:
     """Lazily build the independent model after the feature gate is checked."""
 
     model_name = settings.INTENT_MODEL_NAME or (os.getenv("MODEL_NAME") or "").strip()
@@ -71,13 +75,14 @@ def build_intent_clause_model() -> tuple[LLMStructuredClauseModel, str]:
     base_url = settings.INTENT_MODEL_BASE_URL or (os.getenv("OPENAI_BASE_URL") or "").strip()
     if not model_name or not api_key:
         raise RuntimeError("intent_model_not_configured")
+    is_fallback = runtime == "fallback"
     client = ChatOpenAI(
         model=model_name,
         base_url=base_url or None,
         api_key=api_key,
-        temperature=settings.INTENT_MODEL_TEMPERATURE,
-        timeout=settings.INTENT_MODEL_TIMEOUT_SECONDS,
-        max_tokens=settings.INTENT_MODEL_MAX_TOKENS,
+        temperature=settings.INTENT_FALLBACK_TEMPERATURE if is_fallback else settings.INTENT_MODEL_TEMPERATURE,
+        timeout=settings.INTENT_FALLBACK_TIMEOUT_SECONDS if is_fallback else settings.INTENT_MODEL_TIMEOUT_SECONDS,
+        max_tokens=settings.INTENT_FALLBACK_MAX_TOKENS if is_fallback else settings.INTENT_MODEL_MAX_TOKENS,
         max_retries=0,
         model_kwargs={"response_format": {"type": "json_object"}},
     )
