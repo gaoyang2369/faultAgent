@@ -9,6 +9,7 @@ export default defineConfig({
   plugins: [vue()],
   publicDir: false,
   server: {
+    host: '0.0.0.0',
     port: 9005,
     hmr: true,
     open:true,

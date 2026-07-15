@@ -77,7 +77,8 @@ npm install
 npm run dev
 ```
 
-默认前端开发地址：`http://localhost:9005`。后端默认地址：`http://localhost:8000`。
+前端开发服务器默认监听所有网络接口。本机可访问 `http://localhost:9005`，局域网内其他设备可访问
+`http://<运行前端的主机 IP>:9005`。后端默认地址：`http://localhost:8000`。
 
 ## 环境变量
 
