@@ -6,6 +6,7 @@ import pytest
 
 from fault_diagnosis.agent.canonical_turn import ConversationTurnCoordinator, CurrentUtteranceParser
 from fault_diagnosis.agent.semantics import SemanticResolutionService
+from fault_diagnosis.agent.semantics.intent_interpreter import parse_semantic_turn_proposal
 from fault_diagnosis.agent.semantics.model_gateway import ModelGatewayResult
 from fault_diagnosis.domain.canonical_turn import TurnCommand
 from fault_diagnosis.domain.security.permissions import build_auth_context
@@ -21,6 +22,17 @@ class _Gateway:
     async def invoke_clause_model(self, _request, *, cancel_event=None):  # noqa: ANN001
         self.calls += 1
         return ModelGatewayResult(self.payload, 1.0, 1, 1, False)
+
+
+def test_local_model_none_string_is_normalized_for_nullable_semantic_enums() -> None:
+    payload = _payload("检查状态", "check_runtime_status")
+    payload["clauses"][0]["condition_type"] = "none"
+    payload["context"] = {"reference_target": "none", "temporal_relation": "null"}
+
+    proposal = parse_semantic_turn_proposal(payload)
+
+    assert proposal.clauses[0].condition_type is None
+    assert proposal.context is not None and proposal.context.temporal_relation is None
 
 
 def _command(message: str) -> TurnCommand:
@@ -135,6 +147,27 @@ async def test_primary_model_preserves_all_compound_goals_and_dependencies() -> 
     ]
     assert goals[2].dependencies == [goals[0].goal_id, goals[1].goal_id]
     assert goals[3].dependencies == [goals[2].goal_id]
+
+
+@pytest.mark.asyncio
+async def test_primary_model_relocates_unique_exact_clause_text_when_character_count_is_wrong() -> None:
+    message = "我想看看 G120电机1 这会儿运转得怎样"
+    start = message.index("G120电机1")
+    payload = _payload(
+        message,
+        "check_runtime_status",
+        entity_indexes=[0],
+        entities=[{
+            "kind": "device_reference", "text": "G120电机1", "start": start, "end": start + len("G120电机1"),
+            "normalized_candidate": "G120电机1", "confidence": 0.95,
+        }],
+    )
+    payload["clauses"][0]["end"] = len(message) - 2
+
+    result, _ = await _preview(message, payload)
+
+    assert [goal.capability for goal in result.request.goals] == ["check_runtime_status"]
+    assert result.request.current_parse.clauses[0].end == len(message)
 
 
 @pytest.mark.asyncio

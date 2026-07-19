@@ -31,9 +31,15 @@ def _get_db():
 
 def get_sqltools(model_name: str | None = None):
     """返回 SQLDatabaseToolkit 生成的工具列表。"""
-    import os
+    from fault_diagnosis.platform.llm_runtime import (
+        chat_openai_transport_kwargs,
+        chat_template_extra_body,
+        resolve_llm_api_key,
+        resolve_llm_base_url,
+        resolve_llm_model_name,
+    )
 
-    resolved_model = (model_name or os.getenv("MODEL_NAME") or "").strip()
+    resolved_model = resolve_llm_model_name(model_name)
     if resolved_model not in _sqltools_by_model:
         from dotenv import load_dotenv
         from langchain_community.agent_toolkits import SQLDatabaseToolkit
@@ -41,11 +47,17 @@ def get_sqltools(model_name: str | None = None):
 
         db = _get_db()
         load_dotenv(override=False)
+        base_url = resolve_llm_base_url()
+        runtime_kwargs = chat_openai_transport_kwargs(base_url)
+        extra_body = chat_template_extra_body(base_url)
+        if extra_body is not None:
+            runtime_kwargs["extra_body"] = extra_body
         model = ChatOpenAI(
             model=resolved_model,
-            base_url=os.getenv("OPENAI_BASE_URL"),
-            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=base_url or None,
+            api_key=resolve_llm_api_key(),
             temperature=0.7,
+            **runtime_kwargs,
         )
         toolkit = SQLDatabaseToolkit(db=db, llm=model)
         _sqltools_by_model[resolved_model] = toolkit.get_tools()

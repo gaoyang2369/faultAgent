@@ -85,23 +85,25 @@ class IntentCanonicalizer:
         accepted: dict[int, EntitySpan] = {}
         for index, item in enumerate(proposal.entities):
             field = f"entities[{index}]"
-            if not _valid_span(text, item.start, item.end, item.text):
+            span = _grounded_span(text, item.start, item.end, item.text)
+            if span is None:
                 decisions.append(_decision(field, "REJECT", None, "invalid_text_span"))
                 continue
+            start, end = span
             value = self._normalize_entity(item.kind, item.text, item.normalized_candidate)
             if value is None:
                 decision = "CLARIFY" if item.kind == "device_reference" else "REJECT"
                 code = "unknown_asset_alias" if item.kind == "device_reference" else "invalid_entity_format"
                 decisions.append(_decision(field, decision, None, code))
                 continue
-            existing = next((entity for entity in entities if entity.kind == item.kind and entity.start == item.start and entity.end == item.end), None)
+            existing = next((entity for entity in entities if entity.kind == item.kind and entity.start == start and entity.end == end), None)
             if existing is not None:
                 accepted[index] = existing
                 decisions.append(_decision(field, "ACCEPT", existing.value, "matches_deterministic_entity"))
                 continue
             entity = EntitySpan(
                 entity_id=f"ent_model_{len(entities) + 1:02d}_{item.kind}", kind=item.kind, value=value,
-                start=item.start, end=item.end, text=item.text, confidence=item.confidence,
+                start=start, end=end, text=item.text, confidence=item.confidence,
                 attributes={"source": "llm_proposal"},
             )
             entities.append(entity)
@@ -126,18 +128,20 @@ class IntentCanonicalizer:
 
     def _apply_clause(self, text, item, entities, proposed_entities, clauses, decisions):  # noqa: ANN001
         base = f"clauses[{item.clause_index}]"
-        if not _valid_span(text, item.start, item.end, item.text):
+        span = _grounded_span(text, item.start, item.end, item.text)
+        if span is None:
             decisions.append(_decision(f"{base}.span", "REJECT", None, "invalid_text_span"))
             return None
+        start, end = span
         spec = capability_spec(item.capability or "")
         if item.capability and (spec is None or not spec.llm_may_propose):
             decisions.append(_decision(f"{base}.capability", "REJECT", None, "unknown_or_forbidden_capability"))
             return None
         referenced = [proposed_entities[index] for index in item.entity_indexes if index in proposed_entities]
-        referenced.extend(entity for entity in entities if entity.start >= item.start and entity.end <= item.end)
+        referenced.extend(entity for entity in entities if entity.start >= start and entity.end <= end)
         refs = list(dict.fromkeys(entity.entity_id for entity in referenced))
-        overlapping = [clause for clause in clauses if clause.start < item.end and clause.end > item.start]
-        target = max(overlapping, key=lambda clause: min(clause.end, item.end) - max(clause.start, item.start)) if overlapping else None
+        overlapping = [clause for clause in clauses if clause.start < end and clause.end > start]
+        target = max(overlapping, key=lambda clause: min(clause.end, end) - max(clause.start, start)) if overlapping else None
         if item.capability is None:
             decisions.append(_decision(f"{base}.capability", "REJECT", None, "missing_capability"))
             return None
@@ -156,7 +160,7 @@ class IntentCanonicalizer:
         source = ClauseSource(source_kind=item.source_kind, entity_refs=[]) if item.source_kind == "prior_result" else None
         slot = _slot_projection(referenced)
         new_clause = StructuredClause(
-            clause_index=target.clause_index if target else len(clauses), text=item.text, start=item.start, end=item.end,
+            clause_index=target.clause_index if target else len(clauses), text=item.text, start=start, end=end,
             action=action, source=source or (target.source if target else None), slot=slot, modality=modality, parser_source="model",
         )
         if target is None:
@@ -230,6 +234,19 @@ class IntentCanonicalizer:
 
 def _valid_span(text: str, start: int, end: int, value: str) -> bool:
     return 0 <= start < end <= len(text) and text[start:end] == value
+
+
+def _grounded_span(text: str, start: int, end: int, value: str) -> tuple[int, int] | None:
+    """Ground model text in the current utterance without trusting character counts."""
+
+    if _valid_span(text, start, end, value):
+        return start, end
+    if not value:
+        return None
+    first = text.find(value)
+    if first < 0 or text.find(value, first + 1) >= 0:
+        return None
+    return first, first + len(value)
 
 
 def _slot_projection(entities):  # noqa: ANN001

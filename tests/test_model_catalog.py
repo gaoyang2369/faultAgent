@@ -27,6 +27,7 @@ def _build_app() -> FastAPI:
 
 
 def test_model_catalog_exposes_allowlist_without_credentials(monkeypatch) -> None:
+    monkeypatch.delenv("LLM_MODEL", raising=False)
     monkeypatch.setenv("MODEL_NAME", "deepseek-ai/DeepSeek-V3.2")
     monkeypatch.setenv(
         "AVAILABLE_MODEL_NAMES",
@@ -47,6 +48,7 @@ def test_model_catalog_exposes_allowlist_without_credentials(monkeypatch) -> Non
 
 
 def test_stream_model_is_validated_and_forwarded(monkeypatch) -> None:
+    monkeypatch.delenv("LLM_MODEL", raising=False)
     monkeypatch.setenv("MODEL_NAME", "deepseek-ai/DeepSeek-V3.2")
     monkeypatch.setenv(
         "AVAILABLE_MODEL_NAMES",

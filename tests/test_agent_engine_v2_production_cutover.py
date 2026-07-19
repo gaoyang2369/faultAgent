@@ -73,6 +73,11 @@ def production_harness(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         return None
 
     monkeypatch.setattr(settings, "DEV_AUTH_ENABLED", True)
+    # 该套件验证确定性 V2 传输与模板只渲染一次，不能受开发机 .env 中的
+    # LLM 灰度配置影响；LLM 语义与回答润色由各自的专项测试覆盖。
+    monkeypatch.setattr(settings, "LLM_SEMANTIC_MODE", "off")
+    monkeypatch.setattr(settings, "ENABLE_LLM_CONTEXT_SEMANTICS", False)
+    monkeypatch.setattr(settings, "ENABLE_GROUNDED_ANSWER_SYNTHESIS", False)
     monkeypatch.setattr(lifespan_module, "LOCAL_DEV_MODE", False)
     monkeypatch.setattr(lifespan_module, "init_pool", _noop_async)
     monkeypatch.setattr(lifespan_module, "close_pool", _noop_async)

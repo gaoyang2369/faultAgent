@@ -66,6 +66,7 @@ def test_answer_model_name_is_independent_of_chat_request_model(monkeypatch) -> 
 
 
 def test_answer_model_config_records_explicit_and_default_sources(monkeypatch) -> None:
+    monkeypatch.delenv("LLM_MODEL", raising=False)
     monkeypatch.setenv("AVAILABLE_ANSWER_MODEL_NAMES", "answer-fixed,default-fixed")
     monkeypatch.setenv("ANSWER_MODEL_NAME", "answer-fixed")
     monkeypatch.setenv("MODEL_NAME", "default-fixed")
@@ -198,7 +199,7 @@ def test_benchmark_is_not_a_production_dependency_and_diagnostic_timeout_is_isol
     assert "tests.evals.benchmark_grounded_answer_models" not in production_sources
     assert "--diagnostic-timeout" in benchmark_source
     assert "default=60.0" in benchmark_source
-    assert settings.ANSWER_MODEL_REQUEST_TIMEOUT_SECONDS == 8.0
+    assert settings.ANSWER_MODEL_REQUEST_TIMEOUT_SECONDS == 15.0
 
 
 def test_prompt_is_trimmed_but_keeps_all_core_safety_constraints() -> None:
@@ -216,6 +217,8 @@ def test_answer_builder_sends_only_provider_neutral_parameters(monkeypatch) -> N
 
     app_models.build_answer_model.cache_clear()
     monkeypatch.setattr(app_models, "ChatOpenAI", FakeChatOpenAI)
+    for name in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_BYPASS_PROXY", "LLM_ENABLE_THINKING"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("AVAILABLE_ANSWER_MODEL_NAMES", "candidate")
     monkeypatch.setenv("OPENAI_API_KEY", "key")
     app_models.build_answer_model("candidate", True, 8.0, 512)

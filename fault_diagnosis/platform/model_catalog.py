@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from fault_diagnosis.platform.llm_runtime import resolve_llm_model_name
+
 
 DEFAULT_MODEL_OPTIONS: tuple[dict[str, str], ...] = (
     {
@@ -41,7 +43,7 @@ def get_model_catalog() -> dict[str, Any]:
     """Return a key-free model catalog safe to expose to the browser."""
 
     configured_ids = _configured_model_ids()
-    configured_default = os.getenv("MODEL_NAME", "").strip()
+    configured_default = resolve_llm_model_name()
     if configured_default and configured_default not in configured_ids:
         configured_ids.insert(0, configured_default)
 
@@ -79,7 +81,7 @@ def get_answer_model_config() -> tuple[str, str]:
     """Resolve the fixed Answer model and record whether it was explicit."""
 
     explicit = os.getenv("ANSWER_MODEL_NAME", "").strip()
-    selected = explicit or os.getenv("MODEL_NAME", "").strip()
+    selected = resolve_llm_model_name(explicit)
     if not selected:
         raise ValueError("answer_model_not_configured")
     return resolve_answer_model_name(selected), "answer_model" if explicit else "default_model"
