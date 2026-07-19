@@ -23,23 +23,45 @@ class _StrictContract(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
 
-class AnswerSourcePacket(_StrictContract):
-    """Authorization-safe facts that the answer model is allowed to express."""
+class AnswerFactResult(_StrictContract):
+    """One compact, user-facing result; no raw runtime object or internal identifier."""
 
-    schema_version: Literal["answer_source_packet.v1"] = "answer_source_packet.v1"
-    user_request: str
-    overall_status: Literal["completed", "partial", "blocked", "denied", "failed"]
-    goals: list[dict[str, Any]] = Field(default_factory=list)
-    deliverables: list[dict[str, Any]] = Field(default_factory=list)
-    claims: list[dict[str, Any]] = Field(default_factory=list)
-    evidence: list[dict[str, Any]] = Field(default_factory=list)
-    data_basis: dict[str, Any] = Field(default_factory=dict)
+    capability: str
+    status: Literal["completed", "partial", "failed", "blocked", "denied", "skipped"]
+    subject: str = ""
+    facts: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
-    allowed_urls: list[str] = Field(default_factory=list)
-    allowed_device_refs: list[str] = Field(default_factory=list)
-    allowed_fault_codes: list[str] = Field(default_factory=list)
-    allowed_action_states: list[str] = Field(default_factory=list)
-    deterministic_fallback: str
+    recommended_actions: list[str] = Field(default_factory=list)
+    urls: list[str] = Field(default_factory=list)
+    data_basis: dict[str, Any] = Field(default_factory=dict)
+    claim_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    failure_reason: str = ""
+
+
+class AnswerFacts(_StrictContract):
+    """Minimal model-visible facts plus server-only validation metadata."""
+
+    schema_version: Literal["answer_facts.v1"] = "answer_facts.v1"
+    user_question: str
+    overall_status: Literal["completed", "partial", "blocked", "denied", "failed"]
+    results: list[AnswerFactResult] = Field(default_factory=list)
+
+    # Server-only: excluded from the JSON sent to the model.
+    allowed_urls: list[str] = Field(default_factory=list, exclude=True)
+    allowed_device_refs: list[str] = Field(default_factory=list, exclude=True)
+    allowed_fault_codes: list[str] = Field(default_factory=list, exclude=True)
+    allowed_action_states: list[str] = Field(default_factory=list, exclude=True)
+    claim_ref_map: dict[str, str] = Field(default_factory=dict, exclude=True)
+    evidence_ref_map: dict[str, str] = Field(default_factory=dict, exclude=True)
+    claim_support_refs: dict[str, list[str]] = Field(default_factory=dict, exclude=True)
+    internal_identifiers: list[str] = Field(default_factory=list, exclude=True)
+    limitations_required: bool = Field(default=False, exclude=True)
+    data_basis_required: bool = Field(default=False, exclude=True)
+
+
+# One-release compatibility name for imports. Its shape is now AnswerFacts.
+AnswerSourcePacket = AnswerFacts
 
 
 class GroundedAnswerModelOutput(_StrictContract):

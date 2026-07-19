@@ -145,15 +145,19 @@ def test_feature_flag_disabled_keeps_presenter_answer_and_never_calls_model() ->
 
 def test_enabled_synthesis_calls_model_once_and_accepts_grounded_runtime_answer() -> None:
     answer = "根据数据库最新可用数据（非实时数据），G120电机1状态需关注。限制：当前实时窗口未命中。"
-    model = FakeModel(_json(answer, claims=["claim_status"], evidence=["ev_status"], limitations=True, basis=True))
+    model = FakeModel(_json(answer, claims=["C1"], evidence=["E1"], limitations=True, basis=True))
     result = _run(_synth(model))
     assert result.status == "generated"
     assert result.synthesis_status == "generated"
     assert result.final_answer_source == "grounded_model"
     assert result.fallback_used is False
     assert result.answer == answer
+    assert result.used_claim_ids == ["claim_status"]
+    assert result.used_evidence_ids == ["ev_status"]
     assert len(model.calls) == 1
-    assert "Answer Source Packet" in model.calls[0][1]["content"]
+    assert "AnswerFacts" in model.calls[0][1]["content"]
+    assert "claim_status" not in model.calls[0][1]["content"]
+    assert "ev_status" not in model.calls[0][1]["content"]
 
 
 def test_model_not_configured_safely_falls_back_without_attempt() -> None:
@@ -181,7 +185,7 @@ def test_model_not_configured_safely_falls_back_without_attempt() -> None:
                 claim_ids=["claim_status"], evidence_ids=["ev_status"],
                 structured_content={"conclusion": "速度存在偏差", "basis": ["运行证据"]},
             ),
-            "诊断结果：G120电机1速度存在偏差。", ["claim_status"], ["ev_status"],
+            "诊断结果：G120电机1速度存在偏差。", ["C1"], ["E1"],
         ),
         (
             DeliverableResult(
@@ -257,15 +261,15 @@ def test_blocked_denied_and_failed_results_are_explained_without_false_success(
 @pytest.mark.parametrize(
     ("mutate", "claims", "evidence"),
     [
-        (lambda text: text + " J2运行异常。", ["claim_status"], ["ev_status"]),
-        (lambda text: text + " F01002已触发。", ["claim_status"], ["ev_status"]),
-        (lambda text: text + " 温度为99℃。", ["claim_status"], ["ev_status"]),
-        (lambda text: text + " 报告：https://evil.example/report", ["claim_status"], ["ev_status"]),
-        (lambda text: text + " 工单已经派发给工程师。", ["claim_status"], ["ev_status"]),
-        (lambda text: text.replace("根据数据库最新可用数据（非实时数据）", "实时数据显示"), ["claim_status"], ["ev_status"]),
-        (lambda text: text, ["claim_missing"], ["ev_status"]),
-        (lambda text: text, ["claim_status"], ["ev_missing"]),
-        (lambda text: text + " artifact_id=secret", ["claim_status"], ["ev_status"]),
+        (lambda text: text + " J2运行异常。", ["C1"], ["E1"]),
+        (lambda text: text + " F01002已触发。", ["C1"], ["E1"]),
+        (lambda text: text + " 温度为99℃。", ["C1"], ["E1"]),
+        (lambda text: text + " 报告：https://evil.example/report", ["C1"], ["E1"]),
+        (lambda text: text + " 工单已经派发给工程师。", ["C1"], ["E1"]),
+        (lambda text: text.replace("根据数据库最新可用数据（非实时数据）", "实时数据显示"), ["C1"], ["E1"]),
+        (lambda text: text, ["C999"], ["E1"]),
+        (lambda text: text, ["C1"], ["E999"]),
+        (lambda text: text + " artifact_id=secret", ["C1"], ["E1"]),
     ],
 )
 def test_validator_rejects_hallucinations_and_uses_deterministic_fallback(mutate, claims, evidence) -> None:
@@ -296,7 +300,7 @@ def test_invalid_model_shapes_fall_back(response: str) -> None:
 
 
 def test_overlong_answer_falls_back() -> None:
-    response = _json("限制：" + "说明" * 100, claims=["claim_status"], evidence=["ev_status"], limitations=True, basis=True)
+    response = _json("限制：" + "说明" * 100, claims=["C1"], evidence=["E1"], limitations=True, basis=True)
     result = _run(_synth(FakeModel(response), max_output_chars=80), fallback="确定性兜底")
     assert result.status == "validation_failed"
     assert "answer_too_long" in result.validation_errors
@@ -320,7 +324,7 @@ def test_model_failures_do_not_fail_the_request(error: Exception, reason: str) -
 def test_prompt_injection_evidence_cannot_change_action_state() -> None:
     answer = "根据数据库最新可用数据（非实时数据），G120电机1状态需关注，工单已派发。限制：实时窗口未命中。"
     result = _run(
-        _synth(FakeModel(_json(answer, claims=["claim_status"], evidence=["ev_status"], limitations=True, basis=True))),
+        _synth(FakeModel(_json(answer, claims=["C1"], evidence=["E1"], limitations=True, basis=True))),
         bundle=_bundle(injected=True),
         fallback="确定性兜底",
     )
@@ -358,6 +362,20 @@ def test_response_projection_keeps_runtime_frame_and_artifact_deterministic() ->
     assert complete["artifact"]["final_answer"] == "模板回答"
 
 
+def test_response_projection_keeps_deterministic_content_when_model_validation_fails() -> None:
+    result = _run(_synth(FakeModel(_json("J2运行异常。"))), fallback="确定性模板回答")
+    assert result.status == "validation_failed"
+    complete = project_answer_complete_payload(
+        {"final_content": "旧值", "content": "旧值"},
+        deterministic_answer="确定性模板回答",
+        answer_result=result,
+    )
+    assert complete["final_content"] == "确定性模板回答"
+    assert complete["content"] == "确定性模板回答"
+    assert complete["grounded_final_content"] == ""
+    assert complete["final_answer_source"] == "deterministic_fallback"
+
+
 def test_validator_rejects_latest_fallback_described_as_realtime() -> None:
     packet = build_answer_source_packet(
         user_message="状态",
@@ -369,7 +387,7 @@ def test_validator_rejects_latest_fallback_described_as_realtime() -> None:
     )
     raw = _json(
         "实时数据显示G120电机1状态需关注。限制：实时窗口未命中。",
-        claims=["claim_status"], evidence=["ev_status"], limitations=True, basis=True,
+        claims=["C1"], evidence=["E1"], limitations=True, basis=True,
     )
     validation = GroundedAnswerValidator().validate(raw, source_packet=packet)
     assert validation.valid is False
@@ -389,8 +407,8 @@ def test_stale_evidence_requires_an_explicit_limitation_disclosure() -> None:
     model = FakeModel(
         _json(
             "G120电机1速度存在偏差。",
-            claims=["claim_status"],
-            evidence=["ev_status"],
+            claims=["C1"],
+            evidence=["E1"],
             limitations=False,
         )
     )

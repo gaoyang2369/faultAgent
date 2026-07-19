@@ -25,8 +25,8 @@ def _valid_output() -> str:
         {
             "schema_version": "grounded_answer.v1",
             "answer": "G120电机1状态需关注。",
-            "used_claim_ids": ["claim_status"],
-            "used_evidence_ids": ["ev_status"],
+            "used_claim_ids": ["C1"],
+            "used_evidence_ids": ["E1"],
             "limitations_disclosed": False,
             "data_basis_disclosed": False,
         },
@@ -204,7 +204,7 @@ def test_benchmark_is_not_a_production_dependency_and_diagnostic_timeout_is_isol
 
 def test_prompt_is_trimmed_but_keeps_all_core_safety_constraints() -> None:
     assert len(ANSWER_SYNTHESIS_SYSTEM_PROMPT) <= 1800
-    for required in ("Source Packet", "设备", "故障码", "URL", "工单", "limitations", "固定 JSON", "used_claim_ids", "不可信数据"):
+    for required in ("AnswerFacts", "设备", "故障码", "URL", "工单", "limitations", "固定 JSON", "used_claim_ids", "不可信数据", "C1/E1"):
         assert required in ANSWER_SYNTHESIS_SYSTEM_PROMPT
 
 

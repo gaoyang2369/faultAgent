@@ -49,7 +49,7 @@ PYTHONPATH=. pytest -q
 - 运行模式：`APP_ENV` / `ENV`、`LOCAL_DEV_MODE`、`ENABLE_PLAN_ENDPOINT`、`ENABLE_DEV_AUTH`、`FRONTEND_ORIGINS`、`AGENT_ENGINE_VERSION=v2`。`AGENT_ENGINE_VERSION` 保留为兼容环境变量，非 `v2` 值会解析为 `v2`。
 - MySQL：`HOST`、`PORT`、`MYSQL_PW`、`MYSQL_USER`、`DCMA_DB_NAME` / `DB_NAME`。
 - OpenAI-compatible LLM：优先读取本地部署别名 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`，并兼容 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`MODEL_NAME`；另有 `AVAILABLE_MODEL_NAMES`、`SINGLE_AGENT_MODEL_TIMEOUT_SECONDS`、`SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS`。私网地址默认绕过系统代理，也可用 `LLM_BYPASS_PROXY=true` 强制开启；vLLM/Qwen 可用 `LLM_ENABLE_THINKING=false` 关闭 thinking。`AVAILABLE_MODEL_NAMES` 可用英文逗号配置前端可选白名单，API Key 只保留在服务端环境变量中。
-- Grounded answer（开发/测试默认全量尝试，生产默认关闭）：`ENABLE_GROUNDED_ANSWER_SYNTHESIS`、`GROUNDED_ANSWER_ROLLOUT_PERCENT`、`ANSWER_MODEL_NAME`、`AVAILABLE_ANSWER_MODEL_NAMES`、`ANSWER_MODEL_REQUEST_TIMEOUT_SECONDS=15`、`ANSWER_MODEL_MAX_TOKENS=512`、`ANSWER_MODEL_CONCURRENCY=8`、`ANSWER_MODEL_INCLUDE_DETERMINISTIC_FALLBACK=true`、`ANSWER_SYNTHESIS_MAX_INPUT_CHARS=12000`、`ANSWER_SYNTHESIS_MAX_OUTPUT_CHARS=4000`、`ANSWER_SYNTHESIS_TEMPERATURE=0.0`。开发/测试未显式配置时启用并按 100% 调用；生产需显式设置 `ENABLE_GROUNDED_ANSWER_SYNTHESIS=true` 与所需灰度比例。Answer 模型不跟随单次聊天请求模型；每轮最多调用一次，并且只消费 V2 已授权事实。超时、Schema 或确定性校验失败时立即使用 `CompositePresenter` 原回答，不重试。最终 complete payload 的 `final_answer_source` 与 trace 的 `answer_synthesis.final_answer_source` 明确标记最终答案来自模型还是模板。旧 `ANSWER_SYNTHESIS_TIMEOUT_SECONDS` / `ANSWER_SYNTHESIS_MAX_OUTPUT_TOKENS` / `ANSWER_SYNTHESIS_MAX_CONCURRENCY` 仅保留为 deprecated 读取投影。
+- Grounded answer（开发/测试默认全量尝试，生产默认关闭）：`ENABLE_GROUNDED_ANSWER_SYNTHESIS`、`GROUNDED_ANSWER_ROLLOUT_PERCENT`、`ANSWER_MODEL_NAME`、`AVAILABLE_ANSWER_MODEL_NAMES`、`ANSWER_MODEL_REQUEST_TIMEOUT_SECONDS=15`、`ANSWER_MODEL_MAX_TOKENS=512`、`ANSWER_MODEL_CONCURRENCY=8`、`ANSWER_SYNTHESIS_MAX_INPUT_CHARS=6000`、`ANSWER_SYNTHESIS_MAX_OUTPUT_CHARS=4000`、`ANSWER_SYNTHESIS_TEMPERATURE=0.0`。开发/测试未显式配置时启用并按 100% 调用；生产需显式设置 `ENABLE_GROUNDED_ANSWER_SYNTHESIS=true` 与所需灰度比例。Answer 模型每轮最多调用一次，只接收精简 `AnswerFacts` 并负责组织表达。超时、Schema 或确定性校验失败时立即使用 `CompositePresenter` 原回答，不重试；只有 `status=generated` 才覆盖 `final_content`。旧 `ANSWER_MODEL_INCLUDE_DETERMINISTIC_FALLBACK`、`ANSWER_SYNTHESIS_TIMEOUT_SECONDS`、`ANSWER_SYNTHESIS_MAX_OUTPUT_TOKENS`、`ANSWER_SYNTHESIS_MAX_CONCURRENCY` 仅保留为 deprecated 配置投影。
 - 统一语义模型（开发/测试默认 `primary`，生产默认 `off`）：`LLM_SEMANTIC_MODE=off|shadow|primary`、`LLM_SEMANTIC_CALL_POLICY=always|auto|off`、`ENABLE_LLM_CONTEXT_SEMANTICS`、`LLM_SEMANTIC_CONCURRENCY=8`、`LLM_SEMANTIC_FAILURE_POLICY=deterministic_fallback`、`INTENT_MODEL_NAME`、`INTENT_MODEL_TIMEOUT_SECONDS=18`、`INTENT_MODEL_MAX_TOKENS=512`。当前验证阶段使用 `always`；生产稳定后推荐 `auto`，仅在未识别、多分句/多 Goal、条件、否定、指代、纠正、待澄清或历史复用时调用。意图与上下文共用每轮唯一一次异步调用；`ENABLE_LLM_CONTEXT_SEMANTICS=false` 时该调用不携带 active case、最近轮次、待澄清或候选摘要，也不采用模型的 context 提议。取消、超时或校验失败都会回退确定性 Canonical 链路。
 - Ollama / FAISS / 知识库：`OLLAMA_BASE_URL`、`EMBEDDING_MODEL`、`FAISS_PATH`、`KB_CHUNK_SIZE`、`KB_CHUNK_OVERLAP`、`KB_BATCH_SIZE`、`KB_QUERY_TIMEOUT_SECONDS`、`KB_EMBED_TIMEOUT_SECONDS`、`KB_BUILD_MAX_DOCUMENTS`、`KB_INCREMENTAL_BUILD`、`KB_EMBED_CACHE_PATH`。
 - 上传知识文件 / OCR：`ADMIN_UPLOAD_DIR`、`ADMIN_PDF_MAX_FILE_SIZE`、`PDF_TEXT_EXTRACT_BACKEND`、`DOCUMENT_OCR_BACKEND`、`DOCUMENT_OCR_LANG`、`DOCUMENT_OCR_MAX_PAGES`、`DOCUMENT_OCR_RENDER_DPI`、`PDF_TEXT_MIN_CHARS`、`PDF_TEXT_PREVIEW_CHARS`、`UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX`、`UPLOADED_FILE_KB_VECTOR_TIMEOUT_SECONDS`。
@@ -148,6 +148,11 @@ ACL 投影后的 active case、最近轮次安全摘要、待澄清缺槽、上�
 lineage、SQL、权限和执行节点不会进入该安全包。模型统一返回 `SemanticTurnProposal`，其中 clauses 交给
 `IntentCanonicalizer`，context 交给 `ContextProposalValidator`；真实 Artifact 仍仅由
 `CanonicalContextBinder` 在内部候选集中确定。
+
+回答润色前先由代码把已授权结构化结果压缩为 `AnswerFacts.results`：每项只含 capability、状态、主题、
+事实、限制、下一步、URL 和数据时效。真实 claim/evidence ID 不发送给模型，而是按本轮顺序替换为
+`C1/C2` 与 `E1/E2`；模型返回短引用后，`GroundedAnswerValidator` 再映射回真实 ID，并继续校验设备、
+故障码、URL、数值、动作状态和时效性。验证失败不会改变 Runtime、Artifact 或确定性最终回答。
 
 Feature Flag 组合：
 

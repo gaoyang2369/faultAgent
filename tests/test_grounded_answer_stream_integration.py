@@ -111,8 +111,8 @@ def test_stream_boundary_uses_the_single_injected_synthesizer_when_enabled(monke
         {
             "schema_version": "grounded_answer.v1",
             "answer": "G120电机1状态需关注。",
-            "used_claim_ids": ["claim_status"],
-            "used_evidence_ids": ["ev_status"],
+            "used_claim_ids": ["C1"],
+            "used_evidence_ids": ["E1"],
             "limitations_disclosed": False,
             "data_basis_disclosed": False,
         },
@@ -174,8 +174,8 @@ def test_concurrent_answer_calls_are_bounded_without_blocking_event_loop(monkeyp
         {
             "schema_version": "grounded_answer.v1",
             "answer": "G120电机1状态需关注。",
-            "used_claim_ids": ["claim_status"],
-            "used_evidence_ids": ["ev_status"],
+            "used_claim_ids": ["C1"],
+            "used_evidence_ids": ["E1"],
             "limitations_disclosed": False,
             "data_basis_disclosed": False,
         },

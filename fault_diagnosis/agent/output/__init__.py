@@ -6,9 +6,9 @@ from .presenter import CompositePresenter, PresentedOutput
 from .legacy_projection import project_legacy_deliverable, serialize_composite_output
 from .artifact_projection import project_artifact_envelope
 from .artifact_manifest import build_artifact_manifests, latest_focus_from_manifests
-from .answer_contracts import AnswerSourcePacket, GroundedAnswerModelOutput, GroundedAnswerResult
+from .answer_contracts import AnswerFactResult, AnswerFacts, AnswerSourcePacket, GroundedAnswerModelOutput, GroundedAnswerResult
 from .answer_projection import effective_answer_frame, project_answer_complete_payload
-from .answer_source import build_answer_source_packet
+from .answer_source import build_answer_facts, build_answer_source_packet
 from .answer_source_budget import compact_answer_source_packet
 from .answer_validator import GroundedAnswerValidator
 from .grounded_answer import GroundedAnswerSynthesizer
@@ -25,6 +25,8 @@ from .sse_projection import (
 __all__ = [
     "build_output_frame",
     "AnswerSourcePacket",
+    "AnswerFactResult",
+    "AnswerFacts",
     "CompositePresenter",
     "DeliverableAssembler",
     "PresentedOutput",
@@ -33,6 +35,7 @@ __all__ = [
     "GroundedAnswerSynthesizer",
     "GroundedAnswerValidator",
     "build_answer_source_packet",
+    "build_answer_facts",
     "compact_answer_source_packet",
     "effective_answer_frame",
     "project_answer_complete_payload",
