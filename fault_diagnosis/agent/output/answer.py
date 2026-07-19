@@ -71,6 +71,25 @@ def build_output_frame(
         plan_nodes=plan_nodes,
         goal_statuses=goal_statuses,
     )
+    contract_validation = _deliverable_contract_validation(
+        deliverables,
+        bundle,
+        runtime_validation=contract_validation,
+    )
+    if contract_validation.get("contract_satisfied") is False:
+        incomplete = set(contract_validation.get("incomplete_capabilities") or [])
+        deliverables = [
+            item.model_copy(update={"status": "partial"}, deep=True)
+            if item.capability in incomplete and item.status == "completed"
+            else item
+            for item in deliverables
+        ]
+        goal_execution_results = [
+            item.model_copy(update={"status": "incomplete"}, deep=True)
+            if item.capability in incomplete and item.status == "completed"
+            else item
+            for item in goal_execution_results
+        ]
     presented = CompositePresenter().present(
         deliverables=deliverables,
         status=status,
@@ -215,6 +234,113 @@ def _runtime_status_contract_validation(
         "forbidden_claim_types_present": forbidden_present,
         "contract_satisfied": satisfied,
     }
+
+
+def _deliverable_contract_validation(
+    deliverables,
+    bundle: EvidenceBundle | None,
+    *,
+    runtime_validation: dict[str, Any],
+) -> dict[str, Any]:  # noqa: ANN001
+    capabilities = {item.capability for item in deliverables}
+    covered = capabilities.intersection({"check_runtime_status", "explain_fault_code", "generate_report"})
+    if len(covered) > 1:
+        children = [
+            _deliverable_contract_validation(
+                [item for item in deliverables if item.capability == capability],
+                bundle,
+                runtime_validation=runtime_validation,
+            )
+            for capability in sorted(covered)
+        ]
+        return {
+            "required_fields": [
+                f"{capability}.{field}"
+                for capability, child in zip(sorted(covered), children, strict=True)
+                for field in child.get("required_fields", [])
+            ],
+            "missing_fields": [
+                f"{capability}.{field}"
+                for capability, child in zip(sorted(covered), children, strict=True)
+                for field in child.get("missing_fields", [])
+            ],
+            "required_claim_types": list(dict.fromkeys(
+                value for child in children for value in child.get("required_claim_types", [])
+            )),
+            "present_claim_types": list(dict.fromkeys(
+                value for child in children for value in child.get("present_claim_types", [])
+            )),
+            "missing_claim_types": list(dict.fromkeys(
+                value for child in children for value in child.get("missing_claim_types", [])
+            )),
+            "ledger_passed": all(child.get("ledger_passed", True) for child in children),
+            "forbidden_claim_types_present": list(dict.fromkeys(
+                value for child in children for value in child.get("forbidden_claim_types_present", [])
+            )),
+            "contract_satisfied": all(child.get("contract_satisfied") is True for child in children),
+            "covered_capabilities": sorted(covered),
+            "incomplete_capabilities": list(dict.fromkeys(
+                value for child in children for value in child.get("incomplete_capabilities", [])
+            )),
+        }
+    if "check_runtime_status" in capabilities:
+        satisfied = runtime_validation.get("contract_satisfied") is True
+        return {
+            **runtime_validation,
+            "covered_capabilities": ["check_runtime_status"],
+            "incomplete_capabilities": [] if satisfied else ["check_runtime_status"],
+        }
+    if capabilities == {"explain_fault_code"}:
+        entries = deliverables[0].structured_content.get("fault_code_entries") or []
+        entry = entries[0] if entries and isinstance(entries[0], dict) else {}
+        checks = {
+            "fault_code": bool(entry.get("code")),
+            "meaning": bool(entry.get("meaning") or entry.get("title")),
+            "cause_or_trigger_condition": bool(entry.get("cause")),
+            "recommended_action": bool(entry.get("remedy")),
+            "source_file": bool(entry.get("source_file")),
+            "source_page": bool(entry.get("page")),
+        }
+        claim_types = sorted({claim.claim_type for claim in (bundle.claims if bundle else [])})
+        missing = [field for field, present in checks.items() if not present]
+        return {
+            "required_fields": list(checks),
+            "missing_fields": missing,
+            "required_claim_types": ["fault_code_explanation"],
+            "present_claim_types": claim_types,
+            "missing_claim_types": [] if "fault_code_explanation" in claim_types else ["fault_code_explanation"],
+            "ledger_passed": bool((bundle.quality_checks if bundle else {}).get("passed", True)),
+            "forbidden_claim_types_present": [],
+            "contract_satisfied": not missing and "fault_code_explanation" in claim_types,
+            "covered_capabilities": ["explain_fault_code"],
+            "incomplete_capabilities": (
+                [] if not missing and "fault_code_explanation" in claim_types
+                else ["explain_fault_code"]
+            ),
+        }
+    if capabilities == {"generate_report"}:
+        item = deliverables[0]
+        payload = item.structured_content
+        checks = {
+            "report_generated": item.status == "completed",
+            "analysis_source": bool(item.dependency_goal_ids or item.artifact_ids),
+            "report_summary": bool(payload.get("report_title") or payload.get("save_result")),
+            "report_access": bool(payload.get("report_url") or payload.get("report_filename") or item.artifact_ids),
+        }
+        missing = [field for field, present in checks.items() if not present]
+        return {
+            "required_fields": list(checks),
+            "missing_fields": missing,
+            "required_claim_types": [],
+            "present_claim_types": [],
+            "missing_claim_types": [],
+            "ledger_passed": True,
+            "forbidden_claim_types_present": [],
+            "contract_satisfied": not missing,
+            "covered_capabilities": ["generate_report"],
+            "incomplete_capabilities": [] if not missing else ["generate_report"],
+        }
+    return runtime_validation
 
 
 def _missing_evidence(bundle: EvidenceBundle | None, analysis: Any) -> list[str]:

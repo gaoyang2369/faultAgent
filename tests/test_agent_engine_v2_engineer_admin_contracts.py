@@ -301,7 +301,9 @@ def test_composite_output_keeps_all_deliverables_in_legacy_content() -> None:
         },
         goals=goals,
     )
-    assert [item.status for item in frame.composite_output.deliverables] == ["completed"] * 4
+    assert [item.status for item in frame.composite_output.deliverables] == [
+        "partial", "partial", "completed", "completed",
+    ]
     assert all(title in frame.final_answer for title in ("【故障码解释】", "【运行状态】", "【故障诊断】", "【处理建议】"))
     assert frame.answer_variant == "composite_answer"
 

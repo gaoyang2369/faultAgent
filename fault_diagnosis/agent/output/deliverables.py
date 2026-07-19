@@ -170,7 +170,10 @@ class DeliverableAssembler:
                     {
                         key: value
                         for key, value in (_dump(entry) or {}).items()
-                        if key in {"code", "title", "meaning", "cause", "remedy", "match_type"}
+                        if key in {
+                            "code", "title", "meaning", "cause", "remedy", "match_type",
+                            "source_file", "page",
+                        }
                     }
                     for entry in list(getattr(knowledge, "fault_code_entries", []) or [])
                 ],

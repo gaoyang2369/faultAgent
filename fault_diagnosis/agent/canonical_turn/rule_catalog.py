@@ -126,7 +126,7 @@ RULE_CATALOG = (
     },
     {
         "rule_id": "action.runtime.status.v1", "category": "action_predicate",
-        "pattern": r"(?:查询|查看)(?:.{0,12}(?:状态|运行|异常))?|查.{0,12}(?:状态|运行|异常)|(?:当前|现在).{0,12}(?:状态|运行)|(?:改查|改成).{0,12}",
+        "pattern": r"(?:查询|查看)(?:.{0,12}(?:状态|运行|异常))?|查.{0,12}(?:状态|运行|异常)|(?:当前|现在).{0,12}(?:状态|运行)|(?:(?:当前|现在).{0,16})?(?:有无|有没有|是否有|有故障吗|有异常吗|是否(?:存在|出现).{0,4}(?:故障|异常)|是否异常)|(?:改查|改成).{0,12}",
         "semantic_value": "check_runtime_status", "priority": 780, "confidence": 1.0,
         "allowed_clause_roles": ("action",), "entity_ref_kinds": ("device_reference",),
         "example": "查询G120电机1状态",
@@ -147,7 +147,7 @@ RULE_CATALOG = (
     },
     {
         "rule_id": "action.diagnosis.explicit.v1", "category": "action_predicate",
-        "pattern": r"(?:故障)?诊断(?!结果)(?:故障|异常)?|(?:判断|是否存在).{0,10}(?:故障|异常)|(?:排查|分析).{0,24}(?:根因|故障|异常)|(?:它|这个).{0,8}(?:故障|异常)",
+        "pattern": r"(?:故障)?诊断(?!结果)(?:故障|异常)?|(?:判断|确认).{0,10}(?:故障|异常)|(?:排查|分析).{0,24}(?:根因|原因|故障|异常)|(?:根因|原因).{0,12}(?:分析|定位)",
         "semantic_value": "diagnose_fault", "priority": 795, "confidence": 1.0,
         "allowed_clause_roles": ("action",), "entity_ref_kinds": ("device_reference",),
         "example": "故障诊断",

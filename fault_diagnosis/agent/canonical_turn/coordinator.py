@@ -455,10 +455,11 @@ class ConversationTurnCoordinator:
             required_slots = list(spec.required_slots) if spec is not None else []
             resolved_slots: dict[str, Any] = {}
             for slot, kind in _ENTITY_KIND_BY_SLOT.items():
+                clause_refs = list(clause.slot.get(slot, []))
                 values = list(
                     dict.fromkeys(
                         entity_by_id[ref].value
-                        for ref in clause.action.entity_refs
+                        for ref in [*clause.action.entity_refs, *clause_refs]
                         if ref in entity_by_id and entity_by_id[ref].kind == kind
                     )
                 )
@@ -511,7 +512,8 @@ class ConversationTurnCoordinator:
                     ),
                 )
             )
-        return _attach_goal_dependencies(goals, parsed.clauses)
+        goals = _attach_goal_dependencies(goals, parsed.clauses)
+        return _add_report_source_dependencies(goals)
 
     def _bind_pending(
         self,
@@ -755,7 +757,10 @@ def _attach_goal_dependencies(goals: list[CanonicalGoal], clauses) -> list[Canon
             producer = next(
                 (
                     item for item in reversed(result)
-                    if item.capability in {"diagnose_fault", "resolution_recommendation", "generate_report"}
+                    if item.capability in {
+                        "check_runtime_status", "compare_runtime_status", "diagnose_fault",
+                        "resolution_recommendation", "generate_report",
+                    }
                 ),
                 None,
             )
@@ -771,6 +776,46 @@ def _attach_goal_dependencies(goals: list[CanonicalGoal], clauses) -> list[Canon
             update={"dependencies": list(dict.fromkeys(dependencies)), "execution_condition": condition},
             deep=True,
         ))
+    return result
+
+
+def _add_report_source_dependencies(goals: list[CanonicalGoal]) -> list[CanonicalGoal]:
+    """Materialize a same-turn producer when a report has a clear device but no source."""
+
+    result: list[CanonicalGoal] = []
+    for goal in goals:
+        if (
+            goal.capability == "generate_report"
+            and not goal.dependencies
+            and goal.resolved_slots.get("device")
+            and goal.resolved_slots.get("time_window")
+            and not goal.source_requirements
+        ):
+            producer_id = _stable_id("goal", goal.goal_id, "report_runtime_source")
+            producer_slots = {
+                key: value
+                for key, value in goal.resolved_slots.items()
+                if key in {"device", "time_window"}
+            }
+            result.append(CanonicalGoal(
+                goal_id=producer_id,
+                capability="check_runtime_status",
+                origin="dependency",
+                user_requested=False,
+                user_visible=False,
+                clause_index=goal.clause_index,
+                required_slots=["device"],
+                resolved_slots=producer_slots,
+                missing_slots=[],
+                dependencies=[],
+                provenance=GoalProvenance(
+                    parser_source="dependency",
+                    utterance_span=goal.provenance.utterance_span,
+                    entity_refs=goal.provenance.entity_refs,
+                ),
+            ))
+            goal = goal.model_copy(update={"dependencies": [producer_id]}, deep=True)
+        result.append(goal)
     return result
 
 

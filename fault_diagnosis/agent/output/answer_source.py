@@ -6,6 +6,7 @@ import re
 from typing import Any, Iterable
 
 from fault_diagnosis.domain.diagnosis.contracts import EvidenceBundle
+from fault_diagnosis.agent.canonical_turn.entity_extractor import DeterministicEntityExtractor
 
 from ..contracts import DeliverableResult
 from .answer_contracts import AnswerFactResult, AnswerFacts
@@ -194,6 +195,12 @@ def build_answer_facts(
         if source.status == "completed"
     ]
     allowed_devices = _dedupe([
+        *[
+            item.value
+            for item in DeterministicEntityExtractor().extract(user_message)
+            if item.kind == "device_reference"
+        ],
+        *_collect_goal_devices(runtime_metadata),
         *_collect_values(structured_values, _DEVICE_KEYS),
         *[str(item.get("asset_id") or "") for item in claims],
         *[str(item.get("asset_id") or "") for item in evidence],
@@ -399,6 +406,26 @@ def _overall_status(metadata: dict[str, Any], deliverables: list[DeliverableResu
     if statuses & {"completed", "partial"}:
         return "partial"
     return "failed" if "failed" in statuses else "blocked"
+
+
+def _collect_goal_devices(metadata: dict[str, Any]) -> list[str]:
+    request = metadata.get("canonical_request")
+    goals = request.get("goals", []) if isinstance(request, dict) else metadata.get("goals", [])
+    values: list[str] = []
+    for goal in goals if isinstance(goals, list) else []:
+        if not isinstance(goal, dict):
+            continue
+        values.extend(_collect_values(goal, _DEVICE_KEYS))
+        slots = goal.get("resolved_slots")
+        if isinstance(slots, dict):
+            values.extend(_values(slots.get("device")))
+    return _dedupe(values)
+
+
+def _values(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item)]
+    return [str(value)] if value else []
 
 
 def _resolution_modes(data_basis: dict[str, Any]) -> set[str]:

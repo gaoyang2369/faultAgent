@@ -285,8 +285,6 @@ def assert_regressions(results: dict[str, Any]) -> None:
         "variant": "composite_answer",
         "goal_ids": ["g_explain", "g_status", "g_diagnose", "g_recommend"],
         "capabilities": [
-            "explain_fault_code",
-            "check_runtime_status",
             "diagnose_fault",
             "resolution_recommendation",
         ],
@@ -302,30 +300,30 @@ def assert_regressions(results: dict[str, Any]) -> None:
         "execution_goal_ids": ["g_user", "g_dependency"],
     }
     assert results["satisfied_by_artifact"] == {
-        "status": "completed",
+        "status": "partial",
         "artifact_ids": ["sql:historical"],
         "executed_goal_ids": [],
-        "completed_goal_ids": ["g_satisfied"],
+        "completed_goal_ids": [],
     }
     assert results["partial_failure"] == {
         "g_explain": "failed",
-        "g_status": "completed",
+        "g_status": "partial",
         "g_diagnose": "completed",
         "g_recommend": "completed",
     }
     assert results["sql_failure"] == {
-        "g_explain": "completed",
+        "g_explain": "partial",
         "g_status": "failed",
         "g_diagnose": "blocked",
         "g_recommend": "blocked",
     }
     assert results["permission"] == {
         "variant": "composite_answer",
-        "statuses": {"g_explain": "completed", "g_report": "denied"},
+        "statuses": {"g_explain": "partial", "g_report": "denied"},
     }
     assert results["missing_report_source"] == {
-        "statuses": {"g_explain": "completed", "g_report": "blocked"},
-        "executed_goal_ids": ["g_explain"],
+        "statuses": {"g_explain": "partial", "g_report": "blocked"},
+        "executed_goal_ids": [],
     }
     assert results["workorder_denied"] == {"g_explain": "completed", "g_workorder": "denied"}
     assert results["all_blocked"] == {

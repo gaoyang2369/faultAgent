@@ -88,7 +88,16 @@ class PlanCompiler:
             for goal in request.goals
         ]
         node_specs: list[dict] = []
+        required_dependency_ids = {
+            dependency_id
+            for consumer in request.goals
+            if auth[consumer.goal_id].status == "authorized"
+            and ready[consumer.goal_id].status == "ready"
+            for dependency_id in consumer.dependencies
+        }
         for goal in request.goals:
+            if goal.origin == "dependency" and goal.goal_id not in required_dependency_ids:
+                continue
             if auth[goal.goal_id].status != "authorized" or ready[goal.goal_id].status != "ready":
                 continue
             if source[goal.goal_id].status not in _EXECUTABLE_SOURCES:

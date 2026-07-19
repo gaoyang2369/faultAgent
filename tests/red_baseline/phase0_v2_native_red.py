@@ -271,8 +271,14 @@ def test_case_b_output_uses_composite_variant_and_execution_observation() -> Non
     observation = frame.guardrail_result["output_observation"]
 
     assert frame.answer_variant == "composite_answer"
-    assert observation["executed_goal_ids"] == [goal.goal_id for goal in _composite_goals()]
-    assert observation["executed_capabilities"] == [goal.capability for goal in _composite_goals()]
+    assert observation["executed_goal_ids"] == ["g_diagnose", "g_recommend"]
+    assert observation["executed_capabilities"] == ["diagnose_fault", "resolution_recommendation"]
+    assert observation["deliverable_status_by_goal"] == {
+        "g_explain": "partial",
+        "g_status": "partial",
+        "g_diagnose": "completed",
+        "g_recommend": "completed",
+    }
 
 
 def test_case_b_one_failed_goal_does_not_delete_independent_deliverables() -> None:
@@ -287,7 +293,7 @@ def test_case_b_one_failed_goal_does_not_delete_independent_deliverables() -> No
         "g_diagnose",
         "g_recommend",
     ]
-    assert frame.composite_output.deliverables[0].status == "completed"
+    assert frame.composite_output.deliverables[0].status == "partial"
 
 
 def test_case_c_ambiguous_pronoun_creates_goal_scoped_pending() -> None:
@@ -300,7 +306,7 @@ def test_case_c_ambiguous_pronoun_creates_goal_scoped_pending() -> None:
 
     assert snapshot.effective_request_frame.needs_clarification is True
     assert snapshot.effective_request_frame.ambiguity["unresolved_slot"] == "device"
-    assert snapshot.effective_request_frame.ambiguity["original_goals"][0]["capability"] == "diagnose_fault"
+    assert snapshot.effective_request_frame.ambiguity["original_goals"][0]["capability"] == "check_runtime_status"
     assert snapshot.effective_request_frame.ambiguity["candidate_values"] == ["G120电机1", "G120电机2"]
 
 

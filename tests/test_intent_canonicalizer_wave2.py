@@ -53,12 +53,12 @@ async def _resolve(message: str, payload: dict):
 
 
 @pytest.mark.asyncio
-async def test_model_can_correct_a_grounded_deterministic_capability() -> None:
+async def test_model_can_add_but_not_remove_a_grounded_deterministic_capability() -> None:
     message = "查询 G120电机1 当前状态"
     result, gateway = await _resolve(message, _proposal(message, capability="diagnose_fault"))
 
     assert gateway.calls == 1
-    assert [goal.capability for goal in result.request.goals] == ["diagnose_fault"]
+    assert [goal.capability for goal in result.request.goals] == ["check_runtime_status", "diagnose_fault"]
     decision = next(item for item in _semantic(result) if item["field"] == "clauses[0].capability")
     assert decision == {
         "field": "clauses[0].capability", "decision": "ACCEPT", "value": "diagnose_fault",

@@ -21,7 +21,9 @@ TraceSpanKind = Literal[
     "guardrail",
     "artifact",
 ]
-TraceStatus = Literal["pending", "running", "completed", "skipped", "blocked", "failed", "cancelled"]
+TraceStatus = Literal[
+    "pending", "running", "completed", "partial", "incomplete", "skipped", "blocked", "failed", "cancelled",
+]
 
 
 def utc_now_iso() -> str:
@@ -83,4 +85,3 @@ class TraceEnvelope(BaseModel):
     errors: list[dict[str, Any]] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
-

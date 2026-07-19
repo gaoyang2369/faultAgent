@@ -407,10 +407,11 @@ def test_fault_code_answer_uses_concise_structured_template_by_default() -> None
 
     assert frame.answer_variant == "fault_code_answer"
     assert "一句话解释：A07089：转换单位后不能激活功能块" in frame.final_answer
-    assert "可能原因：尝试激活功能块。转换单位后不允许此操作。" in frame.final_answer
+    assert "触发说明：手册未给出可量化触发阈值" in frame.final_answer
+    assert "给出的原因是：尝试激活功能块。转换单位后不允许此操作。" in frame.final_answer
     assert "手册处理：将单位恢复到出厂设置。" in frame.final_answer
     assert "p0100" not in frame.final_answer
-    assert "S120_故障手册.pdf" not in frame.final_answer
+    assert "来源：S120_故障手册.pdf，第 232 页" in frame.final_answer
     assert "- 传播：LOCAL" not in frame.final_answer
     assert "- 反应：无" not in frame.final_answer
 
@@ -428,7 +429,7 @@ def test_fault_code_presenter_does_not_read_query_to_expand_chunk_metadata() -> 
     assert "一句话解释：A07089" in frame.final_answer
     assert "详细手册信息：" not in frame.final_answer
     assert "LOCAL" not in frame.final_answer
-    assert "S120_故障手册.pdf" not in frame.final_answer
+    assert "来源：S120_故障手册.pdf，第 232 页" in frame.final_answer
 
 
 def test_fault_code_answer_does_not_invent_missing_cause_or_remedy() -> None:
@@ -441,8 +442,11 @@ def test_fault_code_answer_does_not_invent_missing_cause_or_remedy() -> None:
 
     frame = build_output_frame(status="completed", artifacts={"knowledge_artifact": artifact}, goals=[_goal("explain_fault_code")])
 
-    assert "可能原因：手册未明确给出" in frame.final_answer
+    assert "给出的原因是：手册未明确给出" in frame.final_answer
     assert "手册处理：手册未明确给出" in frame.final_answer
+    assert frame.guardrail_result["contract_satisfied"] is False
+    assert frame.composite_output.deliverables[0].status == "partial"
+    assert frame.goal_execution_results[0].status == "incomplete"
 
 
 def test_fault_code_answer_warns_when_no_exact_match() -> None:

@@ -2,4 +2,7 @@
 诊断结论：速度反馈与给定偏差超限，证据支持负载或反馈链路异常。
 
 【运行报告】
-报告已生成：/reports/convergence-report.html
+生成状态：成功
+报告：运行报告
+摘要：已基于本轮分析结果生成报告。
+访问方式：/reports/convergence-report.html

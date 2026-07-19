@@ -130,6 +130,8 @@ class SemanticResolutionService:
         if mode in {"primary", "shadow"}:
             try:
                 proposal = parse_semantic_turn_proposal(result.payload)
+                if not proposal.clauses and deterministic_capabilities:
+                    return _fallback(parsed, trace, "validation_failed", started)
                 canonical, decisions = self._canonicalizer.canonicalize(parsed, proposal)
                 context_proposal, context_decisions, context_clarification_reason = (
                     self._context_validator.validate(proposal.context, list(context_candidates))
@@ -147,9 +149,14 @@ class SemanticResolutionService:
             trace.clarify = [item.field for item in decisions if item.decision == "CLARIFY"]
             trace.fallback = False
             trace.proposal_capabilities = [item.capability for item in proposal.clauses if item.capability]
+            materially_changed = (
+                canonical.entities != parsed.entities
+                or canonical.clauses != parsed.clauses
+                or canonical.clarification_needs != parsed.clarification_needs
+            )
             # Shadow 只观测同一次语义调用，绝不替换确定性 parse 或上下文绑定。
             return SemanticResolution(
-                parsed=canonical if mode == "primary" else parsed,
+                parsed=canonical if mode == "primary" and materially_changed else parsed,
                 trace=trace,
                 field_decisions=decisions,
                 context_proposal=context_proposal if mode == "primary" else None,

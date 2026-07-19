@@ -161,18 +161,33 @@ class CanonicalContextBinder:
         pool = [item for item in candidates if item.completed and item.artifact_type in compatible_types]
         if goal.capability == "generate_report":
             pool = [item for item in pool if item.artifact_type != "sql_artifact" or item.reportable]
+            if any(
+                marker in requirement
+                for requirement in goal.source_requirements
+                for marker in ("诊断", "分析")
+            ):
+                pool = [item for item in pool if item.artifact_type == "analysis_artifact"]
+        if goal.capability == "create_workorder_draft" and any(
+            "报告" in requirement for requirement in goal.source_requirements
+        ):
+            pool = [item for item in pool if item.artifact_type == "report_artifact"]
         if explicit_assets:
             pool = [item for item in pool if not item.asset_refs or set(item.asset_refs) == set(explicit_assets)]
-        if context_proposal:
-            pool = _apply_context_constraints(pool, context_proposal)
-        if context_clarification_reason:
-            pool = []
         unavailable_previous = prior and any(item.candidate_id == "previous:unavailable" for item in candidates)
         binding_clarification_reason = (
             "missing_source"
             if context_clarification_reason == "context_reference_unavailable" and unavailable_previous
             else context_clarification_reason
         )
+        if explicit_assets and binding_clarification_reason in {
+            "unknown_or_unavailable_context_asset",
+            "conflicting_context_asset_constraints",
+        }:
+            binding_clarification_reason = None
+        if context_proposal:
+            pool = _apply_context_constraints(pool, context_proposal)
+        if binding_clarification_reason:
+            pool = []
         if (explicit_artifact and not explicit_refs) or unavailable_previous:
             pool = []
         selected, ambiguous_source = _select(pool, compatible_types, explicit_refs, context_proposal=context_proposal)
@@ -382,7 +397,9 @@ def _clause_source_kind(request: CanonicalTurnRequest, clause_index: int) -> str
 
 
 def _reuse_requested(text: str) -> bool:
-    return any(marker in text for marker in ("无需重新", "不用重新", "不必重新", "基于已有", "基于刚才", "用刚才"))
+    return any(marker in text for marker in (
+        "无需重新", "不用重新", "不必重新", "基于已有", "基于刚才", "用刚才", "从刚才", "刚才的结果",
+    ))
 
 
 def _complete(raw: dict[str, Any]) -> bool:

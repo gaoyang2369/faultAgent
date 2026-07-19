@@ -165,7 +165,7 @@ class CurrentUtteranceParse(CanonicalContract):
 
 
 class GoalProvenance(CanonicalContract):
-    parser_source: Literal["deterministic", "model", "pending"]
+    parser_source: Literal["deterministic", "model", "pending", "dependency"]
     utterance_span: tuple[int, int] | None = None
     entity_refs: list[str] = Field(default_factory=list)
     pending_id: str | None = None

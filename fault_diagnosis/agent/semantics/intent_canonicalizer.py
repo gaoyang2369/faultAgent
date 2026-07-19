@@ -54,10 +54,38 @@ class IntentCanonicalizer:
             )
             if canonical_index is not None:
                 clause_by_proposal[item.clause_index] = canonical_index
-        clauses.sort(key=lambda item: (item.start, item.end))
+        # Model proposals are additive at the capability boundary.  A model may
+        # refine a grounded clause, but it must never erase a high-confidence
+        # capability already recognized from the user's literal text.
+        final_capabilities = {item.action.capability for item in clauses if item.action}
+        for deterministic_clause in deterministic.clauses:
+            if (
+                deterministic_clause.action
+                and deterministic_clause.action.capability not in final_capabilities
+            ):
+                clauses.append(deterministic_clause.model_copy(deep=True))
+                final_capabilities.add(deterministic_clause.action.capability)
+                decisions.append(_decision(
+                    f"deterministic.clauses[{deterministic_clause.clause_index}].capability",
+                    "ACCEPT",
+                    deterministic_clause.action.capability,
+                    "deterministic_capability_preserved",
+                ))
+        clauses.sort(key=lambda item: (
+            item.start,
+            item.end,
+            0 if item.parser_source == "deterministic" else 1,
+        ))
         remapped = {item.clause_index: index for index, item in enumerate(clauses)}
         clauses = [item.model_copy(update={"clause_index": index}, deep=True) for index, item in enumerate(clauses)]
         clauses = self._apply_dependencies(clauses, proposal, clause_by_proposal, remapped, decisions)
+        missing_deterministic = {
+            item.action.capability for item in deterministic.clauses if item.action
+        } - {
+            item.action.capability for item in clauses if item.action
+        }
+        if missing_deterministic:
+            raise ValueError("deterministic_capability_reduction")
         accepted = [item.field for item in decisions if item.decision == "ACCEPT"]
         rejected = [item.field for item in decisions if item.decision == "REJECT"]
         clarify = [item.field for item in decisions if item.decision == "CLARIFY"]
@@ -159,6 +187,14 @@ class IntentCanonicalizer:
         modality = self._modality(item, target, base, decisions)
         source = ClauseSource(source_kind=item.source_kind, entity_refs=[]) if item.source_kind == "prior_result" else None
         slot = _slot_projection(referenced)
+        if target is not None and target.action and target.action.capability == item.capability:
+            clauses[clauses.index(target)] = target.model_copy(update={
+                "source": target.source or source,
+            }, deep=True)
+            decisions.append(_decision(
+                f"{base}.capability", "ACCEPT", item.capability, "confirmed_capability"
+            ))
+            return target.clause_index
         new_clause = StructuredClause(
             clause_index=target.clause_index if target else len(clauses), text=item.text, start=start, end=end,
             action=action, source=source or (target.source if target else None), slot=slot, modality=modality, parser_source="model",

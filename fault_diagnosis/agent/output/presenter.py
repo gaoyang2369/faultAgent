@@ -122,7 +122,15 @@ class CompositePresenter:
             return "\n".join(f"{index}. {value}" for index, value in enumerate(recommendations, start=1)) or "暂无额外处理建议。"
         if item.capability == "generate_report":
             link = payload.get("report_url") or payload.get("report_filename") or ""
-            return f"报告已生成：{link}" if link else "报告已生成。"
+            title = payload.get("report_title") or "运行报告"
+            summary = payload.get("save_result") or "已基于本轮分析结果生成报告。"
+            access = link or "已生成报告产物，可在本轮产物列表中访问。"
+            return "\n".join((
+                "生成状态：成功",
+                f"报告：{title}",
+                f"摘要：{summary}",
+                f"访问方式：{access}",
+            ))
         if item.capability == "create_workorder_draft":
             return self._workorder_body(payload)
         if item.capability == "evaluate_workorder_need":
@@ -174,11 +182,16 @@ class CompositePresenter:
                 title = entry.get("title") or entry.get("meaning") or "手册未明确给出"
                 return f"未找到精确匹配：{requested}。\n候选：\n1. {entry.get('code') or '未知编码'}：{title}"
             meaning = entry.get("meaning") or entry.get("title") or "手册未明确给出"
+            cause = entry.get("cause") or "手册未明确给出"
+            source = entry.get("source_file") or "知识库"
+            if entry.get("page"):
+                source = f"{source}，第 {entry['page']} 页"
             return "\n".join(
                 (
                     f"一句话解释：{entry.get('code') or '故障码'}：{meaning}",
-                    f"可能原因：{entry.get('cause') or '手册未明确给出'}",
+                    f"触发说明：手册未给出可量化触发阈值；给出的原因是：{cause}",
                     f"手册处理：{entry.get('remedy') or '手册未明确给出'}",
+                    f"来源：{source}",
                 )
             )
         codes = "、".join(_text_list(payload.get("fault_codes")))

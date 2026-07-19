@@ -408,6 +408,16 @@ def test_v02_runtime_assessment_and_v03_guest_report_denial_are_independent(monk
         "generate_report",
         auth_context=auth,
     )
-    assert denied_report.metadata["canonical_request"]["goals"][0]["capability"] == "generate_report"
-    assert denied_report.metadata["goal_authorization"][0]["status"] == "denied"
+    report_goal = next(
+        goal
+        for goal in denied_report.metadata["canonical_request"]["goals"]
+        if goal["capability"] == "generate_report"
+    )
+    assert report_goal["user_requested"] is True
+    report_authorization = next(
+        item
+        for item in denied_report.metadata["goal_authorization"]
+        if item["goal_id"] == report_goal["goal_id"]
+    )
+    assert report_authorization["status"] == "denied"
     assert denied_report.execution_plan.nodes == []
