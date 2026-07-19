@@ -230,7 +230,72 @@ def _assistant_content_json(event: dict[str, Any]) -> dict[str, Any]:
     ):
         if key in event:
             payload[key] = event[key]
+    semantic_summary = _semantic_turn_summary(event)
+    if semantic_summary:
+        payload["semantic_turn_summary"] = semantic_summary
     return payload
+
+
+def _semantic_turn_summary(event: dict[str, Any]) -> dict[str, Any]:
+    """持久化后续指代所需的安全摘要，不保存当前请求原文或内部标识。"""
+
+    goal_set = event.get("goal_set") if isinstance(event.get("goal_set"), dict) else {}
+    goals = goal_set.get("goals") if isinstance(goal_set.get("goals"), list) else []
+    goal_summaries: list[dict[str, Any]] = []
+    devices: list[str] = []
+    fault_codes: list[str] = []
+    for goal in goals:
+        if not isinstance(goal, dict):
+            continue
+        capability = str(goal.get("capability") or goal.get("goal_type") or "").strip()
+        goal_devices = _summary_texts(goal.get("device_refs"))
+        goal_codes = _summary_texts(goal.get("fault_code_refs"))
+        if capability:
+            goal_summaries.append({"capability": capability, "devices": goal_devices})
+        devices.extend(goal_devices)
+        fault_codes.extend(goal_codes)
+
+    composite = event.get("composite_output") if isinstance(event.get("composite_output"), dict) else {}
+    raw_deliverables = composite.get("deliverables") if isinstance(composite.get("deliverables"), list) else []
+    deliverables: list[dict[str, str]] = []
+    limitations: list[str] = []
+    for item in raw_deliverables:
+        if not isinstance(item, dict):
+            continue
+        capability = str(item.get("capability") or "").strip()
+        status = str(item.get("status") or "").strip()
+        if capability and status:
+            deliverables.append({"capability": capability, "status": status})
+        limitations.extend(_find_limitations(item.get("structured_content")))
+    result = {
+        "user_goal_summaries": goal_summaries,
+        "deliverables": deliverables,
+        "fault_codes": list(dict.fromkeys(fault_codes)),
+        "devices": list(dict.fromkeys(devices)),
+        "limitations": list(dict.fromkeys(limitations))[:4],
+    }
+    return result if any(result.values()) else {}
+
+
+def _summary_texts(value: Any) -> list[str]:
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    return [str(item).strip()[:80] for item in values if str(item or "").strip()]
+
+
+def _find_limitations(value: Any, *, depth: int = 0) -> list[str]:
+    if depth > 4:
+        return []
+    if isinstance(value, dict):
+        result: list[str] = []
+        for key, item in value.items():
+            if key == "limitations":
+                result.extend(_summary_texts(item))
+            elif isinstance(item, (dict, list)):
+                result.extend(_find_limitations(item, depth=depth + 1))
+        return result
+    if isinstance(value, list):
+        return [item for nested in value for item in _find_limitations(nested, depth=depth + 1)]
+    return []
 
 
 def _artifact_refs_from_complete(event: dict[str, Any]) -> list[dict[str, Any]]:

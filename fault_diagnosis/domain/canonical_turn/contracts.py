@@ -311,6 +311,7 @@ class ClarificationRequirement(CanonicalContract):
         "context_ordinal_out_of_range",
         "conflicting_context_asset_constraints",
         "comparison_role_requires_asset_constraint",
+        "context_reference_unavailable",
     ]
     question: str
     options: list[ClarificationOption] = Field(default_factory=list)

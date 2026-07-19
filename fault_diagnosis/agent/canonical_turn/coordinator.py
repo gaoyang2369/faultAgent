@@ -115,6 +115,7 @@ class ConversationTurnCoordinator:
             cancel_event=cancel_event,
             context_candidates=candidates,
             pending_summary=project_pending_semantic_summary(waiting),
+            conversation_context=conversation_context,
         )
         semantic_trace = semantic.trace.model_dump(mode="json", by_alias=True, exclude_none=True)
         semantic_trace["field_decisions"] = [item.model_dump(mode="json") for item in semantic.field_decisions]

@@ -21,12 +21,13 @@ class ContextProposalValidator:
         visible_assets = {asset for item in candidates for asset in item.asset_refs}
         include = self._assets(proposal.include_asset_refs, visible_assets, "include_asset_refs", decisions)
         exclude = self._assets(proposal.exclude_asset_refs, visible_assets, "exclude_asset_refs", decisions)
+        eligible = _eligible_candidates(proposal.reference_target, candidates)
         if set(include).intersection(exclude):
             decisions.append(SemanticFieldDecision(
                 field="context.asset_refs", decision="CLARIFY", value=None,
                 reason_code="conflicting_context_asset_constraints",
             ))
-        if proposal.temporal_relation == "ordinal" and (proposal.ordinal is None or proposal.ordinal > len(candidates)):
+        if proposal.temporal_relation == "ordinal" and (proposal.ordinal is None or proposal.ordinal > len(eligible)):
             decisions.append(SemanticFieldDecision(
                 field="context.ordinal", decision="CLARIFY", value=None,
                 reason_code="context_ordinal_out_of_range",
@@ -40,6 +41,29 @@ class ContextProposalValidator:
             decisions.append(SemanticFieldDecision(
                 field="context.relation", decision="CLARIFY", value=None,
                 reason_code="comparison_role_requires_asset_constraint",
+            ))
+        if (
+            proposal.reference_target != "none"
+            and not eligible
+            and not any(item.decision == "CLARIFY" for item in decisions)
+        ):
+            decisions.append(SemanticFieldDecision(
+                field="context.reference_target", decision="CLARIFY", value=None,
+                reason_code="context_reference_unavailable",
+            ))
+        if (
+            proposal.temporal_relation == "previous"
+            and eligible
+            and not any(item.produced_by_immediately_previous_turn for item in eligible)
+        ):
+            decisions.append(SemanticFieldDecision(
+                field="context.temporal_relation", decision="CLARIFY", value=None,
+                reason_code="context_reference_unavailable",
+            ))
+        if proposal.requested_reuse and not candidates:
+            decisions.append(SemanticFieldDecision(
+                field="context.requested_reuse", decision="CLARIFY", value=None,
+                reason_code="context_reference_unavailable",
             ))
         if any(item.decision == "CLARIFY" for item in decisions):
             return None, decisions, next(item.reason_code for item in decisions if item.decision == "CLARIFY")
@@ -77,3 +101,27 @@ class ContextProposalValidator:
                 continue
             normalized.append(asset)
         return list(dict.fromkeys(normalized))
+
+
+_ARTIFACT_TYPES_BY_REFERENCE_TARGET = {
+    "prior_diagnosis_result": {"analysis_artifact", "sql_artifact"},
+    "prior_runtime_result": {"sql_artifact"},
+    "prior_report": {"report_artifact"},
+    "prior_comparison": {"comparison_artifact"},
+}
+
+
+def _eligible_candidates(reference_target: str, candidates: list[ContextCandidate]) -> list[ContextCandidate]:
+    allowed_types = _ARTIFACT_TYPES_BY_REFERENCE_TARGET.get(reference_target)
+    selected = [
+        item for item in candidates
+        if item.completed and (allowed_types is None or item.artifact_type in allowed_types)
+    ]
+    deduped: dict[str, ContextCandidate] = {}
+    for item in selected:
+        key = item.artifact_ref or item.candidate_id
+        if key not in deduped:
+            deduped[key] = item
+        elif item.produced_by_immediately_previous_turn:
+            deduped[key] = item
+    return list(deduped.values())

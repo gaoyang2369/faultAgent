@@ -71,6 +71,7 @@ class ConversationContextAssembler:
                 if item.get("role") in {"user", "assistant"} and item.get("status") != "superseded"
             ],
             "rolling_summary": None,
+            "recent_turns": self._recent_turn_summaries(recent_messages),
             "latest_case_state": active_case.model_dump(exclude_none=True) if active_case else None,
             "artifact_refs": artifact_refs,
             "artifact_manifests": artifact_manifests,
@@ -85,12 +86,28 @@ class ConversationContextAssembler:
         }
         package["stats"] = {
             "raw_message_count": len(package["last_raw_messages"]),
+            "recent_turn_summary_count": len(package["recent_turns"]),
             "has_case_state": active_case is not None,
             "artifact_ref_count": len(artifact_refs),
             "artifact_manifest_count": len(artifact_manifests),
             "previous_assistant_artifact_ref_count": len(previous_assistant_turn.get("produced_artifacts") or []),
         }
         return package
+
+    @staticmethod
+    def _recent_turn_summaries(recent_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """只读取持久化的安全摘要；绝不从历史聊天文本重新抽取。"""
+
+        summaries: list[dict[str, Any]] = []
+        for item in recent_messages:
+            if item.get("role") != "assistant" or item.get("status") == "superseded":
+                continue
+            payload = item.get("content_json") if isinstance(item.get("content_json"), dict) else {}
+            summary = payload.get("semantic_turn_summary") if isinstance(payload.get("semantic_turn_summary"), dict) else {}
+            if not summary:
+                continue
+            summaries.append({"turn_index": item.get("turn_index"), **summary})
+        return summaries
 
     def _recent_artifact_ids(self, recent_messages: list[dict[str, Any]]) -> list[str]:
         artifact_ids: list[str] = []

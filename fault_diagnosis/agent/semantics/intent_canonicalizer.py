@@ -121,7 +121,7 @@ class IntentCanonicalizer:
             return value if _FAULT_CODE.fullmatch(value) else None
         parsed = DeterministicEntityExtractor().extract(text)
         matched = next(
-            (item for item in parsed if item.kind == "time_window" and item.start == 0 and item.end == len(text)),
+            (item for item in parsed if item.kind == kind and item.start == 0 and item.end == len(text)),
             None,
         )
         return matched.value if matched is not None else None

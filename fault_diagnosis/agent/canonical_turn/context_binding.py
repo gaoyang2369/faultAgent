@@ -168,6 +168,11 @@ class CanonicalContextBinder:
         if context_clarification_reason:
             pool = []
         unavailable_previous = prior and any(item.candidate_id == "previous:unavailable" for item in candidates)
+        binding_clarification_reason = (
+            "missing_source"
+            if context_clarification_reason == "context_reference_unavailable" and unavailable_previous
+            else context_clarification_reason
+        )
         if (explicit_artifact and not explicit_refs) or unavailable_previous:
             pool = []
         selected, ambiguous_source = _select(pool, compatible_types, explicit_refs, context_proposal=context_proposal)
@@ -201,10 +206,10 @@ class CanonicalContextBinder:
         ) and not source_refs and not goal.dependencies
         clarification = None
         blockers: list[str] = []
-        if context_clarification_reason:
-            blockers.append(context_clarification_reason)
+        if binding_clarification_reason:
+            blockers.append(binding_clarification_reason)
             clarification = ClarificationRequirement(
-                reason_code=context_clarification_reason,
+                reason_code=binding_clarification_reason,
                 question="请明确要使用的历史结果或设备范围。",
             )
         elif ambiguous_asset:

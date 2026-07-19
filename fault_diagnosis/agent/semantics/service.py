@@ -1,4 +1,4 @@
-"""一次/轮的异步语义编排；Wave 1 只输出安全观测和确定性 parse。"""
+"""每轮至多一次的意图与上下文异步语义编排。"""
 
 from __future__ import annotations
 
@@ -9,11 +9,15 @@ from typing import Any, Callable
 from pydantic import ValidationError
 
 from fault_diagnosis.agent.semantics.contracts import SemanticCallTrace, SemanticResolution
-from fault_diagnosis.agent.semantics.context_interpreter import project_context_semantic_input
+from fault_diagnosis.agent.semantics.context_interpreter import (
+    project_active_case_semantic_input,
+    project_context_semantic_input,
+    project_recent_turns_semantic_input,
+)
 from fault_diagnosis.agent.semantics.context_validator import ContextProposalValidator
 from fault_diagnosis.agent.semantics.intent_canonicalizer import IntentCanonicalizer
 from fault_diagnosis.agent.semantics.intent_interpreter import parse_semantic_turn_proposal
-from fault_diagnosis.agent.semantics.model_request import SemanticModelRequest
+from fault_diagnosis.agent.semantics.model_request import SemanticContextPacket
 from fault_diagnosis.agent.semantics.model_gateway import (
     AsyncModelGateway,
     SemanticModelCancelled,
@@ -33,10 +37,18 @@ class SemanticResolutionService:
         gateway_factory: Callable[[asyncio.Semaphore], AsyncModelGateway] | None = None,
         mode: str | None = None,
         concurrency: int | None = None,
+        call_policy: str | None = None,
+        context_semantics_enabled: bool | None = None,
     ) -> None:
         self._parser = parser
         self._gateway_factory = gateway_factory or (lambda semaphore: build_semantic_model_gateway(semaphore=semaphore))
         self._mode = mode or settings.LLM_SEMANTIC_MODE
+        self._call_policy = call_policy or settings.LLM_SEMANTIC_CALL_POLICY
+        self._context_semantics_enabled = (
+            settings.ENABLE_LLM_CONTEXT_SEMANTICS
+            if context_semantics_enabled is None
+            else context_semantics_enabled
+        )
         self._semaphore = asyncio.Semaphore(concurrency or settings.LLM_SEMANTIC_CONCURRENCY)
         self._gateway: AsyncModelGateway | None = None
         self._canonicalizer = IntentCanonicalizer()
@@ -49,13 +61,17 @@ class SemanticResolutionService:
         cancel_event: asyncio.Event | None = None,
         context_candidates=(),
         pending_summary: dict[str, Any] | None = None,
+        conversation_context: dict[str, Any] | None = None,
     ) -> SemanticResolution:
         parsed = self._parser.parse(raw_message)
         deterministic_capabilities = [item.action.capability for item in parsed.clauses if item.action]
         mode = self._mode if self._mode in {"off", "shadow", "primary"} else "off"
-        if mode == "off":
+        policy = self._call_policy if self._call_policy in {"always", "auto", "off"} else "off"
+        should_call = _should_call_model(parsed, policy, pending_summary)
+        if mode == "off" or not should_call:
             return SemanticResolution(parsed=parsed, trace=SemanticCallTrace(
-                mode="off", deterministic_capabilities=deterministic_capabilities,
+                mode="off" if mode == "off" or policy == "off" else mode,
+                deterministic_capabilities=deterministic_capabilities,
             ))
         trace = SemanticCallTrace(
             attempted=True,
@@ -69,16 +85,29 @@ class SemanticResolutionService:
             self._gateway = gateway
             trace.model_name = gateway.model_name
             result = await gateway.invoke_clause_model(
-                SemanticModelRequest(
-                    text=parsed.raw_text,
-                    deterministic_entities=tuple(item.model_dump(mode="json") for item in parsed.entities),
-                    deterministic_clauses=tuple(_clause_summary(item) for item in parsed.clauses),
+                SemanticContextPacket(
+                    current_message=parsed.raw_text,
+                    deterministic_parse={
+                        "entities": [item.model_dump(mode="json") for item in parsed.entities],
+                        "clauses": [_clause_summary(item) for item in parsed.clauses],
+                    },
                     allowed_capabilities=tuple(sorted(CAPABILITY_SPECS)),
                     allowed_source_kinds=("prior_result", "current_message"),
                     response_schema="semantic_turn_proposal.v1",
-                    schema_version="semantic_turn_request.v1",
-                    context_candidates=project_context_semantic_input(list(context_candidates)),
-                    pending_summary=pending_summary,
+                    schema_version="semantic_context_packet.v1",
+                    active_case=(
+                        project_active_case_semantic_input(conversation_context, list(context_candidates))
+                        if self._context_semantics_enabled else {}
+                    ),
+                    recent_turns=(
+                        project_recent_turns_semantic_input(conversation_context, list(context_candidates))
+                        if self._context_semantics_enabled else ()
+                    ),
+                    context_candidates=(
+                        project_context_semantic_input(list(context_candidates))
+                        if self._context_semantics_enabled else ()
+                    ),
+                    pending_clarification=pending_summary if self._context_semantics_enabled else None,
                 ),
                 cancel_event=cancel_event,
             )
@@ -102,8 +131,10 @@ class SemanticResolutionService:
             try:
                 proposal = parse_semantic_turn_proposal(result.payload)
                 canonical, decisions = self._canonicalizer.canonicalize(parsed, proposal)
-                context_proposal, context_decisions, context_clarification_reason = self._context_validator.validate(
-                    proposal.context, list(context_candidates)
+                context_proposal, context_decisions, context_clarification_reason = (
+                    self._context_validator.validate(proposal.context, list(context_candidates))
+                    if self._context_semantics_enabled
+                    else (None, [], None)
                 )
                 decisions.extend(context_decisions)
             except ValidationError:
@@ -134,6 +165,34 @@ def _clause_summary(clause) -> dict:  # noqa: ANN001
         "negated": clause.modality.negated,
         "source_kind": clause.source.source_kind if clause.source else None,
     }
+
+
+def _should_call_model(parsed, policy: str, pending_summary: dict[str, Any] | None) -> bool:  # noqa: ANN001
+    if policy == "always":
+        return True
+    if policy == "off":
+        return False
+    if pending_summary:
+        return True
+    actionable = [item for item in parsed.clauses if item.action]
+    if not actionable or len(parsed.clauses) > 1 or len(actionable) > 1:
+        return True
+    if any(
+        item.modality.negated
+        or item.modality.conditional
+        or item.modality.depends_on_clause_indexes
+        for item in parsed.clauses
+    ):
+        return True
+    if any(item.kind in {
+        "artifact_reference", "source_reference", "correction_reference", "deictic_reference",
+    } for item in parsed.entities):
+        return True
+    text = parsed.raw_text
+    return any(marker in text for marker in (
+        "刚才", "上次", "上一次", "之前", "前一个", "第一个", "第二个", "最新一次",
+        "它", "这个", "那个", "改成", "不是", "纠正", "基于", "沿用", "继续", "重新",
+    ))
 
 
 def _fallback(parsed, trace: SemanticCallTrace, status: str, started: float) -> SemanticResolution:  # noqa: ANN001

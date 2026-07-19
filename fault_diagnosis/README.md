@@ -50,7 +50,7 @@ PYTHONPATH=. pytest -q
 - MySQL：`HOST`、`PORT`、`MYSQL_PW`、`MYSQL_USER`、`DCMA_DB_NAME` / `DB_NAME`。
 - OpenAI-compatible LLM：优先读取本地部署别名 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`，并兼容 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`MODEL_NAME`；另有 `AVAILABLE_MODEL_NAMES`、`SINGLE_AGENT_MODEL_TIMEOUT_SECONDS`、`SINGLE_AGENT_MODEL_INPUT_LIMIT_CHARS`。私网地址默认绕过系统代理，也可用 `LLM_BYPASS_PROXY=true` 强制开启；vLLM/Qwen 可用 `LLM_ENABLE_THINKING=false` 关闭 thinking。`AVAILABLE_MODEL_NAMES` 可用英文逗号配置前端可选白名单，API Key 只保留在服务端环境变量中。
 - Grounded answer（开发/测试默认全量尝试，生产默认关闭）：`ENABLE_GROUNDED_ANSWER_SYNTHESIS`、`GROUNDED_ANSWER_ROLLOUT_PERCENT`、`ANSWER_MODEL_NAME`、`AVAILABLE_ANSWER_MODEL_NAMES`、`ANSWER_MODEL_REQUEST_TIMEOUT_SECONDS=15`、`ANSWER_MODEL_MAX_TOKENS=512`、`ANSWER_MODEL_CONCURRENCY=8`、`ANSWER_MODEL_INCLUDE_DETERMINISTIC_FALLBACK=true`、`ANSWER_SYNTHESIS_MAX_INPUT_CHARS=12000`、`ANSWER_SYNTHESIS_MAX_OUTPUT_CHARS=4000`、`ANSWER_SYNTHESIS_TEMPERATURE=0.0`。开发/测试未显式配置时启用并按 100% 调用；生产需显式设置 `ENABLE_GROUNDED_ANSWER_SYNTHESIS=true` 与所需灰度比例。Answer 模型不跟随单次聊天请求模型；每轮最多调用一次，并且只消费 V2 已授权事实。超时、Schema 或确定性校验失败时立即使用 `CompositePresenter` 原回答，不重试。最终 complete payload 的 `final_answer_source` 与 trace 的 `answer_synthesis.final_answer_source` 明确标记最终答案来自模型还是模板。旧 `ANSWER_SYNTHESIS_TIMEOUT_SECONDS` / `ANSWER_SYNTHESIS_MAX_OUTPUT_TOKENS` / `ANSWER_SYNTHESIS_MAX_CONCURRENCY` 仅保留为 deprecated 读取投影。
-- 统一语义模型（开发/测试默认 `primary`，生产默认 `off`）：`LLM_SEMANTIC_MODE=off|shadow|primary`、`ENABLE_LLM_CONTEXT_SEMANTICS`、`LLM_SEMANTIC_CONCURRENCY=8`、`LLM_SEMANTIC_FAILURE_POLICY=deterministic_fallback`、`INTENT_MODEL_NAME`、`INTENT_MODEL_TIMEOUT_SECONDS=15`、`INTENT_MODEL_MAX_TOKENS=400`。`shadow` 与 `primary` 都只使用每轮唯一的异步调用；前者只观测字段裁决，后者才更新 Canonical 投影。取消、超时或校验失败都会回退确定性 Canonical 链路。
+- 统一语义模型（开发/测试默认 `primary`，生产默认 `off`）：`LLM_SEMANTIC_MODE=off|shadow|primary`、`LLM_SEMANTIC_CALL_POLICY=always|auto|off`、`ENABLE_LLM_CONTEXT_SEMANTICS`、`LLM_SEMANTIC_CONCURRENCY=8`、`LLM_SEMANTIC_FAILURE_POLICY=deterministic_fallback`、`INTENT_MODEL_NAME`、`INTENT_MODEL_TIMEOUT_SECONDS=18`、`INTENT_MODEL_MAX_TOKENS=512`。当前验证阶段使用 `always`；生产稳定后推荐 `auto`，仅在未识别、多分句/多 Goal、条件、否定、指代、纠正、待澄清或历史复用时调用。意图与上下文共用每轮唯一一次异步调用；`ENABLE_LLM_CONTEXT_SEMANTICS=false` 时该调用不携带 active case、最近轮次、待澄清或候选摘要，也不采用模型的 context 提议。取消、超时或校验失败都会回退确定性 Canonical 链路。
 - Ollama / FAISS / 知识库：`OLLAMA_BASE_URL`、`EMBEDDING_MODEL`、`FAISS_PATH`、`KB_CHUNK_SIZE`、`KB_CHUNK_OVERLAP`、`KB_BATCH_SIZE`、`KB_QUERY_TIMEOUT_SECONDS`、`KB_EMBED_TIMEOUT_SECONDS`、`KB_BUILD_MAX_DOCUMENTS`、`KB_INCREMENTAL_BUILD`、`KB_EMBED_CACHE_PATH`。
 - 上传知识文件 / OCR：`ADMIN_UPLOAD_DIR`、`ADMIN_PDF_MAX_FILE_SIZE`、`PDF_TEXT_EXTRACT_BACKEND`、`DOCUMENT_OCR_BACKEND`、`DOCUMENT_OCR_LANG`、`DOCUMENT_OCR_MAX_PAGES`、`DOCUMENT_OCR_RENDER_DPI`、`PDF_TEXT_MIN_CHARS`、`PDF_TEXT_PREVIEW_CHARS`、`UPLOADED_FILE_KB_ENABLE_VECTOR_INDEX`、`UPLOADED_FILE_KB_VECTOR_TIMEOUT_SECONDS`。
 - Artifact backend：`DIAGNOSIS_ARTIFACT_BACKEND=file|memory|postgres`、`DIAGNOSIS_ARTIFACT_DIR`、`DIAGNOSIS_ARTIFACT_TABLE`、`DIAGNOSIS_ARTIFACT_POSTGRES_DSN`。旧 `WORKFLOW_ARTIFACT_*` 仍作为 fallback 读取。
@@ -141,6 +141,13 @@ GET /chat/stream
 `GET /chat/plan` 与 `/chat/stream` 都从同一个异步语义入口进入 Canonical 预览；plan-only 不再补发第二次
 Shadow 调用。它不进入 Runtime、typed nodes、证据提交、Artifact 持久化、CaseState 更新、回答合成或 SSE 流。
 因而 plan-only 请求不写业务 Artifact、不推进 CaseState，也不调用 Grounded Answer 模型。
+
+意图和上下文使用同一个 `SemanticContextPacket`，每轮至多调用模型一次。输入只包含当前消息、确定性解析、
+ACL 投影后的 active case、最近轮次安全摘要、待澄清缺槽、上下文候选和 capability 白名单。最近轮次不包含
+完整聊天文本，只保存 capability、设备、故障码、deliverable 状态和限制说明；Artifact ID、candidate ID、
+lineage、SQL、权限和执行节点不会进入该安全包。模型统一返回 `SemanticTurnProposal`，其中 clauses 交给
+`IntentCanonicalizer`，context 交给 `ContextProposalValidator`；真实 Artifact 仍仅由
+`CanonicalContextBinder` 在内部候选集中确定。
 
 Feature Flag 组合：
 

@@ -14,7 +14,10 @@ class SemanticEntityProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["device_reference", "fault_code", "time_window"]
+    kind: Literal[
+        "device_reference", "fault_code", "time_window",
+        "artifact_reference", "source_reference", "correction_reference", "deictic_reference",
+    ]
     text: str
     start: int = Field(ge=0)
     end: int = Field(gt=0)

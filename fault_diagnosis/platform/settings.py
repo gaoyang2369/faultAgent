@@ -169,6 +169,9 @@ ANSWER_SYNTHESIS_TEMPERATURE = min(0.1, max(0.0, float(os.getenv("ANSWER_SYNTHES
 LLM_SEMANTIC_MODE = _env_choice(
     "LLM_SEMANTIC_MODE", "off" if IS_PRODUCTION else "primary", {"off", "shadow", "primary"}
 )
+LLM_SEMANTIC_CALL_POLICY = _env_choice(
+    "LLM_SEMANTIC_CALL_POLICY", "auto" if IS_PRODUCTION else "always", {"always", "auto", "off"}
+)
 ENABLE_LLM_CONTEXT_SEMANTICS = _env_bool("ENABLE_LLM_CONTEXT_SEMANTICS", not IS_PRODUCTION)
 LLM_SEMANTIC_FAILURE_POLICY = _env_choice(
     "LLM_SEMANTIC_FAILURE_POLICY", "deterministic_fallback", {"deterministic_fallback"}
@@ -177,8 +180,8 @@ LLM_SEMANTIC_CONCURRENCY = max(1, int(os.getenv("LLM_SEMANTIC_CONCURRENCY", "8")
 INTENT_MODEL_NAME = os.getenv("INTENT_MODEL_NAME", "").strip()
 INTENT_MODEL_BASE_URL = os.getenv("INTENT_MODEL_BASE_URL", "").strip()
 INTENT_MODEL_API_KEY = os.getenv("INTENT_MODEL_API_KEY", "").strip()
-INTENT_MODEL_TIMEOUT_SECONDS = max(0.1, float(os.getenv("INTENT_MODEL_TIMEOUT_SECONDS", "15")))
-INTENT_MODEL_MAX_TOKENS = max(64, int(os.getenv("INTENT_MODEL_MAX_TOKENS", "400")))
+INTENT_MODEL_TIMEOUT_SECONDS = max(0.1, float(os.getenv("INTENT_MODEL_TIMEOUT_SECONDS", "18")))
+INTENT_MODEL_MAX_TOKENS = max(64, int(os.getenv("INTENT_MODEL_MAX_TOKENS", "512")))
 INTENT_MODEL_TEMPERATURE = 0.0
 INTENT_FALLBACK_TIMEOUT_SECONDS = max(0.1, float(os.getenv("INTENT_FALLBACK_TIMEOUT_SECONDS", "8")))
 INTENT_FALLBACK_MAX_TOKENS = max(64, int(os.getenv("INTENT_FALLBACK_MAX_TOKENS", "800")))

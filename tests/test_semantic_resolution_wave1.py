@@ -10,6 +10,7 @@ import pytest
 from fault_diagnosis.agent.canonical_turn import ConversationTurnCoordinator, CurrentUtteranceParser
 from fault_diagnosis.agent.semantics import AsyncModelGateway, SemanticResolutionService
 from fault_diagnosis.agent.semantics.model_gateway import ModelGatewayResult, SemanticModelCancelled
+from fault_diagnosis.agent.semantics.model_request import SemanticContextPacket
 from fault_diagnosis.domain.canonical_turn import TurnCommand
 from fault_diagnosis.domain.security.permissions import build_auth_context
 
@@ -128,11 +129,7 @@ class _SlowClient:
 
 
 def _gateway_request():
-    return type("Request", (), {
-        "schema_version": "semantic_turn_request.v1", "text": "查询 J1", "deterministic_entities": (),
-        "deterministic_clauses": (), "allowed_capabilities": (),
-        "allowed_source_kinds": (), "response_schema": "semantic_turn_proposal.v1",
-    })()
+    return SemanticContextPacket(current_message="查询 J1", deterministic_parse={"entities": [], "clauses": []})
 
 
 @pytest.mark.asyncio
